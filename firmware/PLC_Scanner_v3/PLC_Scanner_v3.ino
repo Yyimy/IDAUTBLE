@@ -1,4 +1,4 @@
-// PLC Scanner v3.0.3-rc1 - 2026-10-29
+// PLC Scanner v3.0.4-rc1 - 2026-10-29
 // Complete source derived from the supplied firmware. See LEEME.md before
 // flashing. Target: ESP32-S3, Arduino-ESP32 3.0.7, USB CDC enabled, OTA
 // partition required. Existing V2 binary commands preserved. New optional
@@ -171,7 +171,10 @@ static inline BleCmdType cmdFromBinary4(const uint8_t rx[4]) {
 // ============================================================================
 // VARIABLES DE DATOS
 // ============================================================================
-String gId = "";  // 12 HEX chars
+String gId = "";  // Identificador configurable, 1..20 caracteres ASCII.
+static String gHardwareId;  // Identificador tecnico inmutable, 12 HEX.
+static String gBluetoothName;
+static bool gCustomId = false;
 
 // ============================================================================
 // CONFIGURACIÓN RED (WiFi + TCP)
@@ -451,6 +454,9 @@ static void rtcUpdateCacheIfNeeded();
 static inline void serialConsolePoll();
 static void bleProcessPendingOnce();
 
+static void identityLoad();
+static void handleIdentityCommand(const String &s, uint8_t source);
+
 // Runtime v3: loop owns IO, parsing, output notifications and persistent
 // events.
 #define REQUIRE_MAINT_AUTH 1
@@ -462,7 +468,7 @@ static std::atomic<bool> gBleSecure{false};
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.3-rc1"
+#define FIRMWARE_VERSION "3.0.4-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static BLE2902 *gCccd = nullptr;
@@ -1103,7 +1109,7 @@ static void tcpPollRx() {
         if (!strcmp(line, "PONG") || !strncmp(line, "PONG;", 5))
           gLastTcpRxMs = millis();
         else if (!strncmp(line, "ACK=", 4) || !strcmp(line, "INFO?") ||
-                 !strcmp(line, "DIAG?")) {
+                 !strcmp(line, "DIAG?") || !strcmp(line, "ID?")) {
           BleCmd cmd = {};
           cmd.type = BLECMD_TEXT;
           cmd.source = 1;
@@ -2000,7 +2006,8 @@ class MyCallbacks : public BLECharacteristicCallbacks {
     } else if (rxTrim.startsWith("AUTH=") || rxTrim.startsWith("ACK=") ||
                rxTrim.startsWith("ACKMODE=") ||
                rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" ||
-               rxTrim == "DIAG?") {
+               rxTrim == "DIAG?" || rxTrim == "ID?" ||
+               rxTrim.startsWith("ID=")) {
       cmd.type = BLECMD_TEXT;
       strlcpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload));
     } else {
@@ -2901,11 +2908,12 @@ void setup() {
            (unsigned int)(uint16_t)(chipid >> 32),
            (unsigned long)(uint32_t)chipid);
 
-  gId = String(suffix);
-  String btName = "ISP-" + gId;
+  gHardwareId = String(suffix);
+  identityLoad();
+  String btName = gBluetoothName;
 
   // SSID del modo OTA autónomo
-  gOtaApSsid = "PLC_OTA_" + gId;
+  gOtaApSsid = "PLC_OTA_" + gHardwareId;
   logf("OTA AP SSID: %s (PASS: %s)\n", gOtaApSsid.c_str(), OTA_AP_PASS);
 
   logf("ID equipo: %s\n", gId.c_str());
@@ -3099,6 +3107,10 @@ static void runtimeLoad() {
 }
 static void handleTextCommand(const BleCmd &cmd) {
   String s(cmd.payload);
+  if (s == "ID?" || s.startsWith("ID=")) {
+    handleIdentityCommand(s, cmd.source);
+    return;
+  }
   if (s.startsWith("AUTH=")) {
     handleAuthCommand(s, cmd.source);
     return;
@@ -3684,4 +3696,95 @@ static void handleAuthCommand(const String &s, uint8_t source) {
     }
     replyLine(false, "ERR=AUTH");
   }
+}
+
+// ---------------------- Identidad configurable ------------------------------
+// ASCII limita bytes en scan response y excluye delimitadores del protocolo.
+static bool validEquipmentId(const String &id) {
+  if (id.length() < 1 || id.length() > 20 || id[0] == ' ' ||
+      id[id.length() - 1] == ' ') return false;
+  for (size_t i = 0; i < id.length(); ++i) {
+    const char c = id[i];
+    if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+          c == '-' || c == '_' || c == ' ')) return false;
+  }
+  return true;
+}
+
+static void identityLoad() {
+  Preferences p;
+  String saved;
+  if (p.begin("identity", true)) {
+    saved = p.getString("id", "");
+    p.end();
+  }
+  gCustomId = validEquipmentId(saved);
+  gId = gCustomId ? saved : gHardwareId;
+  // Conservar el nombre de fabrica hasta configurar un ID propio.
+  gBluetoothName = gCustomId ? gId : "ISP-" + gHardwareId;
+}
+
+static bool applyBluetoothIdentity(const String &name) {
+  if (esp_ble_gap_set_device_name(name.c_str()) != ESP_OK) return false;
+  BLEAdvertisementData response;
+  response.setName(name.c_str());
+  String payload = response.getPayload();
+  // setup ya activa scan response personalizado. Comprobar el resultado de la
+  // API real permite rechazar el cambio si el controlador no lo acepta.
+  return esp_ble_gap_config_scan_rsp_data_raw(
+             (uint8_t *)payload.c_str(), payload.length()) == ESP_OK;
+}
+
+static void identitySendCurrent() {
+  replyLine(true, "ID=" + gId + ";HWID=" + gHardwareId +
+                      ";NAME=" + gBluetoothName);
+}
+
+static void handleIdentityCommand(const String &s, uint8_t source) {
+  if (s == "ID?") {
+    identitySendCurrent();
+    return;
+  }
+  if (source != 0 || !maintenanceAuthorized()) {
+    replyLine(false, "ERR=AUTH_REQUIRED");
+    return;
+  }
+  String id = s.substring(3);
+  id.trim();
+  id.toUpperCase();
+  if (!validEquipmentId(id)) {
+    replyLine(false, "ERR=ID_INVALID");
+    return;
+  }
+  // No mezclar identidades dentro de trabajos o eventos pendientes de entrega.
+  if (gCutRequested || gOtaTaskHandle || gOtaState != OTA_IDLE ||
+      gScanActive || gScanCount || gEventInFlight || gOutbox.count ||
+      !gFotoLista || PaletCargado) {
+    replyLine(false, "ERR=ID_BUSY");
+    return;
+  }
+  Preferences p;
+  if (!p.begin("identity", false)) {
+    replyLine(false, "ERR=ID_STORAGE");
+    return;
+  }
+  if (!applyBluetoothIdentity(id)) {
+    applyBluetoothIdentity(gBluetoothName);
+    p.end();
+    replyLine(false, "ERR=ID_BLUETOOTH");
+    return;
+  }
+  if (p.putString("id", id) != id.length()) {
+    applyBluetoothIdentity(gBluetoothName);
+    p.end();
+    replyLine(false, "ERR=ID_STORAGE");
+    return;
+  }
+  p.end();
+  gId = id;
+  gCustomId = true;
+  gBluetoothName = id;
+  identitySendCurrent();
+  // Se mantiene el enlace actual. Al volver a buscar se anuncia el nuevo ID.
+  // PIN, bonds, HWID y SSID OTA no cambian.
 }

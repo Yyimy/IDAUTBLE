@@ -1,4 +1,4 @@
-# Validación — PLC Scanner 3.0.3-rc1
+# Validación — PLC Scanner 3.0.4-rc1
 
 Fecha: 29 de octubre de 2026.
 
@@ -11,9 +11,9 @@ Fecha: 29 de octubre de 2026.
 | Objetivo | ESP32-S3 Dev Module, USB CDC habilitado, Minimal SPIFFS con OTA |
 | Arduino-ESP32 | 3.0.7 |
 | ADS1X15 / BusIO | 2.5.0 / 1.16.2 |
-| Tamaño de programa | 1.611.013 bytes, 81 % de 1.966.080 bytes de partición |
-| Datos globales estáticos | 71.060 bytes, 21 % de 327.680 bytes |
-| Pruebas de regresión en host | 97 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED |
+| Tamaño de programa | 1.612.893 bytes, 82 % de 1.966.080 bytes de partición |
+| Datos globales estáticos | 71.100 bytes, 21 % de 327.680 bytes |
+| Pruebas de regresión en host | 97 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED + 60 de identidad |
 
 La memoria libre indicada por el compilador no mide el consumo dinámico de BLE/WiFi, colas y tareas durante el funcionamiento. Debe medirse en placa en una prueba prolongada.
 
@@ -36,10 +36,17 @@ Las pruebas en host extraen las funciones del INO entregado y las ejecutan con r
 
 Para repetirlas: Python 3 y g++ en Linux/macOS/WSL; ejecutar `python3 tests/test_logic.py` desde la raíz del paquete. Ejecutar también `python3 tests/test_pin_constant.py` para comprobar las cinco configuraciones de PIN. Las pruebas no cargan nada en la placa. Los dobles de prueba no demuestran el comportamiento de las librerías, el enlace radio ni los tiempos reales de flash/I2C.
 
+Las 60 comprobaciones de identidad ejecutan validación, carga y guardado NVS,
+normalización, permisos BLE, rechazo por actividad, fallos simulados de las APIs
+GAP/scan response y de almacenamiento, recuperación tras arranque y trama V2
+con matrícula. Las APIs radio y NVS son dobles de prueba; no validan la radio
+ni la memoria física. Ejecutar `python3 firmware/tests/test_identity.py`.
+
 ## Pruebas pendientes en la placa real
 
 | Prueba | Criterio de aceptación |
 |---|---|
+| ID configurable | Guardar matrícula, volver a buscar, comprobar nombre exacto, trama BLE/TCP, reinicio y persistencia, PIN/vínculo conservados y mismo SSID OTA; rechazar con palet, lectura o eventos pendientes |
 | Arranque y USB/UART0 | La consola USB no se mezcla con PON; lector a 9600, RX44/TX43 |
 | LED y prioridades | Verificar fijo, lento, doble/triple destello, rápido y OTA; batería oculta conexión/OTA, fallo oculta batería, cambio de batería recupera patrón tras confirmación |
 | Expansor de salidas | LED O0 y relé O1 coinciden con el cableado y la polaridad del adjunto |
@@ -65,7 +72,7 @@ Para repetirlas: Python 3 y g++ en Linux/macOS/WSL; ejecutar `python3 tests/test
 ## Límites y decisiones conservadas
 
 - Versión candidata, no validación de producto en campo.
-- Sin interfaz Android/HTML nueva: las mejoras de presentación al operario necesitan modificar esa app. DIAG/INFO y las nuevas respuestas aportan los datos para hacerlo.
+- La app 1.3 añade la configuración de ID. Los receptores externos/HTML deben admitir el campo ID de longitud variable antes de usar una matrícula.
 - El criterio de corte con dos baterías conserva el comportamiento conservador hasta comprobar su aislamiento/protección. No se presupone que sean intercambiables eléctricamente.
 - Un ADC averiado no puede garantizar protección por tensión; no sustituye BMS ni protección hardware.
 - El registro del expansor no acredita el movimiento de contactos del relé.

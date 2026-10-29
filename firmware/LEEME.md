@@ -1,4 +1,4 @@
-# PLC Scanner 3.0.3-rc1 — código completo corregido
+# PLC Scanner 3.0.4-rc1 — código completo corregido
 
 Versión candidata para validación en banco. Derivada del archivo adjunto del 29/10/2026. Conserva los comandos binarios de cuatro bytes y la trama V2, con las diferencias de integración indicadas abajo. No se ha probado físicamente en la placa.
 
@@ -176,3 +176,52 @@ Pruebas en host: `python3 firmware/tests/test_led.py` desde la raíz del reposit
 En placa: verificar visibilidad, polaridad O0, BLE/TCP, los dos niveles de batería,
 retirada y sustitución de cada batería, fallo ADC, OTA y prioridades. No provocar
 una descarga profunda de baterías para probar el corte; usar un banco adecuado.
+
+
+## ID configurable de la carretilla (version 3.0.4)
+
+App requerida para la interfaz: IDAUT BLE 1.3-plc3. El técnico autoriza con el PIN
+y abre **ID de la carretilla**. Se admiten 1–20 caracteres ASCII: A-Z, números,
+espacios interiores, guion y guion bajo. El firmware elimina espacios exteriores,
+normaliza a mayúsculas y rechaza controles, `;`, `=`, Unicode y cualquier otro
+carácter. Un ejemplo válido es `E 1234 BCD`.
+
+- `ID?`: consulta sin AUTH. Devuelve `<ACK>ID=<actual>;HWID=<12 HEX>;NAME=<nombre Bluetooth>\r\n`.
+- `ID=<nuevo>`: cambio por BLE con AUTH vigente. La misma respuesta confirma
+  el valor tras guardarlo en NVS y solicitar la actualización del nombre GAP y
+  del scan response. La API del controlador BLE es asíncrona; el anuncio real
+  debe verificarse mediante una nueva búsqueda en el terminal.
+- El nuevo ID entra en vigor para las tramas posteriores y se conserva al apagar.
+  La conexión se mantiene; no se reinicia el PLC. Desconectar y volver a buscar
+  para actualizar el nombre en las listas de búsqueda. Android puede conservar
+  el nombre antiguo en su lista de vinculados; la app prioriza el scan response
+  y confirma la identidad mediante `ID?`.
+- El nombre personalizado es exactamente el ID, sin añadir `ISP-`. Sin ID
+  personalizado se conserva el comportamiento anterior: ID=HWID y nombre ISP-HWID.
+- HWID permanece inmutable para diagnóstico. Las credenciales de la app siguen
+  asociadas a la dirección BLE. PIN, vínculos y clave/SSID OTA no se cambian.
+  El SSID OTA utiliza siempre HWID, aunque se cambie la matrícula.
+- Se rechaza el cambio con `ERR=ID_BUSY` si hay palet cargado, fotocélula sin
+  estabilizar, corte solicitado, lecturas activas/encoladas, eventos pendientes
+  o en tránsito, o un estado OTA distinto de IDLE. No se renombra ni descarta
+  retrospectivamente ningún evento. En ACKMODE=1 los pendientes deben ser
+  confirmados por el receptor de negocio antes de cambiar la identidad.
+- Errores: `ERR=AUTH_REQUIRED`, `ERR=ID_INVALID`, `ERR=ID_BUSY`,
+  `ERR=ID_STORAGE`, `ERR=ID_BLUETOOTH`. Si falla la aplicación Bluetooth o el
+  guardado se intenta restaurar el nombre previo; no se confirma el cambio.
+  Volver a consultar y, si persiste un fallo del controlador, reiniciar y comprobar.
+- No se detectan IDs duplicados entre equipos; asignarlos de forma única en el
+  inventario del cliente. El contador de eventos no se reinicia al cambiar el ID.
+
+### Compatibilidad del receptor
+
+Se conservan los bytes de control, separadores y orden V2. El campo ID pasa de
+12 HEX a texto ASCII de 1–20 caracteres. El receptor debe extraerlo desde STX
+hasta el primer ESC. No asumir una longitud fija ni validar únicamente HEX.
+La app de mantenimiento acepta las tramas fragmentadas con ambos formatos.
+Una integración externa puede necesitar adaptar su parser y su identificación
+histórica de equipos antes de utilizar un ID propio.
+
+Pruebas reproducibles: `python3 firmware/tests/test_identity.py` desde la raíz.
+Pendiente en placa: nombre anunciado y leído por Android, guardado tras apagar,
+rechazos bajo actividad, trama BLE/TCP y continuidad de emparejamiento y OTA.

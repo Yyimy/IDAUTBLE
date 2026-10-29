@@ -57,9 +57,8 @@ fun validMaintenancePin(pin: String): Boolean = pin.length == 6 && pin.all { it 
 fun requiresMaintenanceAuthorization(data: ByteArray): Boolean {
     if (data.contentEquals(byteArrayOf(0x1B, 'O'.code.toByte(), 13, 10))) return true
     val text = data.toString(Charsets.UTF_8).trim()
-    return listOf("RTC=", "CFG=", "NET=", "WIFI=", "ALT=", "OTA=", "ACKMODE=", "HEARTBEAT=").any {
-        text.startsWith(it)
-    } || text == "OTA!"
+    return listOf("ID=", "RTC=", "CFG=", "NET=", "WIFI=", "ALT=", "OTA=", "ACKMODE=", "HEARTBEAT=")
+        .any { text.startsWith(it) } || text == "OTA!"
 }
 
 /** Uses monotonic time; the phone's clock or a new connection cannot extend authorization. */
@@ -108,4 +107,28 @@ class ConnectionHandshake {
     fun reset() {
         infoRequested = false
     }
+}
+
+/** IDs use ASCII so the same bytes fit BLE names and the V2 delimiter field. */
+fun normalizedEquipmentId(value: String): String = value.trim().uppercase(java.util.Locale.ROOT)
+
+fun validEquipmentId(value: String): Boolean =
+    value.length in 1..20 &&
+        value == value.trim() &&
+        value.all { it in 'A'..'Z' || it in '0'..'9' || it == ' ' || it == '-' || it == '_' }
+
+data class EquipmentIdentity(val id: String, val hardwareId: String, val bluetoothName: String)
+
+fun parseEquipmentIdentity(text: String): EquipmentIdentity? {
+    if (!text.startsWith("ID=")) return null
+    val fields = text.split(';').map { it.split('=', limit = 2) }
+    if (fields.any { it.size != 2 } || fields.map { it[0] }.distinct().size != fields.size)
+        return null
+    val values = fields.associate { it[0] to it[1] }
+    val id = values["ID"] ?: return null
+    val hardwareId = values["HWID"] ?: return null
+    val name = values["NAME"] ?: return null
+    if (!validEquipmentId(id) || !Regex("[0-9A-F]{12}").matches(hardwareId)) return null
+    if (name != id && !(id == hardwareId && name == "ISP-$hardwareId")) return null
+    return EquipmentIdentity(id, hardwareId, name)
 }

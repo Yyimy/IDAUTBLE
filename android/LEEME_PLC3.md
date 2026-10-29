@@ -1,6 +1,6 @@
-# IDAUT BLE — adaptación al firmware PLC 3.0.2
+# IDAUT BLE — adaptación al firmware PLC 3.0.4
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.2-plc3** (versionCode 3).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3-plc3** (versionCode 4).
 
 ## Abrir y compilar
 
@@ -83,3 +83,26 @@ Ejemplo: `FW=3.0.2-rc1;PROTO=V2;ACKMODE=0;HEARTBEAT=0`.
 - HEARTBEAT=0: PING/PONG TCP desactivado; =1 activa la vigilancia del servidor. No es un indicador del estado BLE.
 
 La app reconoce también una autorización temporal de firmware anterior y lo indica expresamente. Para eliminar el límite de cinco minutos hay que cargar el firmware 3.0.2; actualizar solo la app no cambia la política del PLC anterior.
+
+
+## ID de la carretilla
+
+1. Actualizar el firmware a 3.0.4 y la app a 1.3. Abrir en Arduino IDE la carpeta
+   completa del sketch, incluyendo Types.h. Conservar el PIN propio antes de cargar.
+2. Conectar al PLC y autorizar mediante **PIN / Acceso**.
+3. Con las horquillas vacías y sin lecturas, eventos u OTA pendientes, pulsar
+   **ID de la carretilla**. La app consulta el ID real y muestra también HWID.
+4. Introducir, por ejemplo, `E 1234 BCD` y pulsar **Guardar ID**. Se admite de
+   1 a 20 caracteres A-Z, 0-9, espacios interiores, guion y guion bajo. Se
+   normaliza a mayúsculas; no se permiten acentos ni separadores del protocolo.
+5. Esperar a **ID guardado en el PLC**. Una escritura GATT completada no basta:
+   la app espera la respuesta ID del PLC. Si no llega, muestra el timeout y
+   permite volver a consultar. Un rechazo explica la causa sin afirmar guardado.
+6. Desconectar y ejecutar Scan 5s: aparecerá exactamente el nuevo ID. No hace
+   falta olvidar el vínculo Bluetooth ni introducir un PIN nuevo. El nombre de
+   los ajustes de Android puede estar en caché; la app prioriza el anuncio y ID?.
+
+El ID queda en el PLC y se utiliza en sus tramas. HWID y SSID OTA no cambian.
+Asigna IDs distintos a cada equipo y adapta cualquier receptor externo que
+espere 12 HEX: ahora el ID se lee hasta el primer ESC y puede tener 1–20
+caracteres. La app de mantenimiento no convierte ni confirma eventos del SGA.
