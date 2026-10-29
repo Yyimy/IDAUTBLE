@@ -3,7 +3,7 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 7. VersionName: `1.3.3-plc3`.
+- VersionCode: 8. VersionName: `1.3.4-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
@@ -89,3 +89,22 @@ Verificación: testDebugUnitTest assembleDebug, 26 pruebas sin fallos. No se añ
 pruebas que repliquen la estructura de esta reorganización. Pendiente en tablet:
 abrir/cerrar cada sección, desplazamiento y teclado del terminal, lista de equipos,
 persistencia al girar o cambiar de pestaña y comandos binarios siempre accesibles.
+
+
+## Binarios plegables y flujo de ID (1.3.4)
+
+BINARY COMMANDS usa el mismo componente plegable y estado independiente que el
+resto del menú. Empieza abierto. PIN / ACCESO se coloca inmediatamente después
+de BINARY COMMANDS y antes de ID DE LA CARRETILLA.
+
+Configurar ID comprueba la autorización antes de abrir la ventana y antes de
+consultar ID?. Si falta, únicamente muestra un Toast indicando que primero se
+introduzca la contraseña en PIN / ACCESO; no abre el diálogo de PIN ni la edición.
+Se conserva la comprobación al guardar por si se pierde la autorización. La
+ventana se cierra solo al recibir una respuesta de identidad válida que coincide
+con el ID pendiente de guardar. Rechazos y timeout mantienen visible el error.
+El resultado confirmado permanece en el registro.
+
+Pendiente en tablet: plegado de binarios, orden PIN/ID, aviso sin autorización,
+autorización y guardado correcto con cierre, rechazo y timeout sin cierre de éxito.
+No se han ejecutado pruebas instrumentadas en un teléfono o PLC.

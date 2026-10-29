@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.5
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.3-plc3** (versionCode 7).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.4-plc3** (versionCode 8).
 
 ## Abrir y compilar
 
@@ -87,7 +87,7 @@ La app reconoce también una autorización temporal de firmware anterior y lo in
 
 ## ID de la carretilla
 
-1. Actualizar el firmware a 3.0.5 y la app a 1.3.3. Abrir en Arduino IDE la carpeta
+1. Actualizar el firmware a 3.0.5 y la app a 1.3.4. Abrir en Arduino IDE la carpeta
    completa del sketch, incluyendo Types.h. Conservar el PIN propio antes de cargar.
 2. Conectar al PLC. En TERMINAL, justo debajo de BINARY COMMANDS, desplegar
    **PIN / ACCESO** y pulsar **Introducir PIN / Autorizar**.
@@ -154,3 +154,19 @@ estado al cambiar de pestaña y cuando Android restaura la pantalla. Las cabecer
 resumen el estado de conexión/altura o el contenido de la sección. Plegar una
 sección no desconecta, no detiene la búsqueda ni cambia la autorización. El registro
 de comunicaciones permanece visible a la derecha. No requiere actualizar firmware.
+
+
+## Comandos binarios y acceso a ID (app 1.3.4)
+
+BINARY COMMANDS también se puede plegar y desplegar con su cabecera. El orden
+es CONEXIÓN BLUETOOTH, BINARY COMMANDS, PIN / ACCESO, ID DE LA CARRETILLA,
+HIGH MEASUREMENT, TEXT COMMANDS y MANUAL TERMINAL. Conexión y binarios empiezan
+abiertos; cada sección conserva su propio estado como las demás.
+
+Si se pulsa Configurar ID sin mantenimiento autorizado, solo se muestra el aviso
+«Primero debes introducir la contraseña en PIN / ACCESO». No se abre la edición
+ni el diálogo del PIN. Autorizar desde la sección PIN / ACCESO y volver a pulsar
+Configurar ID. La ventana se cierra automáticamente cuando el PLC confirma el
+ID guardado; el resultado sigue visible en el registro. Si el PLC rechaza el cambio
+o no responde, la ventana permanece abierta y muestra la causa. No requiere
+modificar el firmware.
