@@ -317,6 +317,14 @@ class MainActivity : ComponentActivity() {
     private val uiRememberPin = mutableStateOf(false)
     private val uiMaintenanceStatus = mutableStateOf("Solo lectura / sin autorizar")
 
+    private val uiIdentityDialog = mutableStateOf(false)
+    private val uiIdentity = mutableStateOf<EquipmentIdentity?>(null)
+    private val uiIdentityDraft = mutableStateOf("")
+    private val uiIdentityBusy = mutableStateOf(false)
+    private val uiIdentityStatus = mutableStateOf("")
+    private var identityExpected: String? = null
+    private var identityRequest = 0L
+
     private data class PendingWrite(
         val data: ByteArray,
         val tag: String,
@@ -765,6 +773,11 @@ class MainActivity : ComponentActivity() {
         cccdAttempts = 0
         streamDecoder.clear()
         uiNetworkSnapshot.value = NetworkSnapshot()
+        uiIdentityDialog.value = false
+        uiIdentity.value = null
+        uiIdentityBusy.value = false
+        identityExpected = null
+        identityRequest++
     }
 
     private fun openPinDialog() {
@@ -1014,11 +1027,60 @@ class MainActivity : ComponentActivity() {
 
     private fun handleProtocolControl(message: PlcMessage) {
         val text = message.text
+        val identity = if (message.acknowledged) parseEquipmentIdentity(text) else null
+        if (identity != null) {
+            uiIdentity.value = identity
+            uiSelected.value =
+                uiSelected.value?.let {
+                    if (it.address == lastConnectedAddress) it.copy(name = identity.bluetoothName)
+                    else it
+                }
+            lastConnectedAddress?.let { address ->
+                foundMap[address]?.let {
+                    foundMap[address] = it.copy(name = identity.bluetoothName)
+                }
+                uiDevices.value = foundMap.values.sortedByDescending { it.rssi }
+            }
+            if (identityExpected == identity.id) {
+                uiIdentityStatus.value =
+                    "ID guardado en el PLC. Al volver a buscar aparecerá como ${identity.bluetoothName}."
+                identityExpected = null
+                uiIdentityBusy.value = false
+                identityRequest++
+            } else if (identityExpected == null && uiIdentityBusy.value) {
+                uiIdentityDraft.value = identity.id
+                uiIdentityStatus.value = "Introduce el identificador de la carretilla."
+                uiIdentityBusy.value = false
+                identityRequest++
+            }
+            return
+        }
+        if (message.rejected && uiIdentityBusy.value) {
+            uiIdentityBusy.value = false
+            identityExpected = null
+            identityRequest++
+            uiIdentityStatus.value =
+                when (text) {
+                    "ERR=ID_BUSY" ->
+                        "Vacía las horquillas y espera a terminar las lecturas, el envío de eventos y el OTA."
+                    "ERR=ID_INVALID" ->
+                        "ID no válido: usa de 1 a 20 caracteres, letras A-Z, números, espacios, guion o guion bajo."
+                    "ERR=ID_STORAGE" ->
+                        "El PLC no pudo guardar el ID. Vuelve a consultarlo antes de repetir."
+                    "ERR=ID_BLUETOOTH" ->
+                        "No se pudo actualizar el nombre Bluetooth. Consulta el ID y vuelve a intentarlo."
+                    else ->
+                        "Cambio o consulta no confirmado: $text. Comprueba que el firmware admite ID?."
+                }
+        }
         if (message.acknowledged && text == "CONECTADO") {
             readyOk = true
             bleChannelReady = true
             log(LogLevel.INFO, "BLE listo. Consultas disponibles.")
-            if (connectionHandshake.onConnected()) sendText("INFO?", true)
+            if (connectionHandshake.onConnected()) {
+                sendText("INFO?", true)
+                sendText("ID?", true)
+            }
             return
         }
         if (message.acknowledged && text.startsWith("AUTH=OK")) {
@@ -1551,6 +1613,56 @@ class MainActivity : ComponentActivity() {
         SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date(t))
 
     // ============================
+    // EQUIPMENT ID
+    // ============================
+    private fun openIdentityDialog() {
+        if (!bleChannelReady) {
+            log(LogLevel.WARN, "Espera a completar la conexión BLE")
+            return
+        }
+        uiIdentityDialog.value = true
+        uiIdentityDraft.value = uiIdentity.value?.id ?: ""
+        uiIdentityStatus.value = "Consultando ID del PLC..."
+        uiIdentityBusy.value = true
+        identityExpected = null
+        sendText("ID?", true)
+        scheduleIdentityTimeout()
+    }
+
+    private fun saveIdentity() {
+        val id = normalizedEquipmentId(uiIdentityDraft.value)
+        if (!validEquipmentId(id) || uiIdentityBusy.value || !bleChannelReady) return
+        if (!maintenanceSession.isAuthorized()) {
+            uiIdentityStatus.value =
+                "Autoriza el mantenimiento con el PIN y vuelve a pulsar Guardar ID."
+            openPinDialog()
+            return
+        }
+        uiIdentityDraft.value = id
+        uiIdentityBusy.value = true
+        identityExpected = id
+        uiIdentityStatus.value = "Esperando confirmación del PLC..."
+        sendText("ID=$id", true)
+        scheduleIdentityTimeout()
+    }
+
+    private fun scheduleIdentityTimeout() {
+        val request = ++identityRequest
+        val currentGatt = gatt
+        mainHandler.postDelayed(
+            {
+                if (gatt === currentGatt && identityRequest == request && uiIdentityBusy.value) {
+                    uiIdentityBusy.value = false
+                    identityExpected = null
+                    uiIdentityStatus.value =
+                        "Sin confirmación. Cierra y vuelve a abrir para consultar el ID real. Requiere firmware 3.0.4 o posterior."
+                }
+            },
+            10000,
+        )
+    }
+
+    // ============================
     // LIFECYCLE
     // ============================
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -1572,6 +1684,8 @@ class MainActivity : ComponentActivity() {
                 PlcBleTesterLandscape(
                     networkSnapshot = uiNetworkSnapshot.value,
                     maintenanceStatus = uiMaintenanceStatus.value,
+                    equipmentId = uiIdentity.value?.id,
+                    onIdentityClick = { openIdentityDialog() },
                     onMaintenanceClick = { openPinDialog() },
                     onForgetPin = { forgetSavedPin() },
                     onLockMaintenance = { lockMaintenance() },
@@ -1640,6 +1754,16 @@ class MainActivity : ComponentActivity() {
                     bleLinkState = uiBleLinkState.value,
                     onResetOtaUi = { resetOtaUi() },
                 )
+                if (uiIdentityDialog.value)
+                    EquipmentIdDialog(
+                        current = uiIdentity.value,
+                        draft = uiIdentityDraft.value,
+                        busy = uiIdentityBusy.value,
+                        status = uiIdentityStatus.value,
+                        onDraftChanged = { uiIdentityDraft.value = it },
+                        onSave = { saveIdentity() },
+                        onDismiss = { uiIdentityDialog.value = false },
+                    )
                 if (uiPinDialog.value)
                     MaintenancePinDialog(
                         pin = uiPinValue.value,
@@ -1677,6 +1801,8 @@ class MainActivity : ComponentActivity() {
 private fun PlcBleTesterLandscape(
     networkSnapshot: NetworkSnapshot,
     maintenanceStatus: String,
+    equipmentId: String?,
+    onIdentityClick: () -> Unit,
     onMaintenanceClick: () -> Unit,
     onForgetPin: () -> Unit,
     onLockMaintenance: () -> Unit,
@@ -1810,6 +1936,20 @@ private fun PlcBleTesterLandscape(
                     Text("Bloquear acceso")
                 }
                 TextButton(onClick = onForgetPin, enabled = connected) { Text("Olvidar PIN") }
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "ID del PLC: ${equipmentId ?: "sin consultar"}",
+                    modifier = Modifier.weight(1f),
+                    fontSize = 12.sp,
+                )
+                OutlinedButton(onClick = onIdentityClick, enabled = connected) {
+                    Text("ID de la carretilla")
+                }
             }
             TabRow(selectedTabIndex = selectedTab) {
                 Tab(

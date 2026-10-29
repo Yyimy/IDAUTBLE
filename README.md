@@ -4,8 +4,8 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.2-plc3, versionCode 3 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.3-rc1 |
+| App Android | [android/](android/) | 1.3-plc3, versionCode 4 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.4-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -55,6 +55,7 @@ arduino-cli compile --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,Parti
 python3 firmware/tests/test_logic.py
 python3 firmware/tests/test_pin_constant.py
 python3 firmware/tests/test_led.py
+python3 firmware/tests/test_identity.py
 ```
 
 Estados del indicador: [LED del PLC](firmware/LEEME.md#led-de-estado-version-303).
@@ -71,10 +72,30 @@ La contraseña WiFi del AP OTA es independiente del PIN BLE; el firmware la mues
 
 C verifica que el PLC responde. La app consulta INFO? una sola vez por conexión. Su respuesta contiene FW (versión), PROTO (trama V2), ACKMODE (confirmación de eventos) y HEARTBEAT (vigilancia TCP).
 
+## ID de la carretilla
+
+Con firmware 3.0.4 y app 1.3, conecta, autoriza con PIN / Acceso y pulsa
+**ID de la carretilla**. Admite 1–20 caracteres ASCII (A-Z, 0-9, espacios,
+guion y guion bajo), por ejemplo `E 1234 BCD`. Se normaliza a mayúsculas y
+se guarda en el PLC. El nombre Bluetooth pasa a ser exactamente ese ID y las
+tramas nuevas utilizan el mismo valor. No se reinicia el PLC ni cambia el PIN.
+Desconecta y vuelve a buscar para ver el nuevo nombre anunciado.
+
+El cambio exige horquillas vacías y ausencia de lecturas, eventos pendientes u
+OTA. El identificador técnico de fábrica sigue disponible como HWID y el SSID
+OTA sigue basándose en él. Si no se configura un ID propio, se conserva el ID
+original y el nombre `ISP-<HWID>`.
+
+**Integración:** el campo ID de V2 deja de estar limitado a 12 HEX y puede tener
+1–20 caracteres; leerlo hasta ESC, no por posición fija. Revisar los receptores
+externos antes de desplegar IDs propios. Asignar un ID distinto a cada carretilla.
+Detalles: [firmware](firmware/LEEME.md#id-configurable-de-la-carretilla-version-304)
+y [app](android/LEEME_PLC3.md#id-de-la-carretilla).
+
 ## Validación de esta base
 
-- Android: compilación y generación de APK debug correctas; 19 pruebas unitarias superadas.
-- Firmware: compilación correcta con ESP32 3.0.7; 97 comprobaciones de lógica, 5 comprobaciones de validación del PIN y 48.041 comprobaciones del LED superadas.
+- Android: compilación y generación de APK debug correctas; 26 pruebas unitarias superadas.
+- Firmware: compilación correcta con ESP32 3.0.7; 97 comprobaciones de lógica, 5 comprobaciones de validación del PIN y 48.041 comprobaciones del LED y 60 comprobaciones de identidad superadas.
 - Las pruebas de emparejamiento, electrónica, relé, baterías y OTA en el equipo real siguen pendientes.
 
 Informes: [Android](android/VALIDACION_ANDROID.md) y [firmware](firmware/VALIDACION.md).
