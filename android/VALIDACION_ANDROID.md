@@ -3,7 +3,7 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 6. VersionName: `1.3.2-plc3`.
+- VersionCode: 7. VersionName: `1.3.3-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
@@ -75,3 +75,17 @@ se deben terminar las operaciones pendientes. Compilación y 26 pruebas unitaria
 comprobadas con testDebugUnitTest assembleDebug. Requiere firmware 3.0.5 para
 eliminar el bloqueo por PaletCargado; la condición OTA no se modifica.
 Pendiente de comprobar el flujo en la tablet y el PLC reales.
+
+
+## Menú plegable (1.3.3)
+
+Se aplica CollapsibleSettingsSection a conexión Bluetooth (incluida la lista de
+dispositivos), altura, comandos de texto y terminal manual. ID y PIN ya utilizan
+el mismo componente. BINARY COMMANDS conserva su tarjeta siempre abierta. Los
+estados de expansión son independientes y usan rememberSaveable fuera del contenido
+condicional de pestañas. No cambia la lógica de BLE ni los callbacks de los controles.
+
+Verificación: testDebugUnitTest assembleDebug, 26 pruebas sin fallos. No se añaden
+pruebas que repliquen la estructura de esta reorganización. Pendiente en tablet:
+abrir/cerrar cada sección, desplazamiento y teclado del terminal, lista de equipos,
+persistencia al girar o cambiar de pestaña y comandos binarios siempre accesibles.
