@@ -3,7 +3,7 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 5. VersionName: `1.3.1-plc3`.
+- VersionCode: 6. VersionName: `1.3.2-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
@@ -66,3 +66,12 @@ las 26 pruebas existentes; no se añaden pruebas de lógica para esta reorganiza
 Pendiente de revisión visual en tablet: posición, apertura independiente, desplazamiento,
 restauración al girar/cambiar pestaña, lectura de las cabeceras y los tres controles
 PIN. No se afirma validación instrumentada de la interfaz.
+
+
+## Mensajes de cambio de ID (1.3.2)
+
+El diálogo y el rechazo ID_BUSY explican que se permite un palet cargado y que
+se deben terminar las operaciones pendientes. Compilación y 26 pruebas unitarias
+comprobadas con testDebugUnitTest assembleDebug. Requiere firmware 3.0.5 para
+eliminar el bloqueo por PaletCargado; la condición OTA no se modifica.
+Pendiente de comprobar el flujo en la tablet y el PLC reales.

@@ -1,4 +1,4 @@
-# Validación — PLC Scanner 3.0.4-rc1
+# Validación — PLC Scanner 3.0.5-rc1
 
 Fecha: 29 de octubre de 2026.
 
@@ -11,9 +11,9 @@ Fecha: 29 de octubre de 2026.
 | Objetivo | ESP32-S3 Dev Module, USB CDC habilitado, Minimal SPIFFS con OTA |
 | Arduino-ESP32 | 3.0.7 |
 | ADS1X15 / BusIO | 2.5.0 / 1.16.2 |
-| Tamaño de programa | 1.612.893 bytes, 82 % de 1.966.080 bytes de partición |
+| Tamaño de programa | 1.612.885 bytes, 82 % de 1.966.080 bytes de partición |
 | Datos globales estáticos | 71.100 bytes, 21 % de 327.680 bytes |
-| Pruebas de regresión en host | 97 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED + 60 de identidad |
+| Pruebas de regresión en host | 97 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED + 65 de identidad |
 
 La memoria libre indicada por el compilador no mide el consumo dinámico de BLE/WiFi, colas y tareas durante el funcionamiento. Debe medirse en placa en una prueba prolongada.
 
@@ -36,7 +36,7 @@ Las pruebas en host extraen las funciones del INO entregado y las ejecutan con r
 
 Para repetirlas: Python 3 y g++ en Linux/macOS/WSL; ejecutar `python3 tests/test_logic.py` desde la raíz del paquete. Ejecutar también `python3 tests/test_pin_constant.py` para comprobar las cinco configuraciones de PIN. Las pruebas no cargan nada en la placa. Los dobles de prueba no demuestran el comportamiento de las librerías, el enlace radio ni los tiempos reales de flash/I2C.
 
-Las 60 comprobaciones de identidad ejecutan validación, carga y guardado NVS,
+Las 65 comprobaciones de identidad ejecutan validación, carga y guardado NVS,
 normalización, permisos BLE, rechazo por actividad, fallos simulados de las APIs
 GAP/scan response y de almacenamiento, recuperación tras arranque y trama V2
 con matrícula. Las APIs radio y NVS son dobles de prueba; no validan la radio
@@ -46,7 +46,7 @@ ni la memoria física. Ejecutar `python3 firmware/tests/test_identity.py`.
 
 | Prueba | Criterio de aceptación |
 |---|---|
-| ID configurable | Guardar matrícula, volver a buscar, comprobar nombre exacto, trama BLE/TCP, reinicio y persistencia, PIN/vínculo conservados y mismo SSID OTA; rechazar con palet, lectura o eventos pendientes |
+| ID configurable | Guardar matrícula, volver a buscar, comprobar nombre exacto, trama BLE/TCP, reinicio y persistencia, PIN/vínculo conservados y mismo SSID OTA; aceptar con palet cargado o vacío; rechazar con lectura o eventos pendientes |
 | Arranque y USB/UART0 | La consola USB no se mezcla con PON; lector a 9600, RX44/TX43 |
 | LED y prioridades | Verificar fijo, lento, doble/triple destello, rápido y OTA; batería oculta conexión/OTA, fallo oculta batería, cambio de batería recupera patrón tras confirmación |
 | Expansor de salidas | LED O0 y relé O1 coinciden con el cableado y la polaridad del adjunto |
@@ -85,3 +85,13 @@ ni la memoria física. Ejecutar `python3 firmware/tests/test_identity.py`.
 - Los contadores originales siguen siendo persistentes por actualización. No se ha cambiado su exactitud por un guardado diferido que pudiera perder conteos al apagar.
 
 No instalar en una carretilla operativa sin completar las pruebas de alimentación, lectura y comunicaciones del equipo real.
+
+
+## Regresión 3.0.5: cambio de ID con fotocélula a 1
+
+Las pruebas de identidad ahora verifican cambio y persistencia con PaletCargado=true,
+conservación de ese estado y rechazo con eventos pendientes también estando cargado.
+Siguen comprobando estabilización inicial, AUTH, lecturas, OTA y corte. No se
+cambia ni simula ningún modo que desactive la fotocélula. Pendiente de comprobar
+en el equipo real la configuración con palet apoyado en el suelo y los eventos
+producidos por personas que pasan ante el sensor.

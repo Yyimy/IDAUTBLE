@@ -43,7 +43,9 @@ fun EquipmentIdDialog(
                 Text(
                     "Este ID se mostrará por Bluetooth y se enviará en las tramas. Se conserva al apagar. Evita repetir el mismo ID en otras carretillas."
                 )
-                Text("Cambia el ID con las horquillas vacías y sin operaciones pendientes.")
+                Text(
+                    "Puedes cambiar el ID con un palet cargado. Espera a que terminen las operaciones pendientes."
+                )
                 if (status.isNotEmpty()) Text(status)
             }
         },

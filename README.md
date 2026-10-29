@@ -4,8 +4,8 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.1-plc3, versionCode 5 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.4-rc1 |
+| App Android | [android/](android/) | 1.3.2-plc3, versionCode 6 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.5-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -74,7 +74,7 @@ C verifica que el PLC responde. La app consulta INFO? una sola vez por conexión
 
 ## ID de la carretilla
 
-Con firmware 3.0.4 y app 1.3.1, conecta y abre la pestaña TERMINAL. Debajo de
+Con firmware 3.0.5 y app 1.3.2, conecta y abre la pestaña TERMINAL. Debajo de
 BINARY COMMANDS, despliega **PIN / ACCESO** y pulsa **Introducir PIN / Autorizar**.
 Después despliega **ID DE LA CARRETILLA** y pulsa **Configurar ID**. Admite 1–20 caracteres ASCII (A-Z, 0-9, espacios,
 guion y guion bajo), por ejemplo `E 1234 BCD`. Se normaliza a mayúsculas y
@@ -86,8 +86,8 @@ Ambas secciones se pliegan de forma independiente; sus cabeceras conservan el ID
 y el estado de acceso visibles. La elección se mantiene al cambiar de pestaña
 y durante recreaciones de pantalla compatibles con el estado guardado de Android.
 
-El cambio exige horquillas vacías y ausencia de lecturas, eventos pendientes u
-OTA. El identificador técnico de fábrica sigue disponible como HWID y el SSID
+El cambio admite un palet cargado: no exige fotocélula a 0. Se requiere ausencia
+de lecturas, eventos pendientes u OTA y fotocélula inicial estabilizada. El identificador técnico de fábrica sigue disponible como HWID y el SSID
 OTA sigue basándose en él. Si no se configura un ID propio, se conserva el ID
 original y el nombre `ISP-<HWID>`.
 
@@ -100,7 +100,7 @@ y [app](android/LEEME_PLC3.md#id-de-la-carretilla).
 ## Validación de esta base
 
 - Android: compilación y generación de APK debug correctas; 26 pruebas unitarias superadas.
-- Firmware: compilación correcta con ESP32 3.0.7; 97 comprobaciones de lógica, 5 comprobaciones de validación del PIN y 48.041 comprobaciones del LED y 60 comprobaciones de identidad superadas.
+- Firmware: compilación correcta con ESP32 3.0.7; 97 comprobaciones de lógica, 5 comprobaciones de validación del PIN y 48.041 comprobaciones del LED y 65 comprobaciones de identidad superadas.
 - Las pruebas de emparejamiento, electrónica, relé, baterías y OTA en el equipo real siguen pendientes.
 
 Informes: [Android](android/VALIDACION_ANDROID.md) y [firmware](firmware/VALIDACION.md).

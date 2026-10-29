@@ -1062,7 +1062,7 @@ class MainActivity : ComponentActivity() {
             uiIdentityStatus.value =
                 when (text) {
                     "ERR=ID_BUSY" ->
-                        "Vacía las horquillas y espera a terminar las lecturas, el envío de eventos y el OTA."
+                        "Espera a terminar las lecturas, el envío de eventos y el OTA. No es necesario retirar el palet."
                     "ERR=ID_INVALID" ->
                         "ID no válido: usa de 1 a 20 caracteres, letras A-Z, números, espacios, guion o guion bajo."
                     "ERR=ID_STORAGE" ->

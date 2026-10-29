@@ -1,4 +1,4 @@
-// PLC Scanner v3.0.4-rc1 - 2026-10-29
+// PLC Scanner v3.0.5-rc1 - 2026-10-29
 // Complete source derived from the supplied firmware. See LEEME.md before
 // flashing. Target: ESP32-S3, Arduino-ESP32 3.0.7, USB CDC enabled, OTA
 // partition required. Existing V2 binary commands preserved. New optional
@@ -468,7 +468,7 @@ static std::atomic<bool> gBleSecure{false};
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.4-rc1"
+#define FIRMWARE_VERSION "3.0.5-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static BLE2902 *gCccd = nullptr;
@@ -3759,7 +3759,7 @@ static void handleIdentityCommand(const String &s, uint8_t source) {
   // No mezclar identidades dentro de trabajos o eventos pendientes de entrega.
   if (gCutRequested || gOtaTaskHandle || gOtaState != OTA_IDLE ||
       gScanActive || gScanCount || gEventInFlight || gOutbox.count ||
-      !gFotoLista || PaletCargado) {
+      !gFotoLista) {
     replyLine(false, "ERR=ID_BUSY");
     return;
   }
