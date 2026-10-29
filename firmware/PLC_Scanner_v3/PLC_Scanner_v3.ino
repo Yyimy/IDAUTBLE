@@ -1,4 +1,4 @@
-// PLC Scanner v3.0.2-rc1 - 2026-10-29
+// PLC Scanner v3.0.3-rc1 - 2026-10-29
 // Complete source derived from the supplied firmware. See LEEME.md before
 // flashing. Target: ESP32-S3, Arduino-ESP32 3.0.7, USB CDC enabled, OTA
 // partition required. Existing V2 binary commands preserved. New optional
@@ -80,40 +80,20 @@ static const unsigned long STARTUP_WARMUP_MS =
     2000;  // (no usado ahora, reservado)
 
 // ============================================================================
-// LED ESTADO (patrones por estado) - NO BLOQUEANTE
-// Reglas:
-// - Si WiFi está habilitado -> TCP es obligatorio. Si no hay TCP: FALLO.
-// - BLE es independiente: puede usarse con WiFi o sin WiFi.
-// Estados LED:
-//   LED_OK        -> pulso lento (todo bien: TCP UP)
-//   LED_ERROR     -> parpadeo nervioso (WiFi enabled pero TCP DOWN)
-//   LED_LOCAL_BLE -> doble pulso lento (WiFi disabled y BLE conectado)
-//   LED_ISOLATED  -> pulso muy lento (WiFi disabled y sin BLE conectado)
+// LED ESTADO - un indicador, seis patrones, sin esperas.
+// Prioridad: fallo/corte > bateria > OTA > conexion > preparado.
+// WiFi habilitado exige TCP; sin WiFi se exige BLE cifrado y suscrito.
 // ============================================================================
 
-static LedMode gLedMode = LED_ISOLATED;
-
-// Parámetros de patrones (ajústalos si quieres)
-static const unsigned long LED_OK_PERIOD_MS = 2000;
-static const unsigned long LED_OK_ON_MS = 60;
-
-static const unsigned long LED_ERR_PERIOD_MS = 400;
-static const unsigned long LED_ERR_ON_MS = 80;
-
-static const unsigned long LED_ISO_PERIOD_MS = 3000;
-static const unsigned long LED_ISO_ON_MS = 60;
-
-// Doble pulso: ON, pausa, ON, luego silencio hasta completar periodo
-static const unsigned long LED_LOCAL_PERIOD_MS = 2000;
-static const unsigned long LED_LOCAL_ON1_MS = 60;
-static const unsigned long LED_LOCAL_GAP_MS = 160;
-static const unsigned long LED_LOCAL_ON2_MS = 60;
-
-// Estado interno del motor de parpadeo
-static unsigned long gLedT0 = 0;  // marca de tiempo base del patrón actual
-static uint8_t gLedPhase = 0;     // subfase (para doble pulso)
-static bool gLedOutOn =
-    false;  // estado actual del LED (para evitar I2C repetido)
+static LedMode gLedMode = LED_DISCONNECTED;
+static uint32_t gLedT0 = 0;
+static bool gLedOutOn = false;
+// 0: normal, 1: baja (<=20%), 2: muy baja (<=10%).
+static uint8_t gLedBatteryBand = 0;
+static uint8_t gLedBatteryCandidate = 0;
+static uint32_t gLedBatterySinceMs = 0;
+static const uint32_t LED_BAT_CONFIRM_MS = 3000;
+static const uint32_t LED_BAT_MAX_AGE_MS = 3000;
 
 // ============================================================================
 // BLE - GLOBALES
@@ -482,7 +462,7 @@ static std::atomic<bool> gBleSecure{false};
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.2-rc1"
+#define FIRMWARE_VERSION "3.0.3-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static BLE2902 *gCccd = nullptr;
@@ -2451,105 +2431,100 @@ static void bleProcessPendingOnce() {
   }
 }
 
-static inline void updateLedMode() {
-  if (gCutRequested || !gPeripheralOk[2] || !gBatValid[0] || !gBatValid[1]) {
-    gLedMode = LED_ERROR;
+// Confirma las bandas durante 3 s. Para recuperar se exigen >=13% y
+// >=23%, respectivamente. No afecta a las protecciones ni al corte real.
+static void ledBatteryTick() {
+  const uint32_t now = millis();
+  const bool valid = gBatValid[0] && gBatValid[1] &&
+                     now - gBatValidMs[0] <= LED_BAT_MAX_AGE_MS &&
+                     now - gBatValidMs[1] <= LED_BAT_MAX_AGE_MS;
+  const bool present1 = gBatV1 > V_BAT_ABSENT;
+  const bool present2 = gBatV2 > V_BAT_ABSENT;
+  if (!valid || (!present1 && !present2)) {
+    gLedBatteryCandidate = gLedBatteryBand;
+    gLedBatterySinceMs = now;
     return;
   }
-  if (gOtaTaskHandle) {
-    gLedMode = LED_LOCAL_BLE;
-    return;
+  int pct = present1 ? pctFrom2Digits(gNivelBat1) : 99;
+  if (present2) {
+    const int p2 = pctFrom2Digits(gNivelBat2);
+    if (p2 < pct) pct = p2;
   }
-  // Regla principal:
-  // - Si WiFi está habilitado => TCP debe estar UP, si no: ERROR
-  if (gWifiEnabled) {
-    if (gTcpConnected && gTcpClient.connected())
-      gLedMode = LED_OK;
-    else
-      gLedMode = LED_ERROR;
-    return;
-  }
-
-  // WiFi deshabilitado:
-  // - Si hay BLE conectado => modo local OK
-  if (deviceConnected)
-    gLedMode = LED_LOCAL_BLE;
+  uint8_t target;
+  if (pct <= 10 || (gLedBatteryBand == 2 && pct < 13))
+    target = 2;
+  else if (pct <= 20 || (gLedBatteryBand != 0 && pct < 23))
+    target = 1;
   else
-    gLedMode = LED_ISOLATED;
+    target = 0;
+  if (target == gLedBatteryBand) {
+    gLedBatteryCandidate = target;
+    gLedBatterySinceMs = now;
+  } else if (target != gLedBatteryCandidate) {
+    gLedBatteryCandidate = target;
+    gLedBatterySinceMs = now;
+  } else if (now - gLedBatterySinceMs >= LED_BAT_CONFIRM_MS) {
+    gLedBatteryBand = target;
+  }
 }
 
-// ============================================================================
-// LED DE ESTADO
-// ============================================================================
-static inline void ledEstadoBlinkTick() {
-  unsigned long now = millis();
+static bool bleCanNotify();
 
-  // Si cambiamos de modo, reiniciamos el patrón (para que se vea inmediato)
+static inline void updateLedMode() {
+  ledBatteryTick();
+  const uint32_t now = millis();
+  if (gCutRequested || !gPeripheralOk[0] || !gPeripheralOk[2] ||
+      !gBatValid[0] || !gBatValid[1] ||
+      now - gBatValidMs[0] > LED_BAT_MAX_AGE_MS ||
+      now - gBatValidMs[1] > LED_BAT_MAX_AGE_MS ||
+      (gBatV1 <= V_BAT_ABSENT && gBatV2 <= V_BAT_ABSENT)) {
+    gLedMode = LED_ERROR;
+  } else if (gLedBatteryBand == 2) {
+    gLedMode = LED_BAT_CRITICAL;
+  } else if (gLedBatteryBand == 1) {
+    gLedMode = LED_BAT_LOW;
+  } else if (gOtaTaskHandle || gOtaState != OTA_IDLE) {
+    gLedMode = LED_OTA;
+  } else {
+    const bool ready = gWifiEnabled
+                           ? (gTcpConnected && gTcpClient.connected())
+                           : bleCanNotify();
+    gLedMode = ready ? LED_READY : LED_DISCONNECTED;
+  }
+}
+
+// dt es el tiempo transcurrido desde el cambio de modo (aritmetica uint32_t).
+static bool ledPatternOn(LedMode mode, uint32_t dt) {
+  switch (mode) {
+    case LED_READY:
+      return true;
+    case LED_DISCONNECTED:
+      return dt % 1000 < 500;
+    case LED_BAT_LOW: {
+      const uint32_t t = dt % 4000;
+      return t < 200 || (t >= 400 && t < 600);
+    }
+    case LED_BAT_CRITICAL: {
+      const uint32_t t = dt % 2000;
+      return t < 200 || (t >= 400 && t < 600) ||
+             (t >= 800 && t < 1000);
+    }
+    case LED_OTA:
+      return dt % 1000 < 800;  // ON 800 ms, OFF 200 ms.
+    case LED_ERROR:
+    default:
+      return dt % 400 < 200;
+  }
+}
+
+static inline void ledEstadoBlinkTick() {
+  const uint32_t now = millis();
   static LedMode lastMode = (LedMode)255;
   if (gLedMode != lastMode) {
     lastMode = gLedMode;
     gLedT0 = now;
-    gLedPhase = 0;
-    ledOut(false);
   }
-
-  switch (gLedMode) {
-    case LED_OK: {
-      // Pulso lento: ON corto cada periodo
-      unsigned long dt = now - gLedT0;
-      if (dt >= LED_OK_PERIOD_MS) {
-        gLedT0 = now;
-        dt = 0;
-      }
-      ledOut(dt < LED_OK_ON_MS);
-    } break;
-
-    case LED_ERROR: {
-      // Nervioso: parpadeo rápido
-      unsigned long dt = now - gLedT0;
-      if (dt >= LED_ERR_PERIOD_MS) {
-        gLedT0 = now;
-        dt = 0;
-      }
-      ledOut(dt < LED_ERR_ON_MS);
-    } break;
-
-    case LED_ISOLATED: {
-      // Muy lento: “estoy vivo pero aislado”
-      unsigned long dt = now - gLedT0;
-      if (dt >= LED_ISO_PERIOD_MS) {
-        gLedT0 = now;
-        dt = 0;
-      }
-      ledOut(dt < LED_ISO_ON_MS);
-    } break;
-
-    case LED_LOCAL_BLE: {
-      // Doble pulso cada LED_LOCAL_PERIOD_MS:
-      // fase 0: ON1
-      // fase 1: GAP
-      // fase 2: ON2
-      // fase 3: RESTO apagado hasta completar periodo
-      unsigned long dt = now - gLedT0;
-
-      if (dt >= LED_LOCAL_PERIOD_MS) {
-        gLedT0 = now;
-        dt = 0;
-        gLedPhase = 0;
-      }
-
-      if (dt < LED_LOCAL_ON1_MS) {
-        ledOut(true);
-      } else if (dt < (LED_LOCAL_ON1_MS + LED_LOCAL_GAP_MS)) {
-        ledOut(false);
-      } else if (dt <
-                 (LED_LOCAL_ON1_MS + LED_LOCAL_GAP_MS + LED_LOCAL_ON2_MS)) {
-        ledOut(true);
-      } else {
-        ledOut(false);
-      }
-    } break;
-  }
+  ledOut(ledPatternOn(gLedMode, now - gLedT0));
 }
 
 // ============================================================================
@@ -2989,7 +2964,7 @@ void setup() {
   // --- LED ESTADO: arrancar en OFF, el loop decidirá el patrón ---
   gLedOutOn = false;
   ledOut(false);
-  gLedMode = LED_ISOLATED;  // valor inicial conservador
+  gLedMode = LED_DISCONNECTED;  // el loop evalua perifericos y conexiones
   gLedT0 = millis();
 
   logLine("Esperando conexión BLE...");

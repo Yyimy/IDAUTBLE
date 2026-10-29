@@ -1,4 +1,4 @@
-# PLC Scanner 3.0.2-rc1 — código completo corregido
+# PLC Scanner 3.0.3-rc1 — código completo corregido
 
 Versión candidata para validación en banco. Derivada del archivo adjunto del 29/10/2026. Conserva los comandos binarios de cuatro bytes y la trama V2, con las diferencias de integración indicadas abajo. No se ha probado físicamente en la placa.
 
@@ -130,3 +130,49 @@ La respuesta a un PIN correcto es `AUTH=OK;TTL=SESSION`. Se mantiene la autoriza
 Para aprovecharlo hay que actualizar tanto este firmware como la app 1.2-plc3. Conserva en `PLC_MAINTENANCE_PIN` el PIN que ya utilizas antes de cargar el fuente descargado. La plantilla sigue incluyendo 123456 como ejemplo.
 
 `INFO?` continúa siendo una consulta, sin cambios de estado. Devuelve `FW` (versión de firmware), `PROTO` (formato de trama), `ACKMODE` (confirmación de eventos por aplicación) y `HEARTBEAT` (vigilancia PING/PONG del servidor TCP). No es una parte de la respuesta de C: la app lo consulta después del primer C confirmado de cada conexión.
+
+
+## LED de estado (version 3.0.3)
+
+Un solo LED, conectado a O0 del expansor activo bajo. No requiere cambios
+Android ni cambia comandos, UUID, trama V2, calibración o política de corte.
+
+| Estado | Patrón | Acción |
+|---|---|---|
+| Preparado | Encendido fijo | Listo, con la comunicación requerida disponible. |
+| Sin conexión requerida | 500 ms ON / 500 ms OFF | Revisar BLE o TCP según el modo de trabajo. |
+| Batería baja (<=20%, por encima de la banda muy baja) | Dos destellos cada 4 s | Preparar una batería cargada. |
+| Batería muy baja (<=10%) | Tres destellos cada 2 s | Cambiar la batería cuanto antes. |
+| Fallo importante o corte solicitado | 200 ms ON / 200 ms OFF | Consultar diagnóstico; puede apagarse. |
+| OTA en curso | 800 ms ON / 200 ms OFF | Esperar a que termine la actualización. |
+
+Los destellos de batería duran 200 ms y están separados por 200 ms apagados.
+La prioridad es **fallo/corte > batería muy baja > batería baja > OTA > conexión > preparado**.
+Un aviso de batería oculta temporalmente los estados de conexión y OTA.
+
+- Si WiFi está habilitado, se exige TCP conectado; BLE de mantenimiento no oculta
+  la falta del servidor. Si WiFi está deshabilitado, se exige BLE disponible para
+  notificar (conectado, cifrado y con notificaciones habilitadas). No se exige
+  autorización de mantenimiento para señalar preparado.
+- Se utiliza el menor porcentaje entre las baterías presentes. Una tensión <=2 V
+  se considera ausencia, coherentemente con el supervisor actual. Se admite una
+  única batería. Si ambas medidas son válidas pero ambas baterías parecen ausentes,
+  se indica fallo.
+- Cada medida debe ser válida y tener como máximo 3 s de antigüedad. Un error de
+  medida nunca se convierte en un aviso de batería agotada. También se indica
+  fallo ante RTC no válido, fallo del expansor o solicitud de corte.
+- El cambio de banda de batería se confirma durante 3 s. Tras entrar en <=10%,
+  permanece en tres destellos hasta alcanzar >=13%. Tras el aviso de <=20%,
+  se exige >=23% para volver al estado habitual, siempre con la misma confirmación.
+  Las entradas iniciales de alarma son exactamente <=20% y <=10%.
+- Los porcentajes son estimaciones por tensión. El corte sigue dependiendo de
+  la tensión y de los tiempos del supervisor; el LED no retrasa ni modifica esa
+  protección. Un corte puede ocurrir antes de completar un patrón luminoso.
+- Preparado no certifica la lectura de códigos ni la recepción/almacenamiento de
+  eventos en el SGA. Si falla el expansor o su alimentación, el LED puede no poder
+  mostrar la alarma: el mismo hardware controla el indicador.
+
+Pruebas en host: `python3 firmware/tests/test_led.py` desde la raíz del repositorio.
+En placa: verificar visibilidad, polaridad O0, BLE/TCP, los dos niveles de batería,
+retirada y sustitución de cada batería, fallo ADC, OTA y prioridades. No provocar
+una descarga profunda de baterías para probar el corte; usar un banco adecuado.

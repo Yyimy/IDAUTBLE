@@ -5,7 +5,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 | Componente | Carpeta | Versión |
 |---|---|---|
 | App Android | [android/](android/) | 1.2-plc3, versionCode 3 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.2-rc1 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.3-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -54,7 +54,10 @@ Con Arduino CLI, desde la raíz:
 arduino-cli compile --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,PartitionScheme=min_spiffs firmware/PLC_Scanner_v3 --warnings all
 python3 firmware/tests/test_logic.py
 python3 firmware/tests/test_pin_constant.py
+python3 firmware/tests/test_led.py
 ```
+
+Estados del indicador: [LED del PLC](firmware/LEEME.md#led-de-estado-version-303).
 
 Instrucciones y hardware: [firmware/LEEME.md](firmware/LEEME.md).
 
@@ -71,7 +74,7 @@ C verifica que el PLC responde. La app consulta INFO? una sola vez por conexión
 ## Validación de esta base
 
 - Android: compilación y generación de APK debug correctas; 19 pruebas unitarias superadas.
-- Firmware: compilación correcta con ESP32 3.0.7; 97 comprobaciones de lógica y 5 comprobaciones de validación del PIN superadas.
+- Firmware: compilación correcta con ESP32 3.0.7; 97 comprobaciones de lógica, 5 comprobaciones de validación del PIN y 48.041 comprobaciones del LED superadas.
 - Las pruebas de emparejamiento, electrónica, relé, baterías y OTA en el equipo real siguen pendientes.
 
 Informes: [Android](android/VALIDACION_ANDROID.md) y [firmware](firmware/VALIDACION.md).
