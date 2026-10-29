@@ -75,7 +75,7 @@ int main(){
   authorized=true;
   handleIdentityCommand("ID=CAR-023",1); CHECK(!replyOk && reply=="ERR=AUTH_REQUIRED"); CHECK(writes==0);
   handleIdentityCommand("ID=BAD;ID",0); CHECK(!replyOk && reply=="ERR=ID_INVALID"); CHECK(writes==0);
-  for(bool *flag : {&gCutRequested,&gOtaTaskHandle,&gScanActive,&gEventInFlight,&PaletCargado}) {
+  for(bool *flag : {&gCutRequested,&gOtaTaskHandle,&gScanActive,&gEventInFlight}) {
     *flag=true; handleIdentityCommand("ID=CAR-023",0); CHECK(!replyOk && reply=="ERR=ID_BUSY"); *flag=false;
   }
   gFotoLista=false;handleIdentityCommand("ID=CAR-023",0);CHECK(reply=="ERR=ID_BUSY");gFotoLista=true;
@@ -91,6 +91,8 @@ int main(){
   gId="LOST";gBluetoothName="LOST";identityLoad();CHECK(gId=="E 1234 BCD");CHECK(gBluetoothName==gId);
   ScanJob j={};j.type=BLECMD_L;std::strcpy(j.iso,"2026-10-29T14:00:00");j.photo='1';
   CHECK(frameForScan(j)==String("\x06" "2026-10-29T14:00:00\x02" "E 1234 BCD\x1b" "6598\x1b" "01.25\x1b" "1\x1b" "PALLET\x1b" "LOCATION\x1b\x03"));
+  PaletCargado=true;handleIdentityCommand("ID=LOADED-TRUCK",0);CHECK(replyOk);CHECK(gId=="LOADED-TRUCK");CHECK(nvs["id"]==gId);CHECK(PaletCargado);
+  gOutbox.count=1;handleIdentityCommand("ID=OTHER",0);CHECK(reply=="ERR=ID_BUSY");CHECK(gId=="LOADED-TRUCK");gOutbox.count=0;PaletCargado=false;
   nvs["id"]="BAD;SAVED";identityLoad();CHECK(gId==gHardwareId);CHECK(!gCustomId);
   storageOpen=false;identityLoad();CHECK(gId==gHardwareId);
   printf("PASS: %d identity assertions against production functions\n", count);

@@ -1,4 +1,4 @@
-# PLC Scanner 3.0.4-rc1 — código completo corregido
+# PLC Scanner 3.0.5-rc1 — código completo corregido
 
 Versión candidata para validación en banco. Derivada del archivo adjunto del 29/10/2026. Conserva los comandos binarios de cuatro bytes y la trama V2, con las diferencias de integración indicadas abajo. No se ha probado físicamente en la placa.
 
@@ -201,8 +201,9 @@ carácter. Un ejemplo válido es `E 1234 BCD`.
 - HWID permanece inmutable para diagnóstico. Las credenciales de la app siguen
   asociadas a la dirección BLE. PIN, vínculos y clave/SSID OTA no se cambian.
   El SSID OTA utiliza siempre HWID, aunque se cambie la matrícula.
-- Se rechaza el cambio con `ERR=ID_BUSY` si hay palet cargado, fotocélula sin
-  estabilizar, corte solicitado, lecturas activas/encoladas, eventos pendientes
+- Se permite cambiar el ID con palet cargado (fotocélula=1) o vacío (0).
+  Se rechaza con `ERR=ID_BUSY` ante fotocélula inicial sin estabilizar, corte
+  solicitado, lecturas activas/encoladas, eventos pendientes
   o en tránsito, o un estado OTA distinto de IDLE. No se renombra ni descarta
   retrospectivamente ningún evento. En ACKMODE=1 los pendientes deben ser
   confirmados por el receptor de negocio antes de cambiar la identidad.
@@ -225,3 +226,14 @@ histórica de equipos antes de utilizar un ID propio.
 Pruebas reproducibles: `python3 firmware/tests/test_identity.py` desde la raíz.
 Pendiente en placa: nombre anunciado y leído por Android, guardado tras apagar,
 rechazos bajo actividad, trama BLE/TCP y continuidad de emparejamiento y OTA.
+
+
+## Cambio en 3.0.5: ID independiente del estado cargado/vacío
+
+Se elimina exclusivamente la condición PaletCargado del cambio de ID. No se
+necesita retirar el palet, desconectar ni forzar la fotocélula. No se suspenden
+sus eventos automáticos ni se modifica su estado. Si una transición genera
+una lectura o un evento pendiente, hay que esperar a completarlo antes del
+cambio. Se conservan AUTH, estabilización inicial, bloqueos por trabajo pendiente,
+OTA y corte. Esta modificación no cambia las condiciones de inicio OTA.
+La app 1.3.2 actualiza los mensajes para reflejar este comportamiento.

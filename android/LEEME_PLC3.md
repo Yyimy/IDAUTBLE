@@ -1,6 +1,6 @@
-# IDAUT BLE — adaptación al firmware PLC 3.0.4
+# IDAUT BLE — adaptación al firmware PLC 3.0.5
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.1-plc3** (versionCode 5).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.2-plc3** (versionCode 6).
 
 ## Abrir y compilar
 
@@ -87,11 +87,11 @@ La app reconoce también una autorización temporal de firmware anterior y lo in
 
 ## ID de la carretilla
 
-1. Actualizar el firmware a 3.0.4 y la app a 1.3.1. Abrir en Arduino IDE la carpeta
+1. Actualizar el firmware a 3.0.5 y la app a 1.3.2. Abrir en Arduino IDE la carpeta
    completa del sketch, incluyendo Types.h. Conservar el PIN propio antes de cargar.
 2. Conectar al PLC. En TERMINAL, justo debajo de BINARY COMMANDS, desplegar
    **PIN / ACCESO** y pulsar **Introducir PIN / Autorizar**.
-3. Con las horquillas vacías y sin lecturas, eventos u OTA pendientes, pulsar
+3. Sin lecturas, eventos u OTA pendientes (se admite un palet cargado), pulsar
    **Configurar ID** dentro de la sección **ID DE LA CARRETILLA**. La app consulta el ID real y muestra también HWID.
 4. Introducir, por ejemplo, `E 1234 BCD` y pulsar **Guardar ID**. Se admite de
    1 a 20 caracteres A-Z, 0-9, espacios interiores, guion y guion bajo. Se
@@ -125,3 +125,13 @@ se mantiene durante los cambios de pestaña y las recreaciones de pantalla con
 estado restaurado por Android. Plegar no bloquea el mantenimiento ni modifica
 la configuración. Los diálogos de PIN y edición de ID conservan su funcionamiento.
 No requiere actualizar el firmware si ya se utiliza 3.0.4.
+
+
+## Cambio de ID con palet cargado (app 1.3.2 / firmware 3.0.5)
+
+El ID puede modificarse con fotocélula a 1 o a 0, sin retirar el palet. Las
+transiciones de la fotocélula siguen generando sus eventos normales; si se
+está procesando una lectura o entregando eventos hay que esperar y repetir.
+El diálogo y ERR=ID_BUSY ya no solicitan vaciar las horquillas. Este cambio
+requiere firmware 3.0.5: actualizar solo la app no elimina el bloqueo anterior.
+Las reglas OTA se mantienen.
