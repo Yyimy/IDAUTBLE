@@ -1855,6 +1855,8 @@ private fun PlcBleTesterLandscape(
     onResetOtaUi: () -> Unit,
 ) {
     var showDevices by remember { mutableStateOf(false) } // oculto por defecto
+    var equipmentSectionExpanded by rememberSaveable { mutableStateOf(false) }
+    var pinSectionExpanded by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(connected) {
         if (connected) {
@@ -1918,39 +1920,6 @@ private fun PlcBleTesterLandscape(
             // =========================
             // TABS
             // =========================
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    maintenanceStatus,
-                    modifier = Modifier.weight(1f),
-                    fontSize = 12.sp,
-                    maxLines = 2,
-                )
-                OutlinedButton(onClick = onMaintenanceClick, enabled = connected) {
-                    Text("PIN / Acceso")
-                }
-                TextButton(onClick = onLockMaintenance, enabled = connected) {
-                    Text("Bloquear acceso")
-                }
-                TextButton(onClick = onForgetPin, enabled = connected) { Text("Olvidar PIN") }
-            }
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    "ID del PLC: ${equipmentId ?: "sin consultar"}",
-                    modifier = Modifier.weight(1f),
-                    fontSize = 12.sp,
-                )
-                OutlinedButton(onClick = onIdentityClick, enabled = connected) {
-                    Text("ID de la carretilla")
-                }
-            }
             TabRow(selectedTabIndex = selectedTab) {
                 Tab(
                     selected = selectedTab == 0,
@@ -2215,6 +2184,56 @@ private fun PlcBleTesterLandscape(
                                             CmdBtn("C") { onCmd('C') }
                                             CmdBtn("O") { onCmd('O') }
                                         }
+                                    }
+                                }
+
+                                CollapsibleSettingsSection(
+                                    title = "ID DE LA CARRETILLA",
+                                    summary = equipmentId ?: "ID sin consultar",
+                                    expanded = equipmentSectionExpanded,
+                                    onToggle = {
+                                        equipmentSectionExpanded = !equipmentSectionExpanded
+                                    },
+                                ) {
+                                    Text(
+                                        "Identificador utilizado en el nombre Bluetooth y en las tramas del PLC.",
+                                        fontSize = 12.sp,
+                                    )
+                                    OutlinedButton(
+                                        onClick = onIdentityClick,
+                                        enabled = connected,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text("Configurar ID", fontSize = 12.sp)
+                                    }
+                                }
+
+                                CollapsibleSettingsSection(
+                                    title = "PIN / ACCESO",
+                                    summary = maintenanceStatus,
+                                    expanded = pinSectionExpanded,
+                                    onToggle = { pinSectionExpanded = !pinSectionExpanded },
+                                ) {
+                                    OutlinedButton(
+                                        onClick = onMaintenanceClick,
+                                        enabled = connected,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text("Introducir PIN / Autorizar", fontSize = 12.sp)
+                                    }
+                                    OutlinedButton(
+                                        onClick = onLockMaintenance,
+                                        enabled = connected,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text("Bloquear acceso", fontSize = 12.sp)
+                                    }
+                                    TextButton(
+                                        onClick = onForgetPin,
+                                        enabled = connected,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text("Olvidar PIN en esta app", fontSize = 12.sp)
                                     }
                                 }
 
