@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.5
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.2-plc3** (versionCode 6).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.3-plc3** (versionCode 7).
 
 ## Abrir y compilar
 
@@ -87,7 +87,7 @@ La app reconoce también una autorización temporal de firmware anterior y lo in
 
 ## ID de la carretilla
 
-1. Actualizar el firmware a 3.0.5 y la app a 1.3.2. Abrir en Arduino IDE la carpeta
+1. Actualizar el firmware a 3.0.5 y la app a 1.3.3. Abrir en Arduino IDE la carpeta
    completa del sketch, incluyendo Types.h. Conservar el PIN propio antes de cargar.
 2. Conectar al PLC. En TERMINAL, justo debajo de BINARY COMMANDS, desplegar
    **PIN / ACCESO** y pulsar **Introducir PIN / Autorizar**.
@@ -135,3 +135,22 @@ está procesando una lectura o entregando eventos hay que esperar y repetir.
 El diálogo y ERR=ID_BUSY ya no solicitan vaciar las horquillas. Este cambio
 requiere firmware 3.0.5: actualizar solo la app no elimina el bloqueo anterior.
 Las reglas OTA se mantienen.
+
+
+## Resto del menú plegable (app 1.3.3)
+
+Todas las secciones del panel izquierdo de TERMINAL se pueden plegar y desplegar
+independientemente pulsando su cabecera, excepto BINARY COMMANDS, siempre visible:
+
+- CONEXIÓN BLUETOOTH: búsqueda, conexión/desconexión y lista de dispositivos.
+- ID DE LA CARRETILLA.
+- PIN / ACCESO.
+- HIGH MEASUREMENT.
+- TEXT COMMANDS - AIM Code ID / RTC.
+- MANUAL TERMINAL.
+
+Conexión Bluetooth empieza abierta y las demás plegadas. La app conserva cada
+estado al cambiar de pestaña y cuando Android restaura la pantalla. Las cabeceras
+resumen el estado de conexión/altura o el contenido de la sección. Plegar una
+sección no desconecta, no detiene la búsqueda ni cambia la autorización. El registro
+de comunicaciones permanece visible a la derecha. No requiere actualizar firmware.
