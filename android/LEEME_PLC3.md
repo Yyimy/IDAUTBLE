@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.4
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3-plc3** (versionCode 4).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.1-plc3** (versionCode 5).
 
 ## Abrir y compilar
 
@@ -87,11 +87,12 @@ La app reconoce también una autorización temporal de firmware anterior y lo in
 
 ## ID de la carretilla
 
-1. Actualizar el firmware a 3.0.4 y la app a 1.3. Abrir en Arduino IDE la carpeta
+1. Actualizar el firmware a 3.0.4 y la app a 1.3.1. Abrir en Arduino IDE la carpeta
    completa del sketch, incluyendo Types.h. Conservar el PIN propio antes de cargar.
-2. Conectar al PLC y autorizar mediante **PIN / Acceso**.
+2. Conectar al PLC. En TERMINAL, justo debajo de BINARY COMMANDS, desplegar
+   **PIN / ACCESO** y pulsar **Introducir PIN / Autorizar**.
 3. Con las horquillas vacías y sin lecturas, eventos u OTA pendientes, pulsar
-   **ID de la carretilla**. La app consulta el ID real y muestra también HWID.
+   **Configurar ID** dentro de la sección **ID DE LA CARRETILLA**. La app consulta el ID real y muestra también HWID.
 4. Introducir, por ejemplo, `E 1234 BCD` y pulsar **Guardar ID**. Se admite de
    1 a 20 caracteres A-Z, 0-9, espacios interiores, guion y guion bajo. Se
    normaliza a mayúsculas; no se permiten acentos ni separadores del protocolo.
@@ -106,3 +107,21 @@ El ID queda en el PLC y se utiliza en sus tramas. HWID y SSID OTA no cambian.
 Asigna IDs distintos a cada equipo y adapta cualquier receptor externo que
 espere 12 HEX: ahora el ID se lee hasta el primer ESC y puede tener 1–20
 caracteres. La app de mantenimiento no convierte ni confirma eventos del SGA.
+
+
+## Secciones plegables (app 1.3.1)
+
+En TERMINAL, inmediatamente después de BINARY COMMANDS, aparecen:
+
+1. **ID DE LA CARRETILLA**: ID actual y botón Configurar ID.
+2. **PIN / ACCESO**: estado de mantenimiento y controles Introducir PIN / Autorizar,
+   Bloquear acceso y Olvidar PIN en esta app.
+
+Se retiran los controles de la parte superior. Cada tarjeta se abre o cierra
+pulsando su cabecera o flecha, incluso sin conexión; los botones de operaciones
+siguen deshabilitados sin conexión. Ambas empiezan plegadas y son independientes.
+El ID y el estado del acceso siempre se muestran en las cabeceras. La elección
+se mantiene durante los cambios de pestaña y las recreaciones de pantalla con
+estado restaurado por Android. Plegar no bloquea el mantenimiento ni modifica
+la configuración. Los diálogos de PIN y edición de ID conservan su funcionamiento.
+No requiere actualizar el firmware si ya se utiliza 3.0.4.

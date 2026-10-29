@@ -3,7 +3,7 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 4. VersionName: `1.3-plc3`.
+- VersionCode: 5. VersionName: `1.3.1-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
@@ -51,3 +51,18 @@ del diálogo ni del controlador BLE; quedan para el terminal real.
 - Se mantienen los UUID FFE0/FFE1. Esta revisión requiere firmware 3.0.4 para configurar el ID (la autorización por sesión está disponible desde 3.0.2).
 
 Las dos pruebas añadidas comprueban que una autorización por sesión sigue vigente tras cien días simulados, se revoca con reset y conserva compatibilidad con TTL numérico; y que INFO se solicita una sola vez aunque se repita C, habilitándose otra consulta al iniciar una conexión nueva. El flujo real de Bloquear acceso y AUTH=OFF sigue pendiente de validación en el PLC.
+
+
+## Reorganización de interfaz (1.3.1)
+
+Los controles de ID y PIN se trasladan a dos tarjetas plegables independientes,
+justo debajo de BINARY COMMANDS en TERMINAL. Los valores de expansión utilizan
+rememberSaveable fuera del contenido condicional de pestañas. Las cabeceras
+muestran el ID y estado del acceso también plegadas; incluyen semántica de botón,
+estado plegado/desplegado y etiqueta de acción para accesibilidad.
+
+Comprobación: testDebugUnitTest y assembleDebug con el mismo entorno. Se conservan
+las 26 pruebas existentes; no se añaden pruebas de lógica para esta reorganización.
+Pendiente de revisión visual en tablet: posición, apertura independiente, desplazamiento,
+restauración al girar/cambiar pestaña, lectura de las cabeceras y los tres controles
+PIN. No se afirma validación instrumentada de la interfaz.

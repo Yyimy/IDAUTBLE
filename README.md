@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3-plc3, versionCode 4 |
+| App Android | [android/](android/) | 1.3.1-plc3, versionCode 5 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.4-rc1 |
 
 ## Trabajar sin ZIP
@@ -74,12 +74,17 @@ C verifica que el PLC responde. La app consulta INFO? una sola vez por conexión
 
 ## ID de la carretilla
 
-Con firmware 3.0.4 y app 1.3, conecta, autoriza con PIN / Acceso y pulsa
-**ID de la carretilla**. Admite 1–20 caracteres ASCII (A-Z, 0-9, espacios,
+Con firmware 3.0.4 y app 1.3.1, conecta y abre la pestaña TERMINAL. Debajo de
+BINARY COMMANDS, despliega **PIN / ACCESO** y pulsa **Introducir PIN / Autorizar**.
+Después despliega **ID DE LA CARRETILLA** y pulsa **Configurar ID**. Admite 1–20 caracteres ASCII (A-Z, 0-9, espacios,
 guion y guion bajo), por ejemplo `E 1234 BCD`. Se normaliza a mayúsculas y
 se guarda en el PLC. El nombre Bluetooth pasa a ser exactamente ese ID y las
 tramas nuevas utilizan el mismo valor. No se reinicia el PLC ni cambia el PIN.
 Desconecta y vuelve a buscar para ver el nuevo nombre anunciado.
+
+Ambas secciones se pliegan de forma independiente; sus cabeceras conservan el ID
+y el estado de acceso visibles. La elección se mantiene al cambiar de pestaña
+y durante recreaciones de pantalla compatibles con el estado guardado de Android.
 
 El cambio exige horquillas vacías y ausencia de lecturas, eventos pendientes u
 OTA. El identificador técnico de fábrica sigue disponible como HWID y el SSID
