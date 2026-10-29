@@ -1,7 +1,14 @@
 #pragma once
 #include <Arduino.h>
 
-enum LedMode : uint8_t { LED_OK = 0, LED_ERROR, LED_LOCAL_BLE, LED_ISOLATED };
+enum LedMode : uint8_t {
+  LED_READY = 0,
+  LED_DISCONNECTED,
+  LED_BAT_LOW,
+  LED_BAT_CRITICAL,
+  LED_ERROR,
+  LED_OTA
+};
 
 enum BleCmdType : uint8_t {
   BLECMD_NONE = 0,

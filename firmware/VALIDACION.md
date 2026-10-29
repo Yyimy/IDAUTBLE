@@ -1,4 +1,4 @@
-# Validación — PLC Scanner 3.0.2-rc1
+# Validación — PLC Scanner 3.0.3-rc1
 
 Fecha: 29 de octubre de 2026.
 
@@ -11,11 +11,13 @@ Fecha: 29 de octubre de 2026.
 | Objetivo | ESP32-S3 Dev Module, USB CDC habilitado, Minimal SPIFFS con OTA |
 | Arduino-ESP32 | 3.0.7 |
 | ADS1X15 / BusIO | 2.5.0 / 1.16.2 |
-| Tamaño de programa | 1.610.557 bytes, 81 % de 1.966.080 bytes de partición |
-| Datos globales estáticos | 71.052 bytes, 21 % de 327.680 bytes |
-| Pruebas de regresión en host | 97 aserciones superadas + 5 comprobaciones de compilación del PIN |
+| Tamaño de programa | 1.611.013 bytes, 81 % de 1.966.080 bytes de partición |
+| Datos globales estáticos | 71.060 bytes, 21 % de 327.680 bytes |
+| Pruebas de regresión en host | 97 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED |
 
 La memoria libre indicada por el compilador no mide el consumo dinámico de BLE/WiFi, colas y tareas durante el funcionamiento. Debe medirse en placa en una prueba prolongada.
+
+Las pruebas del LED ejecutan las funciones reales con reloj y salidas simulados: seis patrones, duración de pulsos y pausas, prioridad de fallos/batería/OTA/conexión, ambos canales y retirada de batería, antigüedad y validez de medidas, umbrales 10/20%, confirmación de 3 s, recuperación a 13/23% y desbordamiento de millis(). Ejecutar `python3 firmware/tests/test_led.py` desde la raíz del repositorio. La visibilidad y los tiempos efectivos con I2C deben comprobarse en placa.
 
 Las pruebas en host extraen las funciones del INO entregado y las ejecutan con reloj, UART, transporte, GPIO y acceso RTC simulados. No se limitan a buscar textos ni a reproducir la implementación en Python. Cubren:
 
@@ -39,6 +41,7 @@ Para repetirlas: Python 3 y g++ en Linux/macOS/WSL; ejecutar `python3 tests/test
 | Prueba | Criterio de aceptación |
 |---|---|
 | Arranque y USB/UART0 | La consola USB no se mezcla con PON; lector a 9600, RX44/TX43 |
+| LED y prioridades | Verificar fijo, lento, doble/triple destello, rápido y OTA; batería oculta conexión/OTA, fallo oculta batería, cambio de batería recupera patrón tras confirmación |
 | Expansor de salidas | LED O0 y relé O1 coinciden con el cableado y la polaridad del adjunto |
 | Fotocélula | LOW/HIGH corresponden a vacío/cargado y 250 ms filtran sin perder maniobras válidas |
 | Carga/descarga con lector lento | Se capturan transiciones mientras otra lectura espera; revisar si retrasar una segunda lectura sigue siendo válido para la operativa |
