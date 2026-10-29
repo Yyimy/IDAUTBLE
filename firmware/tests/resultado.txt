@@ -1,0 +1,2 @@
+PASS: 97 assertions against extracted production functions
+PASS: 5 compilation checks for configurable PIN (including leading zeros and invalid settings)

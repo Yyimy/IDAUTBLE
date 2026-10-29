@@ -1,0 +1,28 @@
+# Local configuration and secrets
+**/local.properties
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pem
+# Generated outputs and IDE caches
+**/build/
+**/.gradle/
+**/.kotlin/
+**/.idea/
+*.iml
+**/.cxx/
+**/.externalNativeBuild/
+**/__pycache__/
+*.pyc
+*.apk
+*.aab
+*.elf
+*.bin
+*.map
+firmware/tests/generated_logic.cpp
+firmware/tests/logic_tests
+.DS_Store
+Thumbs.db
