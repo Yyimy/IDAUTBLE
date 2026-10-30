@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.6
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.10-plc3** (versionCode 14).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.11-plc3** (versionCode 15).
 
 ## Abrir y compilar
 
@@ -225,8 +225,8 @@ actualizar el firmware.
 
 ## Device status (1.3.9)
 
-TERMINAL incluye DEVICE STATUS debajo de DEVICE ID, inicialmente plegado.
-La consulta STATUS? se envía al completar la conexión y al pulsar Refresh;
+TERMINAL incluye DEVICE STATUS entre READINGS y PIN / ACCESS, inicialmente plegado.
+La consulta STATUS? se envía al conectar, cada 30 s y después de una lectura, además de Refresh;
 no necesita PIN de mantenimiento. Se muestran el modo/motivo del LED, firmware,
 ID, baterías individuales, enlaces, fotocélula, RTC, salidas y corte.
 El porcentaje de batería es una estimación por tensión. Un slot ausente no se
@@ -234,7 +234,7 @@ presenta como batería descargada y las medidas inválidas/antiguas no muestran
 valores de caché como actuales.
 
 Cada respuesta es una instantánea con antigüedad visible y aviso después de 60 s.
-No se consulta continuamente. El botón espera a que BLE esté preparado; una
+La consulta automática se pausa en segundo plano, desconectado y durante OTA. El botón espera a que BLE esté preparado; una
 consulta sin respuesta termina a los 6 s con una explicación. Firmware anterior
 a 3.0.6 mantiene las demás funciones. Desconectar borra datos y peticiones; una
 respuesta malformada conserva la instantánea anterior con aviso.
@@ -250,8 +250,7 @@ Invalid reading y Old measurement aparecen sin porcentaje ni nivel útil.
 Se destaca con un borde la batería presente de menor nivel (ambas en empate).
 
 Los datos caducados se ven en gris, con Out of date/Last snapshot; el parpadeo
-se detiene. También se pausa al plegar o abandonar la pestaña. La consulta sigue
-siendo manual y al conectar/cambiar ID, como antes. No cambia el protocolo ni
+se detiene. También se pausa al plegar o abandonar la pestaña. La consulta automática funciona cada 30 s y después de lecturas, además de la manual y al conectar/cambiar ID. No cambia el protocolo ni
 requiere actualizar el firmware 3.0.6. Tema claro/oscuro y fuente ampliada están
 contemplados; comprobar la presentación en el terminal real.
 
@@ -284,3 +283,28 @@ Tras C se solicitan INFO? y STATUS? una sola vez. El ID de STATUS se muestra en
 DEVICE ID sin consulta ID? adicional. Al abrir Configure ID se sigue consultando
 ID? para obtener la identidad completa (HWID y nombre Bluetooth), tras autorizar
 como antes. El resto del diagnóstico y el panel compacto/60 s se conservan.
+
+
+## Actualización automática de Device status (app 1.3.11)
+
+Orden en TERMINAL: BINARY COMMANDS → READINGS → DEVICE STATUS → PIN / ACCESS → DEVICE ID.
+Las secciones conservan su plegado. STATUS se actualiza también con el panel plegado.
+
+La app consulta STATUS? al conectar y cada 30 s desde el último intento, solo en
+primer plano, con BLE preparado y fuera de OTA. Tras enviar L/B/A/P/D/I, espera
+la siguiente trama V2 válida y solicita STATUS?; si recibió un STATUS válido hace
+menos de 5 s, omite esa consulta adicional. Las lecturas automáticas sin petición
+no disparan consultas extra y STATUS no reemplaza los códigos de READINGS.
+
+Se evita duplicar solicitudes pendientes y se espera a que la cola BLE esté libre.
+Una lectura sin respuesta deja de bloquear el sondeo a los 8 s; una consulta STATUS
+sin respuesta termina a los 6 s y el siguiente intento periódico respeta los 30 s.
+V2 no incluye identificador de transacción: si coincide un evento automático con
+una lectura solicitada, la siguiente trama válida da por terminada esa espera.
+Al volver del segundo plano se consulta si corresponde por antigüedad; no se
+acumulan consultas durante la pausa. Desconectar reinicia toda la planificación.
+OTA se mantiene pausada hasta reconectar, confirmar estado inactivo o recibir un
+error terminal; BUSY/BAD_PARAMS no implican fin de OTA. Reset UI no elimina esa pausa.
+
+Refresh permanece disponible y los datos pasan a antiguos después de 60 s sin
+respuesta válida. Se conserva el firmware 3.0.6-rc1 y el protocolo V2.

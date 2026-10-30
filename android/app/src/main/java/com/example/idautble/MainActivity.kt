@@ -298,7 +298,7 @@ class MainActivity : ComponentActivity() {
     private val streamDecoder = PlcStreamDecoder()
     private val maintenanceSession = MaintenanceSession { SystemClock.elapsedRealtime() }
     private lateinit var credentialStore: PlcCredentialStore
-    private var session: String? = null
+    private var sessionPin: String? = null
     private val connectionHandshake = ConnectionHandshake()
     private var blockedByUser = false
     private var lockAwaiting = false
@@ -324,6 +324,16 @@ class MainActivity : ComponentActivity() {
     private val uiDeviceStatusMessage = mutableStateOf("")
     private val uiDeviceStatusReady = mutableStateOf(false)
     private var deviceStatusRequest = 0L
+    private val statusRefresh = StatusRefreshPolicy()
+    private var appInForeground = false
+    private val statusRefreshTick =
+        object : Runnable {
+            override fun run() {
+                if (!appInForeground) return
+                requestDeviceStatus(automatic = true)
+                mainHandler.postDelayed(this, 1000)
+            }
+        }
 
     private val uiIdentityDialog = mutableStateOf(false)
     private val uiIdentity = mutableStateOf<EquipmentIdentity?>(null)
@@ -789,6 +799,7 @@ class MainActivity : ComponentActivity() {
         maintenanceSession.reset()
         connectionHandshake.reset()
         deviceStatusRequest++
+        statusRefresh.reset()
         uiDeviceStatus.value = null
         uiDeviceStatusReceived.value = null
         uiDeviceStatusBusy.value = false
@@ -1002,8 +1013,12 @@ class MainActivity : ComponentActivity() {
                 failWrite("Android rejected the send request; try again")
                 return
             }
+            if (isReadingCommand(packet.data)) {
+                statusRefresh.readSent(SystemClock.elapsedRealtime())
+            }
             val text = packet.data.toString(Charsets.UTF_8).trim()
             if (text == "OTA=START" || text.startsWith("OTA=URL=")) {
+                statusRefresh.otaStarted()
                 uiOtaPct.value = null
                 uiOtaErr.value = null
                 uiOtaDone.value = false
@@ -1029,6 +1044,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun failWrite(reason: String) {
+        statusRefresh.cancelReading()
         if (activeReliableWrite && hasConnectPermission())
             try {
                 gatt?.abortReliableWrite()
@@ -1071,8 +1087,27 @@ class MainActivity : ComponentActivity() {
         mainHandler.postDelayed({ if (gatt === g) pumpWrites() }, 80)
     }
 
-    private fun requestDeviceStatus() {
-        if (!bleChannelReady || uiDeviceStatusBusy.value) return
+    private fun requestDeviceStatus(automatic: Boolean = false) {
+        if (
+            !appInForeground ||
+                !bleChannelReady ||
+                !deviceConnected ||
+                !hasConnectPermission() ||
+                statusRefresh.otaActive ||
+                uiDeviceStatusBusy.value
+        )
+            return
+        val now = SystemClock.elapsedRealtime()
+        if (
+            automatic &&
+                (activeWrite != null ||
+                    writeQueue.isNotEmpty() ||
+                    !statusRefresh.shouldRefresh(now))
+        )
+            return
+        // A manual refresh also waits for an outstanding reading to finish.
+        if (statusRefresh.readPending(now)) return
+        statusRefresh.requested(now)
         val request = ++deviceStatusRequest
         uiDeviceStatusBusy.value = true
         uiDeviceStatusMessage.value = ""
@@ -1091,6 +1126,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleProtocolControl(message: PlcMessage) {
         val text = message.text
+        statusRefresh.otaMessage(text)
         if (message.acknowledged && text.startsWith("STATUS=")) {
             val status = parseDeviceStatus(text)
             uiDeviceStatusBusy.value = false
@@ -1100,6 +1136,7 @@ class MainActivity : ComponentActivity() {
                 uiEquipmentId.value = status.id
                 if (uiIdentity.value?.id != status.id) uiIdentity.value = null
                 uiDeviceStatusReceived.value = SystemClock.elapsedRealtime()
+                statusRefresh.received(SystemClock.elapsedRealtime())
                 uiDeviceStatusMessage.value = ""
             } else {
                 uiDeviceStatusMessage.value =
@@ -1358,7 +1395,11 @@ class MainActivity : ComponentActivity() {
                 message.bytes.size,
             )
             if (message.isFrame) {
-                uiReadings.value = uiReadings.value.receive(message, SystemClock.elapsedRealtime())
+                val now = SystemClock.elapsedRealtime()
+                uiReadings.value = uiReadings.value.receive(message, now)
+                if (!uiReadings.value.invalidFrame && statusRefresh.readReceived(now)) {
+                    mainHandler.postDelayed({ requestDeviceStatus(automatic = true) }, 150)
+                }
                 continue
             }
             val first = message.bytes.firstOrNull()
@@ -1882,6 +1923,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        appInForeground = true
+        mainHandler.removeCallbacks(statusRefreshTick)
+        mainHandler.post(statusRefreshTick)
+    }
+
+    override fun onStop() {
+        appInForeground = false
+        mainHandler.removeCallbacks(statusRefreshTick)
+        super.onStop()
+    }
+
     override fun onDestroy() {
         stopScan()
         disconnectGatt(silentLog = true)
@@ -2299,6 +2353,8 @@ private fun PlcBleTesterLandscape(
                                     }
                                 }
 
+                                ReadingResultsSection(readings)
+
                                 DeviceStatusSection(
                                     status = deviceStatus,
                                     receivedMs = deviceStatusReceived,
@@ -2307,8 +2363,6 @@ private fun PlcBleTesterLandscape(
                                     message = deviceStatusMessage,
                                     onRefresh = onStatusRefresh,
                                 )
-
-                                ReadingResultsSection(readings)
 
                                 CollapsibleSettingsSection(
                                     title = "PIN / ACCESS",
@@ -2365,10 +2419,6 @@ private fun PlcBleTesterLandscape(
                                         modifier = Modifier.fillMaxWidth(),
                                     )
                                 }
-
-
-
-                                
 
                                 CollapsibleSettingsSection(
                                     title = "HEIGHT MEASUREMENT",
