@@ -2299,8 +2299,6 @@ private fun PlcBleTesterLandscape(
                                     }
                                 }
 
-                                ReadingResultsSection(readings)
-
                                 DeviceStatusSection(
                                     status = deviceStatus,
                                     receivedMs = deviceStatusReceived,
@@ -2309,6 +2307,8 @@ private fun PlcBleTesterLandscape(
                                     message = deviceStatusMessage,
                                     onRefresh = onStatusRefresh,
                                 )
+
+                                ReadingResultsSection(readings)
 
                                 CollapsibleSettingsSection(
                                     title = "PIN / ACCESS",
