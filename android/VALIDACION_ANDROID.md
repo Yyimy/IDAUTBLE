@@ -3,11 +3,11 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lintDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 14. VersionName: `1.3.10-plc3`.
+- VersionCode: 15. VersionName: `1.3.11-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
-- 47 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
+- 57 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
 
 ## Pruebas ejecutadas
 
@@ -19,6 +19,7 @@ Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lin
 | DeviceStatusTest | 8 | 0 |
 | DeviceStatusVisualsTest | 5 | 0 |
 | PlcReadingsTest | 8 | 0 |
+| StatusRefreshPolicyTest | 10 | 0 |
 | ExampleUnitTest (original) | 1 | 0 |
 
 Los casos de protocolo prueban todos los puntos de corte de la confirmación de conexión y de una trama V2, tamaños de fragmento 1/20/182 bytes, varios mensajes concatenados, UTF-8 partido, límites del buffer, resincronización, comandos protegidos/consultas, PIN con ceros iniciales, caducidad de sesión y redacción de secretos en el log. Las pruebas de red comprueban conservación de contraseña enmascarada, cambio explícito, contraseña vacía, valores con `=`, estados LINK/TCP independientes y recepción de NET/NETSTAT en una misma ráfaga.
@@ -278,3 +279,31 @@ Resultado final 1.3.10: `testDebugUnitTest assembleDebug lintDebug` correctos.
 Lint: 0 errores, 0 MissingPermission y ningún aviso en los archivos nuevos;
 se mantienen 31 advertencias y 3 avisos informativos de la base. `git diff --check`
 correcto. No requiere actualizar el firmware 3.0.6.
+
+
+## Actualización automática y orden (app 1.3.11)
+
+DEVICE STATUS se sitúa entre READINGS y PIN / ACCESS. La política JVM añade
+10 pruebas: intervalo de 30 s desde intento, espera de trama tras L/B/A/P/D/I,
+omisión con STATUS válido de menos de 5 s, eventos espontáneos sin consulta extra,
+expiración de lectura pendiente a 8 s, diferimiento con transporte ocupado, reset
+de conexión, identificación estricta de los seis comandos y pausa/salida de OTA
+(incluyendo BAD_PARAMS, error terminal, estado inactivo, rechazo de inicio y reboot).
+
+La integración Activity limita consultas al primer plano, BLE listo, sin otra
+petición STATUS pendiente y fuera de OTA; usa la cola de escritura existente.
+Se conserva el timeout STATUS de 6 s y la caducidad visual de 60 s.
+También se restaura la declaración sessionPin: main había renombrado solo su
+declaración a session, dejando ocho usos sin resolver y sin poder compilar.
+
+Pendiente en PLC/tablet reales: ciclos de 30 s con panel plegado, lecturas
+consecutivas, suspensión/reanudación, desconexión/cambio de carretilla, cola ocupada,
+OTA correcta/fallida/abortada y ausencia de consultas adicionales por eventos
+automáticos. Las pruebas JVM no ejecutan el ciclo de vida Android ni la radio BLE.
+No hay cambios de firmware ni confirmación automática de eventos de negocio.
+
+Resultado final 1.3.11: `testDebugUnitTest assembleDebug lintDebug` correctos
+(BUILD SUCCESSFUL, 3 min 56 s). APK versionCode 15 / 1.3.11-plc3 generado.
+57 pruebas JVM, 0 fallos/errores. Lint: 0 errores, 0 MissingPermission,
+30 advertencias y 3 avisos informativos; ningún aviso en StatusRefreshPolicy.
+`git diff --check` correcto. Sin ejecución en dispositivo físico.

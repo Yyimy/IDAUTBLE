@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.10-plc3, versionCode 14 |
+| App Android | [android/](android/) | 1.3.11-plc3, versionCode 15 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.6-rc1 |
 
 ## Trabajar sin ZIP
@@ -70,7 +70,7 @@ Tras emparejar, la app permite consultar datos. PIN / Acceso autoriza el manteni
 
 La contraseña WiFi del AP OTA es independiente del PIN BLE; el firmware la muestra localmente por USB con el comando `info`.
 
-C verifica que el PLC responde. La app consulta INFO? y STATUS? una sola vez por conexión; toma el ID de STATUS y evita el ID? automático. ID? queda disponible al abrir Configure ID, donde se consulta también HWID y el nombre Bluetooth real. Su respuesta contiene FW (versión), PROTO (trama V2), ACKMODE (confirmación de eventos) y HEARTBEAT (vigilancia TCP).
+C verifica que el PLC responde. La app consulta INFO? una sola vez por conexión y STATUS? al conectar, periódicamente y tras lecturas; toma el ID de STATUS y evita el ID? automático. ID? queda disponible al abrir Configure ID, donde se consulta también HWID y el nombre Bluetooth real. Su respuesta contiene FW (versión), PROTO (trama V2), ACKMODE (confirmación de eventos) y HEARTBEAT (vigilancia TCP).
 
 ## ID de la carretilla
 
@@ -140,8 +140,8 @@ sustituye la comprobación en Android al revocar permisos desde Ajustes.
 
 ## Device status (app 1.3.9 / firmware 3.0.6)
 
-En TERMINAL, después de DEVICE ID, **DEVICE STATUS** es una sección plegable.
-Se consulta una vez al completar el handshake BLE y con **Refresh**;
+En TERMINAL, entre READINGS y PIN / ACCESS, **DEVICE STATUS** es una sección plegable.
+Se consulta al completar el handshake BLE, cada 30 s y tras una lectura, además de **Refresh**;
 no requiere autorizar mantenimiento. Muestra firmware e ID, modo/motivo del LED,
 ambas baterías (tensión, porcentaje estimado, ausencia o medida inválida/antigua),
 la batería presente de menor nivel, WiFi habilitado, enlace TCP, notificaciones BLE,
@@ -152,7 +152,7 @@ muestra ADC se refiere al momento de la consulta. Al desconectar se borra todo
 el estado para no mostrar datos de otra carretilla. Tras 6 s sin respuesta se
 avisa de conexión o firmware incompatible; los demás comandos siguen disponibles.
 Las respuestas incompletas, malformadas o de esquema desconocido no sustituyen
-la última instantánea válida. No hay sondeo continuo ni ACK automático de eventos.
+la última instantánea válida. El sondeo automático se limita al primer plano, con BLE listo y fuera de OTA; no hay ACK automático de eventos.
 
 Actualizar **ambos componentes** para esta función. El comando nuevo `STATUS?`
 es de solo lectura y devuelve `<ACK>STATUS=1;...\r\n`; no modifica V2, DIAG?,
@@ -218,3 +218,28 @@ La conexión solicita solo INFO? y STATUS? una vez. El ID de STATUS actualiza la
 cabecera de DEVICE ID. Configure ID mantiene su consulta explícita ID? para
 obtener HWID/nombre Bluetooth, sin inventar esos datos a partir de STATUS.
 El panel compacto y sus 60 s de frescura se conservan. Solo hay que actualizar la app.
+
+
+## Actualización automática de Device status (app 1.3.11)
+
+Orden en TERMINAL: BINARY COMMANDS → READINGS → DEVICE STATUS → PIN / ACCESS → DEVICE ID.
+Las secciones conservan su plegado. STATUS se actualiza también con el panel plegado.
+
+La app consulta STATUS? al conectar y cada 30 s desde el último intento, solo en
+primer plano, con BLE preparado y fuera de OTA. Tras enviar L/B/A/P/D/I, espera
+la siguiente trama V2 válida y solicita STATUS?; si recibió un STATUS válido hace
+menos de 5 s, omite esa consulta adicional. Las lecturas automáticas sin petición
+no disparan consultas extra y STATUS no reemplaza los códigos de READINGS.
+
+Se evita duplicar solicitudes pendientes y se espera a que la cola BLE esté libre.
+Una lectura sin respuesta deja de bloquear el sondeo a los 8 s; una consulta STATUS
+sin respuesta termina a los 6 s y el siguiente intento periódico respeta los 30 s.
+V2 no incluye identificador de transacción: si coincide un evento automático con
+una lectura solicitada, la siguiente trama válida da por terminada esa espera.
+Al volver del segundo plano se consulta si corresponde por antigüedad; no se
+acumulan consultas durante la pausa. Desconectar reinicia toda la planificación.
+OTA se mantiene pausada hasta reconectar, confirmar estado inactivo o recibir un
+error terminal; BUSY/BAD_PARAMS no implican fin de OTA. Reset UI no elimina esa pausa.
+
+Refresh permanece disponible y los datos pasan a antiguos después de 60 s sin
+respuesta válida. Se conserva el firmware 3.0.6-rc1 y el protocolo V2.
