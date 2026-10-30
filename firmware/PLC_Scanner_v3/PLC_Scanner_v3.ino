@@ -86,6 +86,7 @@ static const unsigned long STARTUP_WARMUP_MS =
 // ============================================================================
 
 static LedMode gLedMode = LED_DISCONNECTED;
+static const char *gLedReason = "BLE_REQUIRED";
 static uint32_t gLedT0 = 0;
 static bool gLedOutOn = false;
 // 0: normal, 1: baja (<=20%), 2: muy baja (<=10%).
@@ -468,7 +469,7 @@ static std::atomic<bool> gBleSecure{false};
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.5-rc1"
+#define FIRMWARE_VERSION "3.0.6-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static BLE2902 *gCccd = nullptr;
@@ -1109,7 +1110,8 @@ static void tcpPollRx() {
         if (!strcmp(line, "PONG") || !strncmp(line, "PONG;", 5))
           gLastTcpRxMs = millis();
         else if (!strncmp(line, "ACK=", 4) || !strcmp(line, "INFO?") ||
-                 !strcmp(line, "DIAG?") || !strcmp(line, "ID?")) {
+                 !strcmp(line, "DIAG?") || !strcmp(line, "STATUS?") ||
+                 !strcmp(line, "ID?")) {
           BleCmd cmd = {};
           cmd.type = BLECMD_TEXT;
           cmd.source = 1;
@@ -2006,7 +2008,7 @@ class MyCallbacks : public BLECharacteristicCallbacks {
     } else if (rxTrim.startsWith("AUTH=") || rxTrim.startsWith("ACK=") ||
                rxTrim.startsWith("ACKMODE=") ||
                rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" ||
-               rxTrim == "DIAG?" || rxTrim == "ID?" ||
+               rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "ID?" ||
                rxTrim.startsWith("ID=")) {
       cmd.type = BLECMD_TEXT;
       strlcpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload));
@@ -2486,17 +2488,30 @@ static inline void updateLedMode() {
       now - gBatValidMs[1] > LED_BAT_MAX_AGE_MS ||
       (gBatV1 <= V_BAT_ABSENT && gBatV2 <= V_BAT_ABSENT)) {
     gLedMode = LED_ERROR;
+    gLedReason = gCutRequested ? "POWER_CUT"
+                 : !gPeripheralOk[0] ? "RTC_INVALID"
+                 : !gPeripheralOk[2] ? "OUTPUT_FAULT"
+                 : !gBatValid[0] ? "B1_INVALID"
+                 : !gBatValid[1] ? "B2_INVALID"
+                 : now - gBatValidMs[0] > LED_BAT_MAX_AGE_MS ? "B1_STALE"
+                 : now - gBatValidMs[1] > LED_BAT_MAX_AGE_MS ? "B2_STALE"
+                 : "NO_BATTERY";
   } else if (gLedBatteryBand == 2) {
     gLedMode = LED_BAT_CRITICAL;
+    gLedReason = "BATTERY_CRITICAL";
   } else if (gLedBatteryBand == 1) {
     gLedMode = LED_BAT_LOW;
+    gLedReason = "BATTERY_LOW";
   } else if (gOtaTaskHandle || gOtaState != OTA_IDLE) {
     gLedMode = LED_OTA;
+    gLedReason = "OTA_ACTIVE";
   } else {
     const bool ready = gWifiEnabled
                            ? (gTcpConnected && gTcpClient.connected())
                            : bleCanNotify();
     gLedMode = ready ? LED_READY : LED_DISCONNECTED;
+    gLedReason = ready ? "LINK_READY"
+                       : (gWifiEnabled ? "TCP_REQUIRED" : "BLE_REQUIRED");
   }
 }
 
@@ -3105,6 +3120,57 @@ static void runtimeLoad() {
   Serial.printf("\nPLC Scanner %s\nPIN mantenimiento: %s\nOTA AP clave: %s\n",
                 FIRMWARE_VERSION, gMaintenancePin.c_str(), gOtaApPass.c_str());
 }
+// STATUS is an independent read-only snapshot; V2 and DIAG remain unchanged.
+static String batteryStatus(uint8_t channel, uint32_t now) {
+  if (!gBatValid[channel]) return "INVALID";
+  if (now - gBatValidMs[channel] > LED_BAT_MAX_AGE_MS) return "STALE";
+  const float v = channel == 0 ? gBatV1 : gBatV2;
+  return v <= V_BAT_ABSENT ? "ABSENT" : "PRESENT";
+}
+
+static void sendDeviceStatus() {
+  updateLedMode();  // Same decision as the physical LED, including hysteresis.
+  const uint32_t now = millis();
+  const char *modes[] = {"READY", "DISCONNECTED", "BAT_LOW",
+                         "BAT_CRITICAL", "ERROR", "OTA"};
+  String d;
+  d.reserve(460);
+  d = "STATUS=1;FW=" FIRMWARE_VERSION ";ID=" + gId;
+  d += ";LED=" + String(modes[gLedMode]) + ";WHY=" + gLedReason;
+  for (uint8_t i = 0; i < 2; ++i) {
+    const String prefix = ";B" + String(i + 1);
+    const String state = batteryStatus(i, now);
+    d += prefix + "=" + state;
+    // Invalid/stale caches must never be presented as live measurements.
+    d += prefix + "V=" + (state == "PRESENT" || state == "ABSENT"
+                             ? String(i == 0 ? gBatV1 : gBatV2, 2) : "-");
+    d += prefix + "P=" +
+         (state == "PRESENT" ? (i == 0 ? gNivelBat1 : gNivelBat2) : "-");
+    d += prefix + "AGE=" + (gBatValid[i] ? String(now - gBatValidMs[i]) : "-");
+  }
+  const bool p1 = batteryStatus(0, now) == "PRESENT";
+  const bool p2 = batteryStatus(1, now) == "PRESENT";
+  String lowest = "NONE";
+  if (p1 && p2) {
+    lowest = gNivelBat1 == gNivelBat2
+                 ? "BOTH"
+                 : (gNivelBat1.toInt() < gNivelBat2.toInt() ? "B1" : "B2");
+  } else if (p1 || p2) {
+    lowest = p1 ? "B1" : "B2";
+  }
+  d += ";LOWEST=" + lowest;
+  d += ";WIFI=" + String(gWifiEnabled ? 1 : 0);
+  d += ";TCP=" + String(gTcpConnected && gTcpClient.connected() ? 1 : 0);
+  d += ";BLE=" + String(bleCanNotify() ? 1 : 0);
+  d += ";PHOTO=" + (gFotoLista ? String(gFotoEstado) : String("-"));
+  d += ";RTC=" + String(gPeripheralOk[0] ? "OK" : "FAIL");
+  d += ";OUT=" + String(gPeripheralOk[2] ? "OK" : "FAIL");
+  d += ";CUT=" +
+       String(gCutConfirmed ? "CONFIRMED" : (gCutRequested ? "PENDING" : "NO"));
+  d += ";REASON=" + String(gCutReason);
+  replyLine(true, d);
+}
+
 static void handleTextCommand(const BleCmd &cmd) {
   String s(cmd.payload);
   if (s == "ID?" || s.startsWith("ID=")) {
@@ -3125,6 +3191,10 @@ static void handleTextCommand(const BleCmd &cmd) {
     replyLine(true, "FW=" FIRMWARE_VERSION ";PROTO=V2;ACKMODE=" +
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0));
+    return;
+  }
+  if (s == "STATUS?") {
+    sendDeviceStatus();
     return;
   }
   if (s == "DIAG?") {

@@ -4,8 +4,8 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.6-plc3, versionCode 10 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.5-rc1 |
+| App Android | [android/](android/) | 1.3.7-plc3, versionCode 11 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.6-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -105,8 +105,8 @@ y [app](android/LEEME_PLC3.md#id-de-la-carretilla).
 
 ## Validación de esta base
 
-- Android: compilación y generación de APK debug correctas; 26 pruebas unitarias superadas.
-- Firmware: compilación correcta con ESP32 3.0.7; 97 comprobaciones de lógica, 5 comprobaciones de validación del PIN y 48.041 comprobaciones del LED y 65 comprobaciones de identidad superadas.
+- Android: compilación y generación de APK debug correctas; 34 pruebas unitarias superadas.
+- Firmware: compilación correcta con ESP32 3.0.7; 97 comprobaciones de lógica, 5 comprobaciones de validación del PIN y 48.041 comprobaciones del LED y 65 comprobaciones de identidad y 30 de diagnóstico STATUS superadas.
 - Las pruebas de emparejamiento, electrónica, relé, baterías y OTA en el equipo real siguen pendientes.
 
 Informes: [Android](android/VALIDACION_ANDROID.md) y [firmware](firmware/VALIDACION.md).
@@ -137,3 +137,25 @@ Prueba adicional de los helpers reales (Python 3, JDK 17 y caché de Gradle tras
 compilar): `python3 android/tests/test_gatt_permissions.py`. Se pueden indicar
 JAVA_HOME y GRADLE_USER_HOME iguales a los usados para Gradle. Esta prueba no
 sustituye la comprobación en Android al revocar permisos desde Ajustes.
+
+## Device status (app 1.3.7 / firmware 3.0.6)
+
+En TERMINAL, después de DEVICE ID, **DEVICE STATUS** es una sección plegable.
+Se consulta una vez al completar el handshake BLE y con **Refresh status**;
+no requiere autorizar mantenimiento. Muestra firmware e ID, modo/motivo del LED,
+ambas baterías (tensión, porcentaje estimado, ausencia o medida inválida/antigua),
+la batería presente de menor nivel, WiFi habilitado, enlace TCP, notificaciones BLE,
+fotocélula estabilizada, RTC, expansor de salidas y corte solicitado/confirmado.
+
+Es una instantánea: muestra su antigüedad y avisa pasados 15 s. La edad de cada
+muestra ADC se refiere al momento de la consulta. Al desconectar se borra todo
+el estado para no mostrar datos de otra carretilla. Tras 6 s sin respuesta se
+avisa de conexión o firmware incompatible; los demás comandos siguen disponibles.
+Las respuestas incompletas, malformadas o de esquema desconocido no sustituyen
+la última instantánea válida. No hay sondeo continuo ni ACK automático de eventos.
+
+Actualizar **ambos componentes** para esta función. El comando nuevo `STATUS?`
+es de solo lectura y devuelve `<ACK>STATUS=1;...\r\n`; no modifica V2, DIAG?,
+los patrones del LED, la política de corte ni la configuración persistida.
+Detalles del esquema: [firmware/LEEME.md](firmware/LEEME.md).
+Prueba adicional: `python3 firmware/tests/test_status.py`.

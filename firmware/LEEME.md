@@ -1,4 +1,4 @@
-# PLC Scanner 3.0.5-rc1 — código completo corregido
+# PLC Scanner 3.0.6-rc1 — código completo corregido
 
 Versión candidata para validación en banco. Derivada del archivo adjunto del 29/10/2026. Conserva los comandos binarios de cuatro bytes y la trama V2, con las diferencias de integración indicadas abajo. No se ha probado físicamente en la placa.
 
@@ -237,3 +237,42 @@ una lectura o un evento pendiente, hay que esperar a completarlo antes del
 cambio. Se conservan AUTH, estabilización inicial, bloqueos por trabajo pendiente,
 OTA y corte. Esta modificación no cambia las condiciones de inicio OTA.
 La app 1.3.2 actualiza los mensajes para reflejar este comportamiento.
+
+## Instantánea STATUS? (3.0.6)
+
+Consulta de solo lectura, aceptada por BLE y TCP sin AUTH de mantenimiento.
+La respuesta empieza por ACK y termina con CRLF. El identificador de esquema
+`STATUS=1` es independiente de la versión de firmware.
+
+Ejemplo (una batería y fotocélula estabilizada a 1):
+
+```text
+<ACK>STATUS=1;FW=3.0.6-rc1;ID=TRUCK-1;LED=READY;WHY=LINK_READY;B1=PRESENT;B1V=18.00;B1P=66;B1AGE=0;B2=ABSENT;B2V=0.00;B2P=-;B2AGE=0;LOWEST=B1;WIFI=0;TCP=0;BLE=1;PHOTO=1;RTC=OK;OUT=OK;CUT=NO;REASON=<CR><LF>
+```
+
+| Campos | Significado |
+|---|---|
+| FW / ID | Versión y mismo identificador configurable que en V2 |
+| LED | READY, DISCONNECTED, BAT_LOW, BAT_CRITICAL, ERROR u OTA |
+| WHY | Motivo prioritario de la misma decisión que gobierna el LED físico |
+| B1 / B2 | PRESENT, ABSENT (<=2 V), INVALID o STALE (última medida válida >3000 ms) |
+| B1V / B2V | Voltios actuales, o `-` si inválidos/antiguos |
+| B1P / B2P | Porcentaje estimado 00–99 solo si PRESENT; `-` en el resto |
+| B1AGE / B2AGE | Milisegundos desde la muestra al consultar; `-` si inválida |
+| LOWEST | B1, B2, BOTH (empate) o NONE; compara solo baterías PRESENT |
+| WIFI / TCP / BLE | WiFi habilitado / TCP conectado / BLE cifrado con suscripción; 0 o 1 |
+| PHOTO | 0/1 estabilizado; `-` mientras se estabiliza al iniciar |
+| RTC / OUT | OK o FAIL; OUT comprueba el expansor, no el movimiento mecánico del relé |
+| CUT / REASON | NO, PENDING o CONFIRMED y motivo del corte |
+
+WHY: POWER_CUT, RTC_INVALID, OUTPUT_FAULT, B1_INVALID, B2_INVALID,
+B1_STALE, B2_STALE, NO_BATTERY, BATTERY_CRITICAL, BATTERY_LOW, OTA_ACTIVE,
+LINK_READY, TCP_REQUIRED o BLE_REQUIRED. Si coinciden incidencias se informa
+la primera según prioridad; los campos individuales permiten ver las demás.
+LOWEST indica la menor batería presente en esta instantánea, no una atribución
+histórica del corte. La banda de batería conserva confirmación de 3 s e histéresis
+(13/23 % para recuperar), de modo que el patrón puede mantenerse tras una subida.
+
+STATUS no guarda nada en NVS ni genera eventos de negocio. La app conserva
+hora local monotónica de recepción, avisa tras 15 s y borra la instantánea al
+perder conexión. El firmware no cambia la calibración ni la política de corte.

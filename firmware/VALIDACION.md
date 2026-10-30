@@ -1,6 +1,6 @@
-# Validación — PLC Scanner 3.0.5-rc1
+# Validación — PLC Scanner 3.0.6-rc1
 
-Fecha: 29 de octubre de 2026.
+Fecha: 30 de octubre de 2026.
 
 ## Comprobado en este entorno
 
@@ -11,9 +11,9 @@ Fecha: 29 de octubre de 2026.
 | Objetivo | ESP32-S3 Dev Module, USB CDC habilitado, Minimal SPIFFS con OTA |
 | Arduino-ESP32 | 3.0.7 |
 | ADS1X15 / BusIO | 2.5.0 / 1.16.2 |
-| Tamaño de programa | 1.612.885 bytes, 82 % de 1.966.080 bytes de partición |
-| Datos globales estáticos | 71.100 bytes, 21 % de 327.680 bytes |
-| Pruebas de regresión en host | 97 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED + 65 de identidad |
+| Tamaño de programa | 1.615.813 bytes, 82 % de 1.966.080 bytes de partición |
+| Datos globales estáticos | 71.116 bytes, 21 % de 327.680 bytes |
+| Pruebas de regresión en host | 97 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED + 65 de identidad + 30 de diagnóstico STATUS |
 
 La memoria libre indicada por el compilador no mide el consumo dinámico de BLE/WiFi, colas y tareas durante el funcionamiento. Debe medirse en placa en una prueba prolongada.
 
@@ -95,3 +95,16 @@ Siguen comprobando estabilización inicial, AUTH, lecturas, OTA y corte. No se
 cambia ni simula ningún modo que desactive la fotocélula. Pendiente de comprobar
 en el equipo real la configuración con palet apoyado en el suelo y los eventos
 producidos por personas que pasan ante el sensor.
+
+
+## Diagnóstico STATUS (3.0.6)
+
+`python3 firmware/tests/test_status.py`: 30 aserciones sobre las funciones reales
+de serialización y decisión LED. Incluye batería ausente, baja, crítica, inválida,
+antigua, ausencia de ambas, errores RTC/salidas, corte pendiente/confirmado, OTA,
+enlace requerido, fotocélula sin estabilizar, desbordamiento de millis y tamaño
+de respuesta dentro de 512 bytes. Comprueba también reconocimiento en BLE/TCP.
+
+Pendiente en placa: comparar el parpadeo físico con STATUS, retirar cada batería,
+comprobar lecturas reales e histéresis, desconectar periféricos y validar BLE/TCP
+y recepción fragmentada en el Android del técnico. No cambia la protección eléctrica.
