@@ -3,11 +3,11 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lintDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 13. VersionName: `1.3.9-plc3`.
+- VersionCode: 14. VersionName: `1.3.10-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
-- 39 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
+- 47 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
 
 ## Pruebas ejecutadas
 
@@ -18,6 +18,7 @@ Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lin
 | EquipmentIdentityTest | 7 | 0 |
 | DeviceStatusTest | 8 | 0 |
 | DeviceStatusVisualsTest | 5 | 0 |
+| PlcReadingsTest | 8 | 0 |
 | ExampleUnitTest (original) | 1 | 0 |
 
 Los casos de protocolo prueban todos los puntos de corte de la confirmación de conexión y de una trama V2, tamaños de fragmento 1/20/182 bytes, varios mensajes concatenados, UTF-8 partido, límites del buffer, resincronización, comandos protegidos/consultas, PIN con ceros iniciales, caducidad de sesión y redacción de secretos en el log. Las pruebas de red comprueban conservación de contraseña enmascarada, cambio explícito, contraseña vacía, valores con `=`, estados LINK/TCP independientes y recepción de NET/NETSTAT en una misma ráfaga.
@@ -245,3 +246,35 @@ Resultado final 1.3.9: `testDebugUnitTest assembleDebug lintDebug` correctos.
 39 pruebas JVM sin fallos/errores, APK 1.3.9-plc3 (versionCode 13) generado.
 Lint sin errores ni MissingPermission; ningún aviso en DeviceStatus. Permanecen
 31 advertencias y 3 avisos informativos de la base. `git diff --check` correcto.
+
+
+## Readings y eliminación de ID? al conectar (1.3.10)
+
+El handshake produce INFO?/STATUS? una vez por conexión, sin ID? redundante.
+El ID de STATUS alimenta el ID visible; la identidad completa se obtiene con
+la consulta explícita al abrir Configure ID. Una identidad anterior incompatible
+se invalida y no se fabrica HWID ni nombre Bluetooth. Desconectar reinicia ID y lecturas.
+
+READINGS se sitúa entre BINARY COMMANDS y PIN / ACCESS. Valida la trama completa
+(ACK, fecha con forma ISO, STX, ID variable, campos/delimitadores y ETX), UTF-8,
+baterías/altura/fotocélula. Los campos no proporcionados sustituyen valores
+anteriores por ausencia; otras líneas de protocolo no modifican esta vista.
+Una trama inválida conserva la última válida con aviso. Un RTC no válido conserva
+las lecturas y se indica como desconocido. No se envían ACK de negocio ni nuevos
+comandos al recibir tramas. Códigos seleccionables, barras compactas y reloj de
+antigüedad usan el panel ya compacto; STATUS mantiene sus 60 s.
+
+Pruebas nuevas: lectura completa/ID personalizado y códigos exactos, comandos
+parciales, ausencia de campos e ID corto, trama malformada conservando caché con
+aviso, RTC inválido, líneas de control, fragmentación/coalescencia y UTF-8 inválido.
+El test del handshake comprueba INFO?/STATUS? y repetición de C/reset por conexión.
+
+Pendiente en tablet/PLC: orden y plegado, selección de códigos largos, lecturas
+L/B/A/P/D/I, eventos automáticos, ausencia de código, cambio de carretilla y edición
+de ID. No se ha probado en dispositivo físico.
+
+Resultado final 1.3.10: `testDebugUnitTest assembleDebug lintDebug` correctos.
+47 pruebas JVM sin fallos ni errores; APK 1.3.10-plc3 (versionCode 14) generado.
+Lint: 0 errores, 0 MissingPermission y ningún aviso en los archivos nuevos;
+se mantienen 31 advertencias y 3 avisos informativos de la base. `git diff --check`
+correcto. No requiere actualizar el firmware 3.0.6.

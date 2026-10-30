@@ -151,11 +151,11 @@ class PlcProtocolTest {
     }
 
     @Test
-    fun infoIsRequestedOncePerConnectionEvenWhenCIsRepeated() {
+    fun startupQueriesUseStatusForIdAndRunOncePerConnection() {
         val handshake = ConnectionHandshake()
-        assertTrue(handshake.onConnected())
-        repeat(10) { assertFalse(handshake.onConnected()) }
+        assertEquals(listOf("INFO?", "STATUS?"), handshake.onConnected())
+        repeat(10) { assertTrue(handshake.onConnected().isEmpty()) }
         handshake.reset()
-        assertTrue(handshake.onConnected())
+        assertEquals(listOf("INFO?", "STATUS?"), handshake.onConnected())
     }
 }

@@ -327,6 +327,8 @@ class MainActivity : ComponentActivity() {
 
     private val uiIdentityDialog = mutableStateOf(false)
     private val uiIdentity = mutableStateOf<EquipmentIdentity?>(null)
+    private val uiEquipmentId = mutableStateOf<String?>(null)
+    private val uiReadings = mutableStateOf(PlcReadingsState())
     private val uiIdentityDraft = mutableStateOf("")
     private val uiIdentityBusy = mutableStateOf(false)
     private val uiIdentityStatus = mutableStateOf("")
@@ -814,6 +816,8 @@ class MainActivity : ComponentActivity() {
         uiNetworkSnapshot.value = NetworkSnapshot()
         uiIdentityDialog.value = false
         uiIdentity.value = null
+        uiEquipmentId.value = null
+        uiReadings.value = PlcReadingsState()
         uiIdentityBusy.value = false
         identityExpected = null
         identityRequest++
@@ -1093,6 +1097,8 @@ class MainActivity : ComponentActivity() {
             deviceStatusRequest++
             if (status != null) {
                 uiDeviceStatus.value = status
+                uiEquipmentId.value = status.id
+                if (uiIdentity.value?.id != status.id) uiIdentity.value = null
                 uiDeviceStatusReceived.value = SystemClock.elapsedRealtime()
                 uiDeviceStatusMessage.value = ""
             } else {
@@ -1105,6 +1111,7 @@ class MainActivity : ComponentActivity() {
         val identity = if (message.acknowledged) parseEquipmentIdentity(text) else null
         if (identity != null) {
             uiIdentity.value = identity
+            uiEquipmentId.value = identity.id
             uiSelected.value =
                 uiSelected.value?.let {
                     if (it.address == lastConnectedAddress) it.copy(name = identity.bluetoothName)
@@ -1156,10 +1163,8 @@ class MainActivity : ComponentActivity() {
             bleChannelReady = true
             uiDeviceStatusReady.value = true
             log(LogLevel.INFO, "BLE ready. Queries are available.")
-            if (connectionHandshake.onConnected()) {
-                sendText("INFO?", true)
-                sendText("ID?", true)
-                requestDeviceStatus()
+            for (query in connectionHandshake.onConnected()) {
+                if (query == "STATUS?") requestDeviceStatus() else sendText(query, true)
             }
             return
         }
@@ -1352,7 +1357,10 @@ class MainActivity : ComponentActivity() {
                 bytesToHex(message.bytes),
                 message.bytes.size,
             )
-            if (message.isFrame) continue
+            if (message.isFrame) {
+                uiReadings.value = uiReadings.value.receive(message, SystemClock.elapsedRealtime())
+                continue
+            }
             val first = message.bytes.firstOrNull()
             val payloadText = message.text
             uiNetworkSnapshot.value = uiNetworkSnapshot.value.receive(payloadText)
@@ -1704,7 +1712,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         uiIdentityDialog.value = true
-        uiIdentityDraft.value = uiIdentity.value?.id ?: ""
+        uiIdentityDraft.value = uiEquipmentId.value ?: ""
         uiIdentityStatus.value = "Querying the PLC ID..."
         uiIdentityBusy.value = true
         identityExpected = null
@@ -1773,7 +1781,8 @@ class MainActivity : ComponentActivity() {
                     deviceStatusBusy = uiDeviceStatusBusy.value,
                     deviceStatusMessage = uiDeviceStatusMessage.value,
                     onStatusRefresh = { requestDeviceStatus() },
-                    equipmentId = uiIdentity.value?.id,
+                    readings = uiReadings.value,
+                    equipmentId = uiEquipmentId.value,
                     onIdentityClick = { openIdentityDialog() },
                     onMaintenanceClick = { openPinDialog() },
                     onForgetPin = { forgetSavedPin() },
@@ -1897,6 +1906,7 @@ private fun PlcBleTesterLandscape(
     deviceStatusBusy: Boolean,
     deviceStatusMessage: String,
     onStatusRefresh: () -> Unit,
+    readings: PlcReadingsState,
     equipmentId: String?,
     onIdentityClick: () -> Unit,
     onMaintenanceClick: () -> Unit,
@@ -2288,6 +2298,8 @@ private fun PlcBleTesterLandscape(
                                         CmdBtn("O") { onCmd('O') }
                                     }
                                 }
+
+                                ReadingResultsSection(readings)
 
                                 CollapsibleSettingsSection(
                                     title = "PIN / ACCESS",

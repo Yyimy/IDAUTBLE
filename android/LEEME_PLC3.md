@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.6
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.9-plc3** (versionCode 13).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.10-plc3** (versionCode 14).
 
 ## Abrir y compilar
 
@@ -262,3 +262,25 @@ separadas. En anchura pequeña/fuente grande se apilan para permitir leer los va
 Refresh se integra en la cabecera. Las edades de muestra y explicaciones adicionales
 se despliegan con Diagnostic details; no se elimina la información del diagnóstico.
 La instantánea conserva indicadores durante 60 s y sigue visible después, en gris.
+
+
+## Readings y arranque sin ID? redundante (1.3.10)
+
+READINGS aparece justo debajo de BINARY COMMANDS y antes de PIN / ACCESS.
+Se abre inicialmente y se puede plegar. Los códigos de palet y ubicación son
+seleccionables; debajo figuran fotocélula (0/1, sin inferir presencia del sensor),
+altura en metros y B1/B2 con barras compactas. Se indica ID, hora PLC y tiempo
+desde recepción. También se muestran las tramas V2 de eventos automáticos,
+sin enviar ACK de negocio.
+
+Cada nueva trama válida sustituye todos los valores: `-`/vacío no conserva
+lecturas anteriores. Las líneas INFO/STATUS/ACK/NAK no sustituyen la última trama.
+Si una trama es malformada, se mantiene la anterior con aviso; desconectar borra
+la vista para evitar mezclar carretillas. La validez del RTC se indica aparte,
+sin perder códigos válidos. Los porcentajes de la trama se muestran tal como
+llegan; Device status distingue los slots ausentes de baterías descargadas.
+
+Tras C se solicitan INFO? y STATUS? una sola vez. El ID de STATUS se muestra en
+DEVICE ID sin consulta ID? adicional. Al abrir Configure ID se sigue consultando
+ID? para obtener la identidad completa (HWID y nombre Bluetooth), tras autorizar
+como antes. El resto del diagnóstico y el panel compacto/60 s se conservan.
