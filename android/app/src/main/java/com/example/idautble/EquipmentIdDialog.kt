@@ -24,7 +24,7 @@ fun EquipmentIdDialog(
     val valid = validEquipmentId(normalized)
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text("Forklift ID") },
+        title = { Text("Device ID") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Current ID: ${current?.id ?: "not queried"}")
@@ -41,10 +41,7 @@ fun EquipmentIdDialog(
                     isError = draft.isNotEmpty() && !valid,
                 )
                 Text(
-                    "This ID will be shown over Bluetooth and included in data frames. It is kept after power-off. Use a unique ID for each forklift."
-                )
-                Text(
-                    "You can change the ID with a pallet loaded. Wait for pending operations to finish."
+                    "This ID will be shown over Bluetooth and included in data frames. It is kept after power-off. Use a unique ID for each device."
                 )
                 if (status.isNotEmpty()) Text(status)
             }
