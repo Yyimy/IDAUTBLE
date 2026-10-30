@@ -3,7 +3,6 @@ package com.example.idautble
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,9 +46,12 @@ fun EquipmentIdDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onSave, enabled = valid && !busy && current != null) {
-                Text(if (busy) "Waiting..." else "Save ID")
-            }
+            MaintenanceActionButton(
+                text = if (busy) "Waiting..." else "Save ID",
+                onClick = onSave,
+                tone = MaintenanceActionTone.SUCCESS,
+                enabled = valid && !busy && current != null,
+            )
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Close") } },
     )

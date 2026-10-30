@@ -33,6 +33,7 @@ fun CollapsibleSettingsSection(
     summary: String,
     expanded: Boolean,
     onToggle: () -> Unit,
+    summaryContent: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Card(Modifier.fillMaxWidth()) {
@@ -53,7 +54,14 @@ fun CollapsibleSettingsSection(
             ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(title, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Text(summary, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (summaryContent != null) summaryContent()
+                    else
+                        Text(
+                            summary,
+                            fontSize = 12.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                 }
                 Icon(
                     imageVector =

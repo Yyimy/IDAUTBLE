@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.5
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.5-plc3** (versionCode 9).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.6-plc3** (versionCode 10).
 
 ## Abrir y compilar
 
@@ -87,12 +87,12 @@ La app reconoce también una autorización temporal de firmware anterior y lo in
 
 ## ID de la carretilla
 
-1. Actualizar el firmware a 3.0.5 y la app a 1.3.5. Abrir en Arduino IDE la carpeta
+1. Actualizar el firmware a 3.0.5 y la app a 1.3.6. Abrir en Arduino IDE la carpeta
    completa del sketch, incluyendo Types.h. Conservar el PIN propio antes de cargar.
 2. Conectar al PLC. En TERMINAL, justo debajo de BINARY COMMANDS, desplegar
    **PIN / ACCESS** y pulsar **Enter PIN / Authorise**.
 3. Sin lecturas, eventos u OTA pendientes (se admite un palet cargado), pulsar
-   **Configure ID** dentro de la sección **FORKLIFT ID**. La app consulta el ID real y muestra también HWID.
+   **Configure ID** dentro de la sección **DEVICE ID**. La app consulta el ID real y muestra también HWID.
 4. Introducir, por ejemplo, `E 1234 BCD` y pulsar **Save ID**. Se admite de
    1 a 20 caracteres A-Z, 0-9, espacios interiores, guion y guion bajo. Se
    normaliza a mayúsculas; no se permiten acentos ni separadores del protocolo.
@@ -113,7 +113,7 @@ caracteres. La app de mantenimiento no convierte ni confirma eventos del SGA.
 
 En TERMINAL, inmediatamente después de BINARY COMMANDS, aparecen:
 
-1. **FORKLIFT ID**: ID actual y botón Configurar ID.
+1. **DEVICE ID**: ID actual y botón Configurar ID.
 2. **PIN / ACCESS**: estado de mantenimiento y controles Introducir PIN / Autorizar,
    Bloquear acceso y Olvidar PIN en esta app.
 
@@ -177,11 +177,11 @@ modificar el firmware.
 Se traduce toda la interfaz propia, incluidos diálogos PIN e ID, mensajes de
 validación/red/OTA, avisos Bluetooth, entradas de diagnóstico generadas por la app
 y etiquetas de accesibilidad. Los nombres actuales son BLUETOOTH CONNECTION,
-BINARY COMMANDS, PIN / ACCESS, FORKLIFT ID, HEIGHT MEASUREMENT, TEXT COMMANDS
+BINARY COMMANDS, PIN / ACCESS, DEVICE ID, HEIGHT MEASUREMENT, TEXT COMMANDS
 - AIM Code ID / RTC y MANUAL TERMINAL.
 
 Para autorizar: PIN / ACCESS > Enter PIN / Authorise. Para editar el identificador:
-FORKLIFT ID > Configure ID > Save ID. Sin acceso autorizado se muestra únicamente
+DEVICE ID > Configure ID > Save ID. Sin acceso autorizado se muestra únicamente
 «Enter the PIN in PIN / ACCESS first.». El guardado confirmado sigue cerrando
 la ventana. Se conservan los controles de plegado y la autorización por sesión.
 
@@ -193,3 +193,32 @@ Esta revisión no cambia comandos, tramas, credenciales ni firmware.
 Si Git bloquea Pull por traducciones locales, guardarlas antes con Stash y hacer
 Pull de la revisión integrada. Revisar después el Stash antes de restaurarlo
 para no reintroducir textos antiguos ni perder redacciones propias.
+
+
+## Botones y estado de mantenimiento (1.3.6)
+
+| Acción | Color |
+|---|---|
+| Enter PIN / Authorise y Authorise | Verde |
+| Lock access | Naranja |
+| Forget saved PIN | Rojo |
+| Configure ID | Azul |
+| Save ID | Verde |
+
+Los botones comparten tamaño compacto, tipografía y formas del resto de la app.
+Cuando están deshabilitados, se muestran atenuados. La cabecera PIN / ACCESS
+conserva visible su estado: verde si el acceso está autorizado y gris si no,
+sin depender únicamente del color. Se respeta el título DEVICE ID configurado
+en la revisión del cliente.
+
+Los cierres Bluetooth y la confirmación de escritura larga ya gestionan la falta
+o revocación de BLUETOOTH_CONNECT. No se añaden supresiones de los avisos de
+permisos. Si el permiso se revoca durante el envío, se limpian comandos pendientes,
+se cierra la sesión local y se indica que hay que conceder acceso y reconectar.
+La revocación del permiso puede impedir que Android permita llamar a close();
+en ese caso la app no intenta esa llamada sin permiso y descarta su estado local.
+
+Para probar: autorizar y bloquear, olvidar el PIN recordado, configurar/guardar
+ID, y revocar el permiso Bluetooth desde Ajustes mientras hay una conexión activa.
+Los diálogos nativos del sistema siguen controlados por Android. No requiere
+actualizar el firmware.

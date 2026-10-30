@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.5-plc3, versionCode 9 |
+| App Android | [android/](android/) | 1.3.6-plc3, versionCode 10 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.5-rc1 |
 
 ## Trabajar sin ZIP
@@ -35,10 +35,10 @@ Pruebas y compilación desde la raíz:
 
 ```bash
 cd android
-./gradlew testDebugUnitTest assembleDebug
+./gradlew testDebugUnitTest assembleDebug lintDebug
 ```
 
-En Windows, usa `gradlew.bat testDebugUnitTest assembleDebug` dentro de android.
+En Windows, usa `gradlew.bat testDebugUnitTest assembleDebug lintDebug` dentro de android.
 
 Instrucciones de conexión, red y OTA: [android/LEEME_PLC3.md](android/LEEME_PLC3.md).
 
@@ -74,9 +74,9 @@ C verifica que el PLC responde. La app consulta INFO? una sola vez por conexión
 
 ## ID de la carretilla
 
-Con firmware 3.0.5 y app 1.3.5, conecta y abre la pestaña TERMINAL. Debajo de
+Con firmware 3.0.5 y app 1.3.6, conecta y abre la pestaña TERMINAL. Debajo de
 BINARY COMMANDS, despliega **PIN / ACCESS** y pulsa **Enter PIN / Authorise**.
-Después despliega **FORKLIFT ID** y pulsa **Configure ID**. Sin acceso
+Después despliega **DEVICE ID** y pulsa **Configure ID**. Sin acceso
 autorizado, ese botón muestra únicamente un aviso para introducir antes la
 contraseña en PIN / ACCESS. Tras confirmar el PLC el nuevo ID, la ventana se cierra. Admite 1–20 caracteres ASCII (A-Z, 0-9, espacios,
 guion y guion bajo), por ejemplo `E 1234 BCD`. Se normaliza a mayúsculas y
@@ -87,7 +87,7 @@ Desconecta y vuelve a buscar para ver el nuevo nombre anunciado.
 Todas las secciones del panel de comandos de TERMINAL se pliegan de forma
 independiente, incluida BINARY COMMANDS. Conexión Bluetooth y comandos binarios
 empiezan desplegados; el resto empieza plegado. PIN / ACCESS aparece justo
-después de BINARY COMMANDS y antes de FORKLIFT ID.
+después de BINARY COMMANDS y antes de DEVICE ID.
 Las cabeceras de ID y acceso conservan el ID
 y el estado de acceso visibles. La elección se mantiene al cambiar de pestaña
 y durante recreaciones de pantalla compatibles con el estado guardado de Android.
@@ -119,3 +119,21 @@ errores, registro de diagnóstico y accesibilidad. Los comandos, UUID y respuest
 recibidas del PLC se conservan literalmente; por ejemplo, CONECTADO sigue siendo
 el token del protocolo. Los diálogos del sistema Android mantienen el idioma del
 terminal. No requiere actualizar firmware.
+
+
+## PIN e ID: acciones y permisos (1.3.6)
+
+Los botones de mantenimiento usan la misma presentación compacta que el resto:
+verde para autorizar/guardar, naranja para bloquear, rojo para olvidar el PIN
+local y azul para configurar el ID. El estado del acceso se muestra en una
+etiqueta verde (autorizado) o gris (resto de estados), con su texto explicativo.
+
+Las llamadas de cierre GATT y confirmación de escritura larga comprueban el permiso
+Bluetooth y tratan SecurityException explícitamente. Si se pierde el permiso
+durante un envío, se cancela el trabajo pendiente y se revoca la sesión local.
+No cambia el firmware ni la vinculación/PIN del PLC.
+
+Prueba adicional de los helpers reales (Python 3, JDK 17 y caché de Gradle tras
+compilar): `python3 android/tests/test_gatt_permissions.py`. Se pueden indicar
+JAVA_HOME y GRADLE_USER_HOME iguales a los usados para Gradle. Esta prueba no
+sustituye la comprobación en Android al revocar permisos desde Ajustes.
