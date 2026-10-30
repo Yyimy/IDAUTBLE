@@ -94,14 +94,14 @@ fun hasProtocolSecret(data: ByteArray): Boolean {
     return text.contains("AUTH=") || text.contains("PWD=")
 }
 
-/** INFO is metadata for the connection, not part of every C command's answer. */
+/** Read-only startup queries run once per connection; STATUS already includes the ID. */
 class ConnectionHandshake {
     private var infoRequested = false
 
-    fun onConnected(): Boolean {
-        if (infoRequested) return false
+    fun onConnected(): List<String> {
+        if (infoRequested) return emptyList()
         infoRequested = true
-        return true
+        return listOf("INFO?", "STATUS?")
     }
 
     fun reset() {

@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.8-plc3, versionCode 12 |
+| App Android | [android/](android/) | 1.3.10-plc3, versionCode 14 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.6-rc1 |
 
 ## Trabajar sin ZIP
@@ -70,7 +70,7 @@ Tras emparejar, la app permite consultar datos. PIN / Acceso autoriza el manteni
 
 La contraseña WiFi del AP OTA es independiente del PIN BLE; el firmware la muestra localmente por USB con el comando `info`.
 
-C verifica que el PLC responde. La app consulta INFO? una sola vez por conexión. Su respuesta contiene FW (versión), PROTO (trama V2), ACKMODE (confirmación de eventos) y HEARTBEAT (vigilancia TCP).
+C verifica que el PLC responde. La app consulta INFO? y STATUS? una sola vez por conexión; toma el ID de STATUS y evita el ID? automático. ID? queda disponible al abrir Configure ID, donde se consulta también HWID y el nombre Bluetooth real. Su respuesta contiene FW (versión), PROTO (trama V2), ACKMODE (confirmación de eventos) y HEARTBEAT (vigilancia TCP).
 
 ## ID de la carretilla
 
@@ -85,9 +85,9 @@ tramas nuevas utilizan el mismo valor. No se reinicia el PLC ni cambia el PIN.
 Desconecta y vuelve a buscar para ver el nuevo nombre anunciado.
 
 Todas las secciones del panel de comandos de TERMINAL se pliegan de forma
-independiente, incluida BINARY COMMANDS. Conexión Bluetooth y comandos binarios
-empiezan desplegados; el resto empieza plegado. PIN / ACCESS aparece justo
-después de BINARY COMMANDS y antes de DEVICE ID.
+independiente, incluida BINARY COMMANDS. Conexión Bluetooth, BINARY COMMANDS
+y READINGS empiezan desplegados; el resto empieza plegado. READINGS aparece
+justo después de BINARY COMMANDS, seguido de PIN / ACCESS y DEVICE ID.
 Las cabeceras de ID y acceso conservan el ID
 y el estado de acceso visibles. La elección se mantiene al cambiar de pestaña
 y durante recreaciones de pantalla compatibles con el estado guardado de Android.
@@ -105,7 +105,7 @@ y [app](android/LEEME_PLC3.md#id-de-la-carretilla).
 
 ## Validación de esta base
 
-- Android: compilación y generación de APK debug correctas; 39 pruebas unitarias superadas.
+- Android: compilación y generación de APK debug correctas; 47 pruebas unitarias superadas.
 - Firmware: compilación correcta con ESP32 3.0.7; 97 comprobaciones de lógica, 5 comprobaciones de validación del PIN y 48.041 comprobaciones del LED y 65 comprobaciones de identidad y 30 de diagnóstico STATUS superadas.
 - Las pruebas de emparejamiento, electrónica, relé, baterías y OTA en el equipo real siguen pendientes.
 
@@ -138,16 +138,16 @@ compilar): `python3 android/tests/test_gatt_permissions.py`. Se pueden indicar
 JAVA_HOME y GRADLE_USER_HOME iguales a los usados para Gradle. Esta prueba no
 sustituye la comprobación en Android al revocar permisos desde Ajustes.
 
-## Device status (app 1.3.7 / firmware 3.0.6)
+## Device status (app 1.3.9 / firmware 3.0.6)
 
 En TERMINAL, después de DEVICE ID, **DEVICE STATUS** es una sección plegable.
-Se consulta una vez al completar el handshake BLE y con **Refresh status**;
+Se consulta una vez al completar el handshake BLE y con **Refresh**;
 no requiere autorizar mantenimiento. Muestra firmware e ID, modo/motivo del LED,
 ambas baterías (tensión, porcentaje estimado, ausencia o medida inválida/antigua),
 la batería presente de menor nivel, WiFi habilitado, enlace TCP, notificaciones BLE,
 fotocélula estabilizada, RTC, expansor de salidas y corte solicitado/confirmado.
 
-Es una instantánea: muestra su antigüedad y avisa pasados 15 s. La edad de cada
+Es una instantánea: muestra su antigüedad y avisa pasados 60 s. La edad de cada
 muestra ADC se refiere al momento de la consulta. Al desconectar se borra todo
 el estado para no mostrar datos de otra carretilla. Tras 6 s sin respuesta se
 avisa de conexión o firmware incompatible; los demás comandos siguen disponibles.
@@ -161,7 +161,7 @@ Detalles del esquema: [firmware/LEEME.md](firmware/LEEME.md).
 Prueba adicional: `python3 firmware/tests/test_status.py`.
 
 
-## Panel visual de estado (app 1.3.8)
+## Panel visual de estado (app 1.3.9)
 
 DEVICE STATUS conserva la consulta y sus datos, presentados en tarjetas:
 círculo animado para el patrón del LED, barras y porcentajes de ambas baterías,
@@ -174,10 +174,47 @@ La animación reproduce la cadencia de firmware 3.0.6, con fase ilustrativa:
 STATUS no transmite sincronización del LED físico. Los colores son indicadores
 de la app; el PLC conserva su único LED. Al plegar se pausa el parpadeo; sin
 instantánea reciente se detiene y todos los indicadores pasan a gris. Se avisa
-al superar 15 s desde la recepción. Las barras conservan el último nivel visible
-con la indicación Last snapshot. Refresh status consulta de nuevo como antes;
+al superar 60 s desde la recepción. Las barras conservan el último nivel visible
+con la indicación Last snapshot. Refresh consulta de nuevo como antes;
 no se añade sondeo ni se modifican los comandos.
 
 Incluye colores adaptados a temas claro/oscuro y disposición vertical de baterías
 en paneles estrechos o con fuente grande. Solo requiere actualizar la app;
 el firmware 3.0.6 de la función STATUS permanece igual.
+
+
+### Presentación compacta (1.3.9)
+
+El círculo LED pasa de 54 a 22 dp; los porcentajes de 26 a 16 sp y comparten
+línea con el nombre de la batería. Se reducen rellenos, separaciones y la altura de línea del panel (base 13 sp). Las seis
+tarjetas de conexiones se sustituyen por filas de indicadores dentro de un solo
+panel (dos columnas si hay espacio). ID, firmware, antigüedad y Refresh comparten
+cabecera; se omite el mensaje redundante de recepción correcta, conservando errores.
+
+La edad de las muestras ADC y las explicaciones del patrón/umbrales siguen
+accesibles en **Diagnostic details**, plegado de inicio. El estado del LED, su
+motivo, barras/voltios, conexiones y corte permanecen visibles. La instantánea
+conserva color y vista previa durante 60 s; luego sigue visible en gris con aviso.
+Solo se actualiza la app; firmware y frecuencia de consultas permanecen iguales.
+
+
+## Lecturas visuales y consulta inicial (app 1.3.10)
+
+En TERMINAL, **READINGS** aparece inmediatamente debajo de BINARY COMMANDS,
+inicialmente desplegado y plegable. Muestra los códigos de palet/ubicación con
+texto seleccionable, fotocélula 0/1, altura en metros y porcentajes/barritas de
+ambas baterías. Incluye ID de la trama, hora PLC y antigüedad local de recepción.
+Se actualiza con cada trama V2 completa de lectura o evento automático; el registro
+ASCII/HEX permanece disponible. Esta vista no envía ACK de eventos de negocio.
+
+Cada respuesta sustituye todos los campos: `-`/vacío se presenta sin dato,
+sin arrastrar códigos de otra lectura. Los valores B1/B2 son los porcentajes
+recibidos; la trama V2 no permite distinguir un 0 % de un slot ausente, por lo
+que la presencia se consulta en Device status. Una trama malformada conserva la
+última lectura válida con aviso, y al desconectar se borra la vista.
+Un RTC inválido no impide mostrar los códigos; se indica que el reloj no está disponible.
+
+La conexión solicita solo INFO? y STATUS? una vez. El ID de STATUS actualiza la
+cabecera de DEVICE ID. Configure ID mantiene su consulta explícita ID? para
+obtener HWID/nombre Bluetooth, sin inventar esos datos a partir de STATUS.
+El panel compacto y sus 60 s de frescura se conservan. Solo hay que actualizar la app.

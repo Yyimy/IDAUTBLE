@@ -85,11 +85,13 @@ class DeviceStatusVisualsTest {
     }
 
     @Test
-    fun freshnessRequiresConnectionAndExpiresAfter15Seconds() {
+    fun freshnessRequiresConnectionAndExpiresAfter60Seconds() {
         assertFalse(deviceStatusIsFresh(null, 1000, true))
         assertFalse(deviceStatusIsFresh(1000, 1000, false))
         assertTrue(deviceStatusIsFresh(1000, 1000, true))
         assertTrue(deviceStatusIsFresh(1000, 16000, true))
-        assertFalse(deviceStatusIsFresh(1000, 16001, true))
+        assertTrue(deviceStatusIsFresh(1000, 16001, true))
+        assertTrue(deviceStatusIsFresh(1000, 61000, true))
+        assertFalse(deviceStatusIsFresh(1000, 61001, true))
     }
 }
