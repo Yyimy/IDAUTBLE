@@ -2174,7 +2174,7 @@ private fun PlcBleTesterLandscape(
 
                                 CollapsibleSettingsSection(
                                     title = "BINARY COMMANDS",
-                                    summary = "L · B · A · P · D · I · C · O",
+                                    summary = "Commands sent to the PLC",
                                     expanded = binarySectionExpanded,
                                     onToggle = { binarySectionExpanded = !binarySectionExpanded },
                                 ) {
