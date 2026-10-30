@@ -3,11 +3,11 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lintDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 11. VersionName: `1.3.7-plc3`.
+- VersionCode: 12. VersionName: `1.3.8-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
-- 34 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
+- 39 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
 
 ## Pruebas ejecutadas
 
@@ -17,6 +17,7 @@ Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lin
 | NetParsingTest | 6 | 0 |
 | EquipmentIdentityTest | 7 | 0 |
 | DeviceStatusTest | 8 | 0 |
+| DeviceStatusVisualsTest | 5 | 0 |
 | ExampleUnitTest (original) | 1 | 0 |
 
 Los casos de protocolo prueban todos los puntos de corte de la confirmación de conexión y de una trama V2, tamaños de fragmento 1/20/182 bytes, varios mensajes concatenados, UTF-8 partido, límites del buffer, resincronización, comandos protegidos/consultas, PIN con ceros iniciales, caducidad de sesión y redacción de secretos en el log. Las pruebas de red comprueban conservación de contraseña enmascarada, cambio explícito, contraseña vacía, valores con `=`, estados LINK/TCP independientes y recepción de NET/NETSTAT en una misma ráfaga.
@@ -184,3 +185,36 @@ Resultado final 1.3.7: `testDebugUnitTest assembleDebug lintDebug` correctos,
 34 pruebas JVM sin errores ni fallos, APK generado y Lint sin errores ni
 MissingPermission ni avisos en los archivos nuevos de Device status.
 Se mantienen 31 advertencias y 3 avisos informativos de la base.
+
+
+## Panel visual de estado (1.3.8)
+
+DEVICE STATUS muestra tarjetas con círculo animado del patrón LED, barras de
+batería, porcentaje destacado, tensión y edad de muestra. Las conexiones y
+periféricos usan indicadores circulares con su etiqueta y estado textual.
+Se conserva toda la información del diagnóstico y la sección plegable.
+
+El parpadeo usa la cadencia de ledPatternOn del firmware 3.0.6; su fase es una
+vista previa basada en la recepción, no está sincronizada con la placa. Se
+pausa al plegar/abandonar pestaña y se detiene al caducar la instantánea. Sin
+datos recientes todos los indicadores quedan neutros, manteniendo las últimas
+lecturas identificadas como Last snapshot. No se añaden consultas automáticas.
+Los porcentajes ausentes/inválidos/antiguos no se presentan como 0 %.
+
+Las 5 pruebas nuevas comprueban ventanas y fronteras de los seis patrones,
+repetición de periodos y tiempos grandes, pausa con datos antiguos, estados
+sin porcentaje útil, límites de color 10/20 %, y caducidad tras 15.000 ms con
+reloj monotónico. Los textos acompañan al color; el lector de pantalla no recibe
+anuncios por cada pulso ni un porcentaje falso de la barra vacía.
+
+Pendiente en terminal real: revisar panel a distintas anchuras y tamaños de letra,
+temas claro/oscuro, fase/cadencia percibida del círculo, plegado y navegación,
+TalkBack y contraste en pantalla industrial. Se han previsto disposición vertical
+de baterías en panel estrecho/fuente grande y paleta adaptada al tema.
+No se ha ejecutado ni medido la interfaz en un teléfono/tablet físico.
+
+Resultado final 1.3.8: `testDebugUnitTest assembleDebug lintDebug` correctos,
+39 pruebas JVM sin fallos/errores y APK 1.3.8-plc3 (versionCode 12) generado.
+Lint: 0 errores, 0 MissingPermission y ningún aviso en los archivos DeviceStatus;
+se mantienen 31 advertencias y 3 avisos informativos de la base. `git diff --check`
+correcto. No cambia el firmware, la versión del protocolo ni las dependencias.

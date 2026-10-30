@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.7-plc3, versionCode 11 |
+| App Android | [android/](android/) | 1.3.8-plc3, versionCode 12 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.6-rc1 |
 
 ## Trabajar sin ZIP
@@ -105,7 +105,7 @@ y [app](android/LEEME_PLC3.md#id-de-la-carretilla).
 
 ## Validación de esta base
 
-- Android: compilación y generación de APK debug correctas; 34 pruebas unitarias superadas.
+- Android: compilación y generación de APK debug correctas; 39 pruebas unitarias superadas.
 - Firmware: compilación correcta con ESP32 3.0.7; 97 comprobaciones de lógica, 5 comprobaciones de validación del PIN y 48.041 comprobaciones del LED y 65 comprobaciones de identidad y 30 de diagnóstico STATUS superadas.
 - Las pruebas de emparejamiento, electrónica, relé, baterías y OTA en el equipo real siguen pendientes.
 
@@ -159,3 +159,25 @@ es de solo lectura y devuelve `<ACK>STATUS=1;...\r\n`; no modifica V2, DIAG?,
 los patrones del LED, la política de corte ni la configuración persistida.
 Detalles del esquema: [firmware/LEEME.md](firmware/LEEME.md).
 Prueba adicional: `python3 firmware/tests/test_status.py`.
+
+
+## Panel visual de estado (app 1.3.8)
+
+DEVICE STATUS conserva la consulta y sus datos, presentados en tarjetas:
+círculo animado para el patrón del LED, barras y porcentajes de ambas baterías,
+e indicadores circulares para WiFi, TCP, BLE seguro, fotocélula, RTC, expansor
+y corte. Se mantienen tensión, antigüedad de la muestra, batería de menor nivel,
+firmware, ID y motivo del LED/corte. Las barras distinguen batería ausente o
+medida inválida/antigua de una batería presente al 0 %.
+
+La animación reproduce la cadencia de firmware 3.0.6, con fase ilustrativa:
+STATUS no transmite sincronización del LED físico. Los colores son indicadores
+de la app; el PLC conserva su único LED. Al plegar se pausa el parpadeo; sin
+instantánea reciente se detiene y todos los indicadores pasan a gris. Se avisa
+al superar 15 s desde la recepción. Las barras conservan el último nivel visible
+con la indicación Last snapshot. Refresh status consulta de nuevo como antes;
+no se añade sondeo ni se modifican los comandos.
+
+Incluye colores adaptados a temas claro/oscuro y disposición vertical de baterías
+en paneles estrechos o con fuente grande. Solo requiere actualizar la app;
+el firmware 3.0.6 de la función STATUS permanece igual.
