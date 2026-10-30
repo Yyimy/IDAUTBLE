@@ -3,7 +3,7 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lintDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 12. VersionName: `1.3.8-plc3`.
+- VersionCode: 13. VersionName: `1.3.9-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
@@ -218,3 +218,30 @@ Resultado final 1.3.8: `testDebugUnitTest assembleDebug lintDebug` correctos,
 Lint: 0 errores, 0 MissingPermission y ningún aviso en los archivos DeviceStatus;
 se mantienen 31 advertencias y 3 avisos informativos de la base. `git diff --check`
 correcto. No cambia el firmware, la versión del protocolo ni las dependencias.
+
+
+## Panel compacto y lectura durante un minuto (1.3.9)
+
+LED 54→22 dp; porcentaje 26→16 sp en la misma línea que el nombre de batería;
+rellenos de panel/batería 10→6 dp y separaciones internas 6→2 dp.
+Altura de línea base explícita de 13 sp (ID 15 sp, porcentaje 18 sp). Las conexiones
+pasan de seis tarjetas a tres filas de dos indicadores; anchuras pequeñas/fuente
+grande usan una columna. La cabecera agrupa ID, firmware, edad y Refresh.
+Se elimina el texto redundante tras una recepción válida; los errores siguen visibles.
+
+Diagnostic details es plegable y conserva edades de muestra ADC, estado de cada
+medida y explicaciones del patrón/umbrales. Los valores operativos y motivos de
+fallo permanecen en la vista principal. La caducidad de la instantánea pasa a
+60.000 ms con reloj monotónico; después sigue visible en gris y se pausa el LED.
+El test de frescura verifica que sigue vigente después de 15 s, en 60 s exactos
+y que caduca después de 60 s. No cambia la frecuencia de consultas ni firmware.
+
+Pendiente en tablet real: revisar reducción del desplazamiento, ajuste de filas
+con ambas baterías y distintos tamaños de fuente, acceso a Diagnostic details,
+animación durante un minuto y datos antiguos. No se ha medido altura renderizada
+ni ejecutado la interfaz en un dispositivo físico.
+
+Resultado final 1.3.9: `testDebugUnitTest assembleDebug lintDebug` correctos.
+39 pruebas JVM sin fallos/errores, APK 1.3.9-plc3 (versionCode 13) generado.
+Lint sin errores ni MissingPermission; ningún aviso en DeviceStatus. Permanecen
+31 advertencias y 3 avisos informativos de la base. `git diff --check` correcto.

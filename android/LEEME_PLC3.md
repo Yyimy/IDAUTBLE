@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.6
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.8-plc3** (versionCode 12).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.9-plc3** (versionCode 13).
 
 ## Abrir y compilar
 
@@ -223,24 +223,24 @@ ID, y revocar el permiso Bluetooth desde Ajustes mientras hay una conexión acti
 Los diálogos nativos del sistema siguen controlados por Android. No requiere
 actualizar el firmware.
 
-## Device status (1.3.7)
+## Device status (1.3.9)
 
 TERMINAL incluye DEVICE STATUS debajo de DEVICE ID, inicialmente plegado.
-La consulta STATUS? se envía al completar la conexión y al pulsar Refresh status;
+La consulta STATUS? se envía al completar la conexión y al pulsar Refresh;
 no necesita PIN de mantenimiento. Se muestran el modo/motivo del LED, firmware,
 ID, baterías individuales, enlaces, fotocélula, RTC, salidas y corte.
 El porcentaje de batería es una estimación por tensión. Un slot ausente no se
 presenta como batería descargada y las medidas inválidas/antiguas no muestran
 valores de caché como actuales.
 
-Cada respuesta es una instantánea con antigüedad visible y aviso después de 15 s.
+Cada respuesta es una instantánea con antigüedad visible y aviso después de 60 s.
 No se consulta continuamente. El botón espera a que BLE esté preparado; una
 consulta sin respuesta termina a los 6 s con una explicación. Firmware anterior
 a 3.0.6 mantiene las demás funciones. Desconectar borra datos y peticiones; una
 respuesta malformada conserva la instantánea anterior con aviso.
 
 
-## Panel visual (1.3.8)
+## Panel visual (1.3.9)
 
 El estado se organiza en tarjetas de LED, baterías y conexiones/periféricos.
 El círculo del LED reproduce su cadencia con un color de severidad y conserva
@@ -254,3 +254,11 @@ se detiene. También se pausa al plegar o abandonar la pestaña. La consulta sig
 siendo manual y al conectar/cambiar ID, como antes. No cambia el protocolo ni
 requiere actualizar el firmware 3.0.6. Tema claro/oscuro y fuente ampliada están
 contemplados; comprobar la presentación en el terminal real.
+
+
+La versión 1.3.9 compacta LED (22 dp), porcentajes (16 sp), rellenos y espacios.
+Conexiones/periféricos se presentan en filas de dos columnas, sin seis tarjetas
+separadas. En anchura pequeña/fuente grande se apilan para permitir leer los valores.
+Refresh se integra en la cabecera. Las edades de muestra y explicaciones adicionales
+se despliegan con Diagnostic details; no se elimina la información del diagnóstico.
+La instantánea conserva indicadores durante 60 s y sigue visible después, en gris.

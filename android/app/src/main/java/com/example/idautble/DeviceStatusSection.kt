@@ -3,9 +3,13 @@ package com.example.idautble
 import android.os.SystemClock
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -15,9 +19,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -35,6 +41,7 @@ fun DeviceStatusSection(
     onRefresh: () -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
+    var detailsExpanded by rememberSaveable { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     LaunchedEffect(receivedMs) {
         while (isActive) {
@@ -56,216 +63,196 @@ fun DeviceStatusSection(
         expanded = expanded,
         onToggle = { expanded = !expanded },
     ) {
-        MaintenanceActionButton(
-            text = if (busy) "Querying..." else "Refresh status",
-            onClick = onRefresh,
-            tone = MaintenanceActionTone.INFO,
-            modifier = Modifier.fillMaxWidth(),
-            enabled = ready && !busy,
-        )
-        if (message.isNotBlank()) Text(message, fontSize = 12.sp)
-        if (!ready) Text("Connect and wait for BLE to be ready.", fontSize = 12.sp)
-        status?.let { s ->
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(s.id, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        "Firmware ${s.firmware}",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Surface(
-                    color =
-                        statusColour(if (fresh) StatusTone.INFO else StatusTone.WARNING)
-                            .copy(alpha = 0.10f),
-                    shape = RoundedCornerShape(8.dp),
-                ) {
-                    Text(
-                        if (fresh) "Snapshot • ${age}s" else "Out of date",
-                        Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = statusColour(if (fresh) StatusTone.INFO else StatusTone.WARNING),
-                    )
-                }
-            }
-            if (!fresh)
-                Text(
-                    "Out-of-date snapshot. Refresh to update the indicators.",
-                    color = statusColour(StatusTone.WARNING),
-                    fontSize = 12.sp,
-                )
-
-            StatusPanel {
+        ProvideTextStyle(
+            MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 13.sp)
+        ) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Row(
+                    Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    LedPatternPreview(s.led, receivedMs, fresh && expanded)
-                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(0.dp)) {
                         Text(
-                            "PLC LED",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            ledDescription(s.led),
+                            status?.id ?: "Device status",
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = statusColour(ledStatusTone(s.led, fresh)),
+                            lineHeight = 15.sp,
+                            fontWeight = FontWeight.Bold,
                         )
-                        Text(ledReasonDescription(s.reason), fontSize = 12.sp)
-                    }
-                }
-                Text(
-                    if (fresh) "Pattern preview • based on the last snapshot"
-                    else "Pattern preview paused • snapshot out of date",
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            Text(
-                "BATTERIES",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            // Stack in a narrow panel or at large font sizes rather than squeezing the values.
-            BoxWithConstraints {
-                val stacked =
-                    maxWidth < 300.dp ||
-                        androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.3f
-                if (stacked) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        s.batteries.forEachIndexed { index, b ->
-                            BatteryLevelCard(index + 1, b, s.lowest, fresh, Modifier.fillMaxWidth())
-                        }
-                    }
-                } else {
-                    Row(
-                        Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        s.batteries.forEachIndexed { index, b ->
-                            BatteryLevelCard(
-                                index + 1,
-                                b,
-                                s.lowest,
-                                fresh,
-                                Modifier.weight(1f).fillMaxHeight(),
+                        status?.let {
+                            Text(
+                                "FW ${it.firmware}",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                if (fresh) "Snapshot • ${age}s" else "Out of date • ${age ?: 0}s",
+                                fontSize = 10.sp,
+                                color =
+                                    statusColour(if (fresh) StatusTone.INFO else StatusTone.WARNING),
                             )
                         }
                     }
-                }
-            }
-            val lowestLabel =
-                when (s.lowest) {
-                    "B1" -> "Battery 1"
-                    "B2" -> "Battery 2"
-                    "BOTH" -> "Both (equal)"
-                    else -> "None available"
-                }
-            Text("Lowest present: $lowestLabel", fontSize = 12.sp)
-            Text(
-                "Battery alerts: 3 s confirmation; recovery at 13% / 23%.",
-                fontSize = 10.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            Text(
-                "CONNECTIONS & INPUTS",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(
-                Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                StatusTile(
-                    "WiFi",
-                    if (s.wifi) "Enabled" else "Disabled",
-                    if (s.wifi) StatusTone.INFO else StatusTone.NEUTRAL,
-                    fresh,
-                    Modifier.weight(1f).fillMaxHeight(),
-                )
-                StatusTile(
-                    "TCP",
-                    if (s.tcp) "Up" else "Down",
-                    if (s.tcp) StatusTone.GOOD
-                    else if (s.wifi) StatusTone.WARNING else StatusTone.NEUTRAL,
-                    fresh,
-                    Modifier.weight(1f).fillMaxHeight(),
-                )
-                StatusTile(
-                    "Secure BLE",
-                    if (s.ble) "Ready" else "Not ready",
-                    if (s.ble) StatusTone.GOOD else StatusTone.WARNING,
-                    fresh,
-                    Modifier.weight(1f).fillMaxHeight(),
-                )
-            }
-            Row(
-                Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                StatusTile(
-                    "Photocell",
-                    if (s.photo == "-") "Stabilising" else "Input ${s.photo}",
-                    if (s.photo == "-") StatusTone.WARNING else StatusTone.INFO,
-                    fresh,
-                    Modifier.weight(1f).fillMaxHeight(),
-                )
-                StatusTile(
-                    "RTC",
-                    s.rtc,
-                    if (s.rtc == "OK") StatusTone.GOOD else StatusTone.FAULT,
-                    fresh,
-                    Modifier.weight(1f).fillMaxHeight(),
-                )
-                StatusTile(
-                    "Output expander",
-                    s.outputs,
-                    if (s.outputs == "OK") StatusTone.GOOD else StatusTone.FAULT,
-                    fresh,
-                    Modifier.weight(1f).fillMaxHeight(),
-                )
-            }
-            StatusPanel {
-                val tone =
-                    if (!fresh) StatusTone.NEUTRAL
-                    else
-                        when (s.cut) {
-                            "NO" -> StatusTone.GOOD
-                            "PENDING" -> StatusTone.WARNING
-                            else -> StatusTone.FAULT
-                        }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    StatusDot(statusColour(tone))
-                    Text("Power cut", fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        when (s.cut) {
-                            "NO" -> "No cut"
-                            "PENDING" -> "Pending"
-                            else -> "Confirmed"
-                        },
-                        color = statusColour(tone),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
+                    MaintenanceActionButton(
+                        text = if (busy) "Querying..." else "Refresh",
+                        onClick = onRefresh,
+                        tone = MaintenanceActionTone.INFO,
+                        enabled = ready && !busy,
                     )
                 }
-                if (s.cut != "NO") Text(s.cutReason, fontSize = 11.sp)
+                if (message.isNotBlank()) {
+                    Text(message, fontSize = 11.sp)
+                }
+                if (!ready) {
+                    Text("Connect and wait for BLE to be ready.", fontSize = 11.sp)
+                }
+                status?.let { s ->
+                    if (!fresh) {
+                        Text(
+                            "Out of date. Refresh to update the indicators.",
+                            fontSize = 11.sp,
+                            color = statusColour(StatusTone.WARNING),
+                        )
+                    }
+                    StatusPanel {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            LedPatternPreview(s.led, receivedMs, fresh && expanded)
+                            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                Text(
+                                    "PLC LED • ${ledDescription(s.led)}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = statusColour(ledStatusTone(s.led, fresh)),
+                                )
+                                Text(ledReasonDescription(s.reason), fontSize = 11.sp)
+                            }
+                        }
+                    }
+                    BoxWithConstraints {
+                        val stacked =
+                            maxWidth < 220.dp ||
+                                androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.3f
+                        if (stacked) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                s.batteries.forEachIndexed { index, b ->
+                                    BatteryLevelCard(
+                                        index + 1,
+                                        b,
+                                        s.lowest,
+                                        fresh,
+                                        Modifier.fillMaxWidth(),
+                                    )
+                                }
+                            }
+                        } else {
+                            Row(
+                                Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                s.batteries.forEachIndexed { index, b ->
+                                    BatteryLevelCard(
+                                        index + 1,
+                                        b,
+                                        s.lowest,
+                                        fresh,
+                                        Modifier.weight(1f).fillMaxHeight(),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    val lowestLabel =
+                        when (s.lowest) {
+                            "B1" -> "Battery 1"
+                            "B2" -> "Battery 2"
+                            "BOTH" -> "Both (equal)"
+                            else -> "None available"
+                        }
+                    Text(
+                        "Lowest present: $lowestLabel",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    StatusPanel {
+                        Text(
+                            "CONNECTIONS & INPUTS",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        ConnectionIndicators(s, fresh)
+                    }
+                    StatusPanel {
+                        val tone =
+                            when (s.cut) {
+                                "NO" -> StatusTone.GOOD
+                                "PENDING" -> StatusTone.WARNING
+                                else -> StatusTone.FAULT
+                            }
+                        val cutLabel =
+                            when (s.cut) {
+                                "NO" -> "No cut"
+                                "PENDING" -> "Pending"
+                                else -> "Confirmed"
+                            }
+                        CompactStatusIndicator(
+                            StatusItem("Power cut", cutLabel, tone),
+                            fresh,
+                            Modifier.fillMaxWidth(),
+                        )
+                        if (s.cut != "NO") {
+                            Text(s.cutReason, fontSize = 11.sp)
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .heightIn(min = 32.dp)
+                            .semantics {
+                                stateDescription = if (detailsExpanded) "Expanded" else "Collapsed"
+                            }
+                            .clickable(
+                                role = Role.Button,
+                                onClickLabel = "Toggle diagnostic details",
+                            ) {
+                                detailsExpanded = !detailsExpanded
+                            },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(
+                            if (detailsExpanded) Icons.Default.ExpandLess
+                            else Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text("Diagnostic details", fontSize = 11.sp)
+                    }
+                    if (detailsExpanded) {
+                        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            s.batteries.forEachIndexed { index, b ->
+                                val ageLabel = b.ageMs?.let { "$it ms" } ?: "unavailable"
+                                Text(
+                                    "Battery ${index + 1}: ${b.state} • sample at query: $ageLabel",
+                                    fontSize = 10.sp,
+                                )
+                            }
+                            Text(
+                                "Battery alerts: 3 s confirmation; recovery at 13% / 23%.",
+                                fontSize = 10.sp,
+                            )
+                            Text(
+                                if (fresh)
+                                    "LED pattern preview • based on the last snapshot; phase not synchronised."
+                                else "LED preview paused • snapshot out of date.",
+                                fontSize = 10.sp,
+                            )
+                            Text("Output status refers to the expander feedback.", fontSize = 10.sp)
+                        }
+                    }
+                }
             }
         }
     }
@@ -286,13 +273,13 @@ private fun statusColour(tone: StatusTone): Color {
 @Composable
 private fun StatusPanel(content: @Composable ColumnScope.() -> Unit) {
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
-            Modifier.fillMaxWidth().padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            Modifier.fillMaxWidth().padding(6.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
             content = content,
         )
     }
@@ -312,7 +299,7 @@ private fun LedPatternPreview(mode: String, receivedMs: Long?, fresh: Boolean) {
     val colour = statusColour(ledStatusTone(mode, fresh))
     val off = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.16f)
     Canvas(
-        Modifier.size(54.dp).semantics {
+        Modifier.size(22.dp).semantics {
             // Stable across individual flashes: TalkBack should not announce every pulse.
             contentDescription =
                 "LED pattern preview. ${ledDescription(mode)}. ${if (fresh) "Snapshot available" else "Paused, out of date"}."
@@ -341,7 +328,7 @@ private fun BatteryLevelCard(
     val isLowest = battery.state == "PRESENT" && (lowest == "B$number" || lowest == "BOTH")
     Surface(
         modifier.semantics(mergeDescendants = true) {},
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surface,
         border =
             BorderStroke(
@@ -350,24 +337,30 @@ private fun BatteryLevelCard(
                 else MaterialTheme.colorScheme.outlineVariant,
             ),
     ) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 StatusDot(colour)
-                Text("Battery $number", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    "Battery $number",
+                    Modifier.weight(1f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    if (level != null) "${battery.percent}%" else "—",
+                    fontSize = 16.sp,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colour,
+                )
             }
-            Text(
-                if (level != null) "${battery.percent}%" else "—",
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
-                color = colour,
-            )
             LinearProgressIndicator(
                 progress = { level ?: 0f },
                 modifier =
-                    Modifier.fillMaxWidth().height(8.dp).clip(CircleShape).clearAndSetSemantics {},
+                    Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).clearAndSetSemantics {},
                 color = colour,
                 trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.09f),
             )
@@ -378,17 +371,11 @@ private fun BatteryLevelCard(
                     "STALE" -> "Old measurement"
                     else -> "Invalid reading"
                 },
-                fontSize = 11.sp,
+                fontSize = 10.sp,
             )
-            if (!fresh)
+            if (!fresh) {
                 Text(
                     "Last snapshot",
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            battery.ageMs?.let {
-                Text(
-                    "Sample at query: $it ms",
                     fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -397,30 +384,84 @@ private fun BatteryLevelCard(
     }
 }
 
+private data class StatusItem(val label: String, val value: String, val tone: StatusTone)
+
 @Composable
-private fun StatusTile(
-    label: String,
-    value: String,
-    tone: StatusTone,
-    fresh: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    val colour = statusColour(if (fresh) tone else StatusTone.NEUTRAL)
-    Surface(
-        modifier.semantics(mergeDescendants = true) {},
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            StatusDot(colour)
-            Text(label, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colour)
+private fun ConnectionIndicators(s: DeviceStatus, fresh: Boolean) {
+    val items =
+        listOf(
+            StatusItem(
+                "WiFi",
+                if (s.wifi) "Enabled" else "Disabled",
+                if (s.wifi) StatusTone.INFO else StatusTone.NEUTRAL,
+            ),
+            StatusItem(
+                "TCP",
+                if (s.tcp) "Up" else "Down",
+                if (s.tcp) StatusTone.GOOD
+                else if (s.wifi) StatusTone.WARNING else StatusTone.NEUTRAL,
+            ),
+            StatusItem(
+                "BLE secure",
+                if (s.ble) "Ready" else "Not ready",
+                if (s.ble) StatusTone.GOOD else StatusTone.WARNING,
+            ),
+            StatusItem(
+                "Photocell",
+                if (s.photo == "-") "Stabilising" else "Input ${s.photo}",
+                if (s.photo == "-") StatusTone.WARNING else StatusTone.INFO,
+            ),
+            StatusItem("RTC", s.rtc, if (s.rtc == "OK") StatusTone.GOOD else StatusTone.FAULT),
+            StatusItem(
+                "Output expander",
+                s.outputs,
+                if (s.outputs == "OK") StatusTone.GOOD else StatusTone.FAULT,
+            ),
+        )
+    BoxWithConstraints {
+        val columns =
+            if (
+                maxWidth < 240.dp ||
+                    androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.3f
+            )
+                1
+            else 2
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            items.chunked(columns).forEach { group ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    group.forEach { item ->
+                        CompactStatusIndicator(item, fresh, Modifier.weight(1f))
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
+private fun CompactStatusIndicator(
+    item: StatusItem,
+    fresh: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val colour = statusColour(if (fresh) item.tone else StatusTone.NEUTRAL)
+    Row(
+        modifier.semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        StatusDot(colour)
+        Text(
+            item.label,
+            Modifier.weight(1f),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(item.value, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = colour)
+    }
+}
+
+@Composable
 private fun StatusDot(colour: Color) {
-    Canvas(Modifier.size(8.dp)) { drawCircle(colour) }
+    Canvas(Modifier.size(6.dp)) { drawCircle(colour) }
 }

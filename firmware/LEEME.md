@@ -274,5 +274,5 @@ histórica del corte. La banda de batería conserva confirmación de 3 s e hist�
 (13/23 % para recuperar), de modo que el patrón puede mantenerse tras una subida.
 
 STATUS no guarda nada en NVS ni genera eventos de negocio. La app conserva
-hora local monotónica de recepción, avisa tras 15 s y borra la instantánea al
+hora local monotónica de recepción, avisa tras 60 s (app 1.3.9) y borra la instantánea al
 perder conexión. El firmware no cambia la calibración ni la política de corte.

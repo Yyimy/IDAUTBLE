@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.8-plc3, versionCode 12 |
+| App Android | [android/](android/) | 1.3.9-plc3, versionCode 13 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.6-rc1 |
 
 ## Trabajar sin ZIP
@@ -138,16 +138,16 @@ compilar): `python3 android/tests/test_gatt_permissions.py`. Se pueden indicar
 JAVA_HOME y GRADLE_USER_HOME iguales a los usados para Gradle. Esta prueba no
 sustituye la comprobación en Android al revocar permisos desde Ajustes.
 
-## Device status (app 1.3.7 / firmware 3.0.6)
+## Device status (app 1.3.9 / firmware 3.0.6)
 
 En TERMINAL, después de DEVICE ID, **DEVICE STATUS** es una sección plegable.
-Se consulta una vez al completar el handshake BLE y con **Refresh status**;
+Se consulta una vez al completar el handshake BLE y con **Refresh**;
 no requiere autorizar mantenimiento. Muestra firmware e ID, modo/motivo del LED,
 ambas baterías (tensión, porcentaje estimado, ausencia o medida inválida/antigua),
 la batería presente de menor nivel, WiFi habilitado, enlace TCP, notificaciones BLE,
 fotocélula estabilizada, RTC, expansor de salidas y corte solicitado/confirmado.
 
-Es una instantánea: muestra su antigüedad y avisa pasados 15 s. La edad de cada
+Es una instantánea: muestra su antigüedad y avisa pasados 60 s. La edad de cada
 muestra ADC se refiere al momento de la consulta. Al desconectar se borra todo
 el estado para no mostrar datos de otra carretilla. Tras 6 s sin respuesta se
 avisa de conexión o firmware incompatible; los demás comandos siguen disponibles.
@@ -161,7 +161,7 @@ Detalles del esquema: [firmware/LEEME.md](firmware/LEEME.md).
 Prueba adicional: `python3 firmware/tests/test_status.py`.
 
 
-## Panel visual de estado (app 1.3.8)
+## Panel visual de estado (app 1.3.9)
 
 DEVICE STATUS conserva la consulta y sus datos, presentados en tarjetas:
 círculo animado para el patrón del LED, barras y porcentajes de ambas baterías,
@@ -174,10 +174,25 @@ La animación reproduce la cadencia de firmware 3.0.6, con fase ilustrativa:
 STATUS no transmite sincronización del LED físico. Los colores son indicadores
 de la app; el PLC conserva su único LED. Al plegar se pausa el parpadeo; sin
 instantánea reciente se detiene y todos los indicadores pasan a gris. Se avisa
-al superar 15 s desde la recepción. Las barras conservan el último nivel visible
-con la indicación Last snapshot. Refresh status consulta de nuevo como antes;
+al superar 60 s desde la recepción. Las barras conservan el último nivel visible
+con la indicación Last snapshot. Refresh consulta de nuevo como antes;
 no se añade sondeo ni se modifican los comandos.
 
 Incluye colores adaptados a temas claro/oscuro y disposición vertical de baterías
 en paneles estrechos o con fuente grande. Solo requiere actualizar la app;
 el firmware 3.0.6 de la función STATUS permanece igual.
+
+
+### Presentación compacta (1.3.9)
+
+El círculo LED pasa de 54 a 22 dp; los porcentajes de 26 a 16 sp y comparten
+línea con el nombre de la batería. Se reducen rellenos, separaciones y la altura de línea del panel (base 13 sp). Las seis
+tarjetas de conexiones se sustituyen por filas de indicadores dentro de un solo
+panel (dos columnas si hay espacio). ID, firmware, antigüedad y Refresh comparten
+cabecera; se omite el mensaje redundante de recepción correcta, conservando errores.
+
+La edad de las muestras ADC y las explicaciones del patrón/umbrales siguen
+accesibles en **Diagnostic details**, plegado de inicio. El estado del LED, su
+motivo, barras/voltios, conexiones y corte permanecen visibles. La instantánea
+conserva color y vista previa durante 60 s; luego sigue visible en gris con aviso.
+Solo se actualiza la app; firmware y frecuencia de consultas permanecen iguales.

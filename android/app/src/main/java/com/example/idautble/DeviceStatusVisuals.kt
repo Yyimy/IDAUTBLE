@@ -60,4 +60,4 @@ fun batteryStatusTone(battery: BatteryStatus, fresh: Boolean): StatusTone {
 
 /** Monotonic receipt time; stale snapshots must not animate or appear healthy. */
 fun deviceStatusIsFresh(receivedMs: Long?, nowMs: Long, ready: Boolean): Boolean =
-    ready && receivedMs != null && (nowMs - receivedMs).coerceAtLeast(0L) <= 15_000L
+    ready && receivedMs != null && (nowMs - receivedMs).coerceAtLeast(0L) <= 60_000L

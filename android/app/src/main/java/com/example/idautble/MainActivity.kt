@@ -1094,7 +1094,7 @@ class MainActivity : ComponentActivity() {
             if (status != null) {
                 uiDeviceStatus.value = status
                 uiDeviceStatusReceived.value = SystemClock.elapsedRealtime()
-                uiDeviceStatusMessage.value = "Snapshot received. Use Refresh status to update."
+                uiDeviceStatusMessage.value = ""
             } else {
                 uiDeviceStatusMessage.value =
                     if (uiDeviceStatus.value == null) "Invalid or unsupported status response."
