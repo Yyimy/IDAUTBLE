@@ -149,7 +149,7 @@ class MainActivity : ComponentActivity() {
     private val permLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             if (hasScanPermission() && hasConnectPermission()) initBluetooth()
-            else log(LogLevel.WARN, "Concede los permisos Bluetooth para buscar y conectar el PLC")
+            else log(LogLevel.WARN, "Grant Bluetooth permissions to find and connect to the PLC")
         }
 
     private fun requestBlePermissions() {
@@ -316,7 +316,7 @@ class MainActivity : ComponentActivity() {
     private val uiPinDialog = mutableStateOf(false)
     private val uiPinValue = mutableStateOf("")
     private val uiRememberPin = mutableStateOf(false)
-    private val uiMaintenanceStatus = mutableStateOf("Solo lectura / sin autorizar")
+    private val uiMaintenanceStatus = mutableStateOf("Read-only / not authorised")
 
     private val uiIdentityDialog = mutableStateOf(false)
     private val uiIdentity = mutableStateOf<EquipmentIdentity?>(null)
@@ -405,13 +405,13 @@ class MainActivity : ComponentActivity() {
             val adapter = bm.adapter
             if (adapter == null || !adapter.isEnabled) {
                 scanner = null
-                log(LogLevel.WARN, "Activa Bluetooth en los ajustes de Android")
+                log(LogLevel.WARN, "Enable Bluetooth in Android settings")
                 return
             }
             scanner = adapter.bluetoothLeScanner
         } catch (_: SecurityException) {
             scanner = null
-            log(LogLevel.WARN, "Permiso Bluetooth pendiente")
+            log(LogLevel.WARN, "Bluetooth permission is pending")
         }
     }
 
@@ -482,7 +482,7 @@ class MainActivity : ComponentActivity() {
         }
         if (scanner == null) initBluetooth()
         if (scanner == null) {
-            log(LogLevel.WARN, "Bluetooth no disponible; revisa los ajustes y permisos")
+            log(LogLevel.WARN, "Bluetooth is unavailable; check settings and permissions")
             return
         }
         scanning = true
@@ -694,7 +694,7 @@ class MainActivity : ComponentActivity() {
             }
         if (!ok) {
             servicesRequested = false
-            log(LogLevel.WARN, "Android ocupado; reintentando descubrimiento de servicios")
+            log(LogLevel.WARN, "Android is busy; retrying service discovery")
             mainHandler.postDelayed(
                 { if (gatt === g && !servicesRequested) requestServicesOnce(g) },
                 1000,
@@ -767,7 +767,7 @@ class MainActivity : ComponentActivity() {
         uiPinDialog.value = false
         uiPinValue.value = ""
         uiRememberPin.value = false
-        uiMaintenanceStatus.value = "Solo lectura / sin autorizar"
+        uiMaintenanceStatus.value = "Read-only / not authorised"
         bleChannelReady = false
         setupStarted = false
         negotiatedMtu = 23
@@ -783,7 +783,7 @@ class MainActivity : ComponentActivity() {
 
     private fun openPinDialog() {
         if (!bleChannelReady) {
-            log(LogLevel.WARN, "Espera a completar la conexión BLE")
+            log(LogLevel.WARN, "Wait for the BLE connection to complete")
             return
         }
         val address = lastConnectedAddress ?: return
@@ -801,8 +801,8 @@ class MainActivity : ComponentActivity() {
         uiRememberPin.value = false
         pendingProtected.clear()
         authInFlight = false
-        uiMaintenanceStatus.value = "PIN olvidado en esta app"
-        log(LogLevel.INFO, "PIN local eliminado y bloqueo del acceso solicitado.")
+        uiMaintenanceStatus.value = "Saved PIN removed from this app"
+        log(LogLevel.INFO, "Saved PIN removed and access lock requested.")
     }
 
     private fun lockMaintenance() {
@@ -815,32 +815,29 @@ class MainActivity : ComponentActivity() {
         writeQueue.removeAll { it.tag == "AUTH" || requiresMaintenanceAuthorization(it.data) }
         if (bleChannelReady && deviceConnected) {
             lockAwaiting = true
-            uiMaintenanceStatus.value = "Bloqueando mantenimiento..."
+            uiMaintenanceStatus.value = "Locking maintenance access..."
             writeQueue.addFirst(PendingWrite("AUTH=OFF\r\n".toByteArray(Charsets.UTF_8), "LOCK"))
             pumpWrites()
             val g = gatt
             mainHandler.postDelayed(
                 {
                     if (gatt === g && lockAwaiting) {
-                        log(
-                            LogLevel.WARN,
-                            "Bloqueo no confirmado: desconectando para revocar el acceso",
-                        )
+                        log(LogLevel.WARN, "Lock not confirmed: disconnecting to revoke access")
                         disconnectGatt(silentLog = true)
                     }
                 },
                 10000,
             )
-        } else uiMaintenanceStatus.value = "Solo lectura / mantenimiento bloqueado"
+        } else uiMaintenanceStatus.value = "Read-only / maintenance locked"
     }
 
     private fun startAuthorization(pin: String, remember: Boolean) {
         if (!validMaintenancePin(pin)) {
-            log(LogLevel.WARN, "El PIN debe tener seis cifras")
+            log(LogLevel.WARN, "The PIN must contain six digits")
             return
         }
         if (!bleChannelReady) {
-            log(LogLevel.WARN, "Canal BLE todavía no disponible")
+            log(LogLevel.WARN, "The BLE channel is not ready yet")
             return
         }
         if (authInFlight) return
@@ -849,18 +846,18 @@ class MainActivity : ComponentActivity() {
         rememberOnSuccess = remember
         authInFlight = true
         authAttempt++
-        uiMaintenanceStatus.value = "Comprobando PIN..."
+        uiMaintenanceStatus.value = "Checking PIN..."
         enqueueWrite(PendingWrite("AUTH=$pin\r\n".toByteArray(Charsets.UTF_8), "AUTH", authAttempt))
     }
 
-    private fun authorizationFailed(reason: String) {
+    private fun authorizationFailed(reason: String, incorrectPin: Boolean = false) {
         authInFlight = false
         maintenanceSession.reset()
         pendingProtected.clear()
         sessionPin = null
         uiPinValue.value = ""
         uiMaintenanceStatus.value = reason
-        if (reason.contains("incorrecto")) lastConnectedAddress?.let { credentialStore.remove(it) }
+        if (incorrectPin) lastConnectedAddress?.let { credentialStore.remove(it) }
         log(LogLevel.WARN, reason)
     }
 
@@ -868,16 +865,16 @@ class MainActivity : ComponentActivity() {
     private fun sendBytes(data: ByteArray, tag: String) {
         if (!ensureConnectPermissionOrRequest()) return
         if (!deviceConnected || gatt == null || txChar == null) {
-            log(LogLevel.WARN, "No conectado")
+            log(LogLevel.WARN, "Not connected")
             return
         }
         val ready = data.contentEquals(byteArrayOf(ESC, 'C'.code.toByte(), CR, LF))
         if (!bleChannelReady && !ready) {
-            log(LogLevel.WARN, "Espera al emparejamiento y al canal BLE")
+            log(LogLevel.WARN, "Wait for pairing and the BLE channel to be ready")
             return
         }
         if (data.isEmpty() || data.size >= 384) {
-            log(LogLevel.WARN, "El firmware admite comandos de hasta 383 bytes")
+            log(LogLevel.WARN, "The firmware accepts commands of up to 383 bytes")
             return
         }
         val text = data.toString(Charsets.UTF_8).trim()
@@ -892,7 +889,7 @@ class MainActivity : ComponentActivity() {
         val packet = PendingWrite(data.copyOf(), tag)
         if (requiresMaintenanceAuthorization(data) && !maintenanceSession.isAuthorized()) {
             if (pendingProtected.size >= 8) {
-                log(LogLevel.WARN, "Demasiados cambios esperando autorización")
+                log(LogLevel.WARN, "Too many changes are waiting for authorisation")
                 return
             }
             pendingProtected.addLast(packet)
@@ -912,8 +909,9 @@ class MainActivity : ComponentActivity() {
 
     private fun enqueueWrite(packet: PendingWrite): Boolean {
         if (writeQueue.size >= 24) {
-            log(LogLevel.ERR, "Cola de envío llena: comando no enviado")
-            if (packet.tag == "AUTH") authorizationFailed("No se pudo encolar la autorización")
+            log(LogLevel.ERR, "Send queue is full: command not sent")
+            if (packet.tag == "AUTH")
+                authorizationFailed("Could not queue the authorisation request")
             return false
         }
         writeQueue.addLast(packet)
@@ -933,12 +931,12 @@ class MainActivity : ComponentActivity() {
         logTraffic(
             LogLevel.TX,
             redactProtocolText(asciiPretty(packet.data)),
-            if (secret) "[contenido sensible oculto]" else bytesToHex(packet.data),
+            if (secret) "[sensitive content hidden]" else bytesToHex(packet.data),
             packet.data.size,
         )
         try {
             if (activeReliableWrite && !g.beginReliableWrite()) {
-                failWrite("No se pudo iniciar escritura larga")
+                failWrite("Could not start a long write")
                 return
             }
             ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
@@ -955,7 +953,7 @@ class MainActivity : ComponentActivity() {
                     @Suppress("DEPRECATION") g.writeCharacteristic(ch)
                 }
             if (!ok) {
-                failWrite("Android rechazó el envío; vuelve a intentarlo")
+                failWrite("Android rejected the send request; try again")
                 return
             }
             val text = packet.data.toString(Charsets.UTF_8).trim()
@@ -965,22 +963,22 @@ class MainActivity : ComponentActivity() {
                 uiOtaDone.value = false
                 uiOtaActive.value = true
                 uiOtaStatus.value =
-                    if (text == "OTA=START") "START enviado. Esperando PLC..."
-                    else "URL enviada. Esperando HTTP_GET..."
+                    if (text == "OTA=START") "START sent. Waiting for the PLC..."
+                    else "URL sent. Waiting for HTTP_GET..."
             }
             val timeout = Runnable {
                 if (gatt === g && activeWrite === packet) {
-                    failWrite("Timeout GATT; reconecta antes de repetir el comando")
+                    failWrite("GATT timeout; reconnect before retrying the command")
                     disconnectGatt(silentLog = true)
                 }
             }
             txTimeout = timeout
             mainHandler.postDelayed(timeout, 10000)
         } catch (_: SecurityException) {
-            failWrite("Permiso Bluetooth no concedido")
+            failWrite("Bluetooth permission was not granted")
             requestBlePermissions()
         } catch (_: Exception) {
-            failWrite("Fallo al enviar el comando BLE")
+            failWrite("Failed to send the BLE command")
         }
     }
 
@@ -998,7 +996,7 @@ class MainActivity : ComponentActivity() {
         pendingProtected.clear()
         authInFlight = false
         maintenanceSession.reset()
-        uiMaintenanceStatus.value = "Acceso no confirmado"
+        uiMaintenanceStatus.value = "Access not confirmed"
         if (uiOtaActive.value) {
             uiOtaErr.value = reason
             uiOtaActive.value = false
@@ -1017,7 +1015,7 @@ class MainActivity : ComponentActivity() {
             mainHandler.postDelayed(
                 {
                     if (gatt === g && authInFlight && authAttempt == packet.authAttempt) {
-                        authorizationFailed("El PLC no confirmó la autorización")
+                        authorizationFailed("The PLC did not confirm authorisation")
                         disconnectGatt(silentLog = true)
                     }
                 },
@@ -1044,7 +1042,7 @@ class MainActivity : ComponentActivity() {
             }
             if (identityExpected == identity.id) {
                 uiIdentityStatus.value =
-                    "ID guardado en el PLC. Al volver a buscar aparecerá como ${identity.bluetoothName}."
+                    "ID saved on the PLC. The next scan will show it as ${identity.bluetoothName}."
                 identityExpected = null
                 uiIdentityBusy.value = false
                 identityRequest++
@@ -1052,7 +1050,7 @@ class MainActivity : ComponentActivity() {
                 log(LogLevel.INFO, uiIdentityStatus.value)
             } else if (identityExpected == null && uiIdentityBusy.value) {
                 uiIdentityDraft.value = identity.id
-                uiIdentityStatus.value = "Introduce el identificador de la carretilla."
+                uiIdentityStatus.value = "Enter the forklift ID."
                 uiIdentityBusy.value = false
                 identityRequest++
             }
@@ -1065,21 +1063,21 @@ class MainActivity : ComponentActivity() {
             uiIdentityStatus.value =
                 when (text) {
                     "ERR=ID_BUSY" ->
-                        "Espera a terminar las lecturas, el envío de eventos y el OTA. No es necesario retirar el palet."
+                        "Wait for scans, event delivery and OTA to finish. You do not need to unload the pallet."
                     "ERR=ID_INVALID" ->
-                        "ID no válido: usa de 1 a 20 caracteres, letras A-Z, números, espacios, guion o guion bajo."
+                        "Invalid ID: use 1–20 characters: A-Z, numbers, spaces, hyphens or underscores."
                     "ERR=ID_STORAGE" ->
-                        "El PLC no pudo guardar el ID. Vuelve a consultarlo antes de repetir."
+                        "The PLC could not save the ID. Query it again before retrying."
                     "ERR=ID_BLUETOOTH" ->
-                        "No se pudo actualizar el nombre Bluetooth. Consulta el ID y vuelve a intentarlo."
+                        "Could not update the Bluetooth name. Query the ID and try again."
                     else ->
-                        "Cambio o consulta no confirmado: $text. Comprueba que el firmware admite ID?."
+                        "Change or query not confirmed: $text. Check that the firmware supports ID?."
                 }
         }
         if (message.acknowledged && text == "CONECTADO") {
             readyOk = true
             bleChannelReady = true
-            log(LogLevel.INFO, "BLE listo. Consultas disponibles.")
+            log(LogLevel.INFO, "BLE ready. Queries are available.")
             if (connectionHandshake.onConnected()) {
                 sendText("INFO?", true)
                 sendText("ID?", true)
@@ -1095,14 +1093,17 @@ class MainActivity : ComponentActivity() {
             if (sessionGrant) maintenanceSession.authorizeSession()
             else maintenanceSession.authorize(ttl)
             uiMaintenanceStatus.value =
-                if (sessionGrant) "Mantenimiento autorizado"
-                else "Acceso temporal: firmware anterior ($ttl s)"
+                if (sessionGrant) "Maintenance authorised"
+                else "Temporary access: older firmware ($ttl s)"
             val address = lastConnectedAddress
             if (address != null && rememberOnSuccess && sessionPin != null)
                 try {
                     credentialStore.save(address, sessionPin!!)
                 } catch (_: Exception) {
-                    log(LogLevel.WARN, "PIN válido, pero no se pudo recordar de forma cifrada")
+                    log(
+                        LogLevel.WARN,
+                        "PIN accepted, but it could not be saved in encrypted storage",
+                    )
                 }
             else if (address != null && !rememberOnSuccess) credentialStore.remove(address)
             val g = gatt
@@ -1111,7 +1112,7 @@ class MainActivity : ComponentActivity() {
                     {
                         if (gatt === g && !blockedByUser && !maintenanceSession.isAuthorized())
                             uiMaintenanceStatus.value =
-                                "Acceso caducado en firmware anterior; actualiza el PLC"
+                                "Access expired on older firmware; update the PLC"
                     },
                     ttl.coerceIn(1, 300) * 1000L,
                 )
@@ -1121,44 +1122,47 @@ class MainActivity : ComponentActivity() {
         if (message.acknowledged && text == "AUTH=OFF") {
             lockAwaiting = false
             maintenanceSession.reset()
-            uiMaintenanceStatus.value = "Solo lectura / mantenimiento bloqueado"
+            uiMaintenanceStatus.value = "Read-only / maintenance locked"
             return
         }
         if (message.rejected) {
             if (lockAwaiting && text.startsWith("ERR=AUTH")) {
                 log(
                     LogLevel.WARN,
-                    "El firmware anterior no permite bloquear: desconectando para revocar el acceso",
+                    "Older firmware does not support locking: disconnecting to revoke access",
                 )
                 disconnectGatt(silentLog = true)
                 return
             }
             when {
                 text == "ERR=AUTH" ->
-                    authorizationFailed("PIN incorrecto. Revisa PLC_MAINTENANCE_PIN.")
+                    authorizationFailed(
+                        "Incorrect PIN. Check PLC_MAINTENANCE_PIN.",
+                        incorrectPin = true,
+                    )
                 text == "ERR=AUTH_LOCKED" ->
-                    authorizationFailed("PIN bloqueado temporalmente. Espera un minuto.")
+                    authorizationFailed("PIN temporarily locked. Wait one minute.")
                 text == "ERR=AUTH_REQUIRED" ->
                     authorizationFailed(
-                        "Autorización requerida. Pulsa PIN / Acceso y repite la operación."
+                        "Authorisation required. Open PIN / ACCESS and retry the operation."
                     )
                 text == "BUSY" || text == "ERR=BUSY" ->
                     log(
                         LogLevel.WARN,
-                        "PLC ocupado; operación rechazada. Reinténtala cuando termine.",
+                        "PLC is busy; operation rejected. Try again when it finishes.",
                     )
                 text == "ERR=NOT_IDLE" -> {
                     uiOtaErr.value =
-                        "Vacía las horquillas y espera a terminar las lecturas antes de iniciar OTA."
+                        "Unload the forks and wait for scans to finish before starting OTA."
                     uiOtaActive.value = false
                 }
-                text.startsWith("ERR=") -> log(LogLevel.WARN, "PLC rechazó la operación: $text")
+                text.startsWith("ERR=") -> log(LogLevel.WARN, "PLC rejected the operation: $text")
             }
         }
         if (text.startsWith("FW=") && text.contains("ACKMODE=1"))
             log(
                 LogLevel.WARN,
-                "PLC en ACKMODE=1: esta app de mantenimiento no confirma registros de negocio. Usa ACKMODE=0 salvo receptor integrado.",
+                "PLC is in ACKMODE=1: this maintenance app does not acknowledge business records. Use ACKMODE=0 unless an integrated receiver handles acknowledgements.",
             )
     }
 
@@ -1167,20 +1171,14 @@ class MainActivity : ComponentActivity() {
         when (g.device.bondState) {
             BluetoothDevice.BOND_BONDED -> beginGattSetup(g)
             BluetoothDevice.BOND_BONDING ->
-                log(
-                    LogLevel.INFO,
-                    "Esperando emparejamiento. Introduce el PIN en el diálogo de Android.",
-                )
+                log(LogLevel.INFO, "Waiting for pairing. Enter the PIN in the Android dialog.")
             else -> {
                 log(
                     LogLevel.INFO,
-                    "Empareja con el PIN configurado en el firmware (diálogo de Android).",
+                    "Pair using the PIN configured in the firmware (Android dialog).",
                 )
                 if (!g.device.createBond())
-                    log(
-                        LogLevel.WARN,
-                        "No se pudo iniciar el emparejamiento; abre los ajustes Bluetooth.",
-                    )
+                    log(LogLevel.WARN, "Could not start pairing; open Bluetooth settings.")
             }
         }
         mainHandler.postDelayed(
@@ -1188,7 +1186,7 @@ class MainActivity : ComponentActivity() {
                 if (gatt === g && !setupStarted) {
                     log(
                         LogLevel.WARN,
-                        "Emparejamiento pendiente. Olvida el PLC en Android si has cambiado el PIN.",
+                        "Pairing is pending. Forget the PLC in Android if you have changed its PIN.",
                     )
                     disconnectGatt(silentLog = true)
                 }
@@ -1206,7 +1204,7 @@ class MainActivity : ComponentActivity() {
                 if (gatt === g && !bleChannelReady) {
                     log(
                         LogLevel.WARN,
-                        "No se ha completado el canal BLE. Revisa vínculo/PIN y vuelve a conectar.",
+                        "The BLE channel is not ready. Check the pairing/PIN and reconnect.",
                     )
                     disconnectGatt(silentLog = true)
                 }
@@ -1255,7 +1253,7 @@ class MainActivity : ComponentActivity() {
                     BluetoothDevice.BOND_NONE -> {
                         log(
                             LogLevel.WARN,
-                            "Emparejamiento cancelado o rechazado. Si cambió el PIN, olvida el PLC y vuelve a vincular.",
+                            "Pairing cancelled or rejected. If the PIN has changed, forget the PLC and pair again.",
                         )
                         disconnectGatt(silentLog = true)
                     }
@@ -1383,7 +1381,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (streamDecoder.discardedBuffers != before)
-            log(LogLevel.WARN, "RX incompleta descartada; canal resincronizado")
+            log(LogLevel.WARN, "Incomplete RX discarded; channel resynchronised")
     }
 
     // ============================
@@ -1414,7 +1412,7 @@ class MainActivity : ComponentActivity() {
                             status != BluetoothGatt.GATT_SUCCESS
                     ) {
                         val shouldReconnect = otaRebootExpected
-                        log(LogLevel.INFO, "BLE desconectado (status=$status)")
+                        log(LogLevel.INFO, "BLE disconnected (status=$status)")
                         resetSecureTransport()
                         try {
                             g.close()
@@ -1449,18 +1447,18 @@ class MainActivity : ComponentActivity() {
                 mainHandler.post {
                     if (gatt === g) {
                         if (status != BluetoothGatt.GATT_SUCCESS) {
-                            log(LogLevel.ERR, "No se pudieron descubrir los servicios BLE")
+                            log(LogLevel.ERR, "Could not discover BLE services")
                             return@post
                         }
                         val ch = g.getService(SERVICE_UUID)?.getCharacteristic(CHAR_UUID)
                         if (ch == null) {
-                            log(LogLevel.ERR, "El PLC no ofrece FFE0/FFE1")
+                            log(LogLevel.ERR, "The PLC does not provide FFE0/FFE1")
                             return@post
                         }
                         txChar = ch
                         cccdAttempts = 1
                         if (!startEnableNotify(g, ch))
-                            log(LogLevel.ERR, "No se pudieron activar las notificaciones")
+                            log(LogLevel.ERR, "Could not enable notifications")
                     }
                 }
             }
@@ -1474,7 +1472,7 @@ class MainActivity : ComponentActivity() {
                     if (gatt === g && descriptor.uuid == CCCD_UUID) {
                         if (status == BluetoothGatt.GATT_SUCCESS) {
                             notifyEnabled = true
-                            log(LogLevel.INFO, "Notificaciones listas; verificando PLC...")
+                            log(LogLevel.INFO, "Notifications ready; checking the PLC...")
                             sendEscCmd('C')
                         } else if ((status == 5 || status == 15) && cccdAttempts < 2) {
                             cccdAttempts++
@@ -1486,7 +1484,7 @@ class MainActivity : ComponentActivity() {
                             notifyEnabled = false
                             log(
                                 LogLevel.ERR,
-                                "Notificaciones rechazadas ($status). Revisa el emparejamiento y el PIN.",
+                                "Notifications rejected ($status). Check the pairing and PIN.",
                             )
                         }
                     }
@@ -1501,17 +1499,16 @@ class MainActivity : ComponentActivity() {
                 mainHandler.post {
                     if (gatt !== g || ch.uuid != CHAR_UUID || activeWrite == null) return@post
                     if (status != BluetoothGatt.GATT_SUCCESS) {
-                        failWrite("Escritura BLE rechazada ($status). Revisa vínculo/PIN.")
+                        failWrite("BLE write rejected ($status). Check the pairing/PIN.")
                         return@post
                     }
                     if (activeReliableWrite) {
                         @Suppress("DEPRECATION") val echo = ch.value
                         if (echo != null && !echo.contentEquals(activeWrite!!.data)) {
-                            failWrite("La escritura larga no coincide con el comando")
+                            failWrite("The long write does not match the command")
                             return@post
                         }
-                        if (!g.executeReliableWrite())
-                            failWrite("No se pudo confirmar la escritura larga")
+                        if (!g.executeReliableWrite()) failWrite("Could not confirm the long write")
                     } else completeWrite()
                 }
             }
@@ -1520,7 +1517,7 @@ class MainActivity : ComponentActivity() {
                 mainHandler.post {
                     if (gatt === g && activeWrite != null) {
                         if (status == BluetoothGatt.GATT_SUCCESS) completeWrite()
-                        else failWrite("Escritura larga rechazada ($status)")
+                        else failWrite("Long write rejected ($status)")
                     }
                 }
             }
@@ -1619,17 +1616,12 @@ class MainActivity : ComponentActivity() {
     // EQUIPMENT ID
     // ============================
     private fun showIdentityAuthorizationMessage() {
-        Toast.makeText(
-                this,
-                "Primero debes introducir la contraseña en PIN / ACCESO.",
-                Toast.LENGTH_LONG,
-            )
-            .show()
+        Toast.makeText(this, "Enter the PIN in PIN / ACCESS first.", Toast.LENGTH_LONG).show()
     }
 
     private fun openIdentityDialog() {
         if (!bleChannelReady) {
-            log(LogLevel.WARN, "Espera a completar la conexión BLE")
+            log(LogLevel.WARN, "Wait for the BLE connection to complete")
             return
         }
         if (!maintenanceSession.isAuthorized()) {
@@ -1638,7 +1630,7 @@ class MainActivity : ComponentActivity() {
         }
         uiIdentityDialog.value = true
         uiIdentityDraft.value = uiIdentity.value?.id ?: ""
-        uiIdentityStatus.value = "Consultando ID del PLC..."
+        uiIdentityStatus.value = "Querying the PLC ID..."
         uiIdentityBusy.value = true
         identityExpected = null
         sendText("ID?", true)
@@ -1656,7 +1648,7 @@ class MainActivity : ComponentActivity() {
         uiIdentityDraft.value = id
         uiIdentityBusy.value = true
         identityExpected = id
-        uiIdentityStatus.value = "Esperando confirmación del PLC..."
+        uiIdentityStatus.value = "Waiting for PLC confirmation..."
         sendText("ID=$id", true)
         scheduleIdentityTimeout()
     }
@@ -1670,7 +1662,7 @@ class MainActivity : ComponentActivity() {
                     uiIdentityBusy.value = false
                     identityExpected = null
                     uiIdentityStatus.value =
-                        "Sin confirmación. Cierra y vuelve a abrir para consultar el ID real. Requiere firmware 3.0.4 o posterior."
+                        "No confirmation received. Close and reopen to query the current ID. Requires firmware 3.0.4 or later."
                 }
             },
             10000,
@@ -1792,7 +1784,7 @@ class MainActivity : ComponentActivity() {
                         onCancel = {
                             uiPinDialog.value = false
                             pendingProtected.clear()
-                            uiMaintenanceStatus.value = "Autorización cancelada"
+                            uiMaintenanceStatus.value = "Authorisation cancelled"
                         },
                     )
             }
@@ -2001,11 +1993,11 @@ private fun PlcBleTesterLandscape(
                                 verticalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                 CollapsibleSettingsSection(
-                                    title = "CONEXIÓN BLUETOOTH",
+                                    title = "BLUETOOTH CONNECTION",
                                     summary =
-                                        if (scanning) "Buscando... ${scanRemainSec}s"
-                                        else if (connected) "Conectado: ${selected?.name ?: "PLC"}"
-                                        else "Sin conexión",
+                                        if (scanning) "Scanning... ${scanRemainSec}s"
+                                        else if (connected) "Connected: ${selected?.name ?: "PLC"}"
+                                        else "Disconnected",
                                     expanded = connectionSectionExpanded,
                                     onToggle = {
                                         connectionSectionExpanded = !connectionSectionExpanded
@@ -2209,7 +2201,7 @@ private fun PlcBleTesterLandscape(
                                 }
 
                                 CollapsibleSettingsSection(
-                                    title = "PIN / ACCESO",
+                                    title = "PIN / ACCESS",
                                     summary = maintenanceStatus,
                                     expanded = pinSectionExpanded,
                                     onToggle = { pinSectionExpanded = !pinSectionExpanded },
@@ -2219,34 +2211,34 @@ private fun PlcBleTesterLandscape(
                                         enabled = connected,
                                         modifier = Modifier.fillMaxWidth(),
                                     ) {
-                                        Text("Introducir PIN / Autorizar", fontSize = 12.sp)
+                                        Text("Enter PIN / Authorise", fontSize = 12.sp)
                                     }
                                     OutlinedButton(
                                         onClick = onLockMaintenance,
                                         enabled = connected,
                                         modifier = Modifier.fillMaxWidth(),
                                     ) {
-                                        Text("Bloquear acceso", fontSize = 12.sp)
+                                        Text("Lock access", fontSize = 12.sp)
                                     }
                                     TextButton(
                                         onClick = onForgetPin,
                                         enabled = connected,
                                         modifier = Modifier.fillMaxWidth(),
                                     ) {
-                                        Text("Olvidar PIN en esta app", fontSize = 12.sp)
+                                        Text("Forget saved PIN", fontSize = 12.sp)
                                     }
                                 }
 
                                 CollapsibleSettingsSection(
-                                    title = "ID DE LA CARRETILLA",
-                                    summary = equipmentId ?: "ID sin consultar",
+                                    title = "FORKLIFT ID",
+                                    summary = equipmentId ?: "ID not queried",
                                     expanded = equipmentSectionExpanded,
                                     onToggle = {
                                         equipmentSectionExpanded = !equipmentSectionExpanded
                                     },
                                 ) {
                                     Text(
-                                        "Identificador utilizado en el nombre Bluetooth y en las tramas del PLC.",
+                                        "ID used for the Bluetooth name and PLC data frames.",
                                         fontSize = 12.sp,
                                     )
                                     OutlinedButton(
@@ -2254,16 +2246,15 @@ private fun PlcBleTesterLandscape(
                                         enabled = connected,
                                         modifier = Modifier.fillMaxWidth(),
                                     ) {
-                                        Text("Configurar ID", fontSize = 12.sp)
+                                        Text("Configure ID", fontSize = 12.sp)
                                     }
                                 }
 
                                 CollapsibleSettingsSection(
-                                    title = "HIGH MEASUREMENT",
+                                    title = "HEIGHT MEASUREMENT",
                                     summary =
-                                        if (!altKnown) "Estado sin consultar"
-                                        else if (altState == true) "Habilitada"
-                                        else "Deshabilitada",
+                                        if (!altKnown) "Status not queried"
+                                        else if (altState == true) "Enabled" else "Disabled",
                                     expanded = heightSectionExpanded,
                                     onToggle = { heightSectionExpanded = !heightSectionExpanded },
                                 ) {
@@ -2303,8 +2294,8 @@ private fun PlcBleTesterLandscape(
                                                     ),
                                             ) {
                                                 Text(
-                                                    if (isEnabled) "Disable High Measurement"
-                                                    else "Enable High Measurement",
+                                                    if (isEnabled) "Disable Height Measurement"
+                                                    else "Enable Height Measurement",
                                                     fontSize = 12.sp,
                                                 )
                                             }
@@ -2314,7 +2305,7 @@ private fun PlcBleTesterLandscape(
 
                                 CollapsibleSettingsSection(
                                     title = "TEXT COMMANDS - AIM Code ID / RTC",
-                                    summary = "Prefijos de lectura y fecha/hora",
+                                    summary = "Scan prefixes and date/time",
                                     expanded = textSectionExpanded,
                                     onToggle = { textSectionExpanded = !textSectionExpanded },
                                 ) {
@@ -2487,7 +2478,7 @@ private fun PlcBleTesterLandscape(
 
                                 CollapsibleSettingsSection(
                                     title = "MANUAL TERMINAL",
-                                    summary = "Envío de comandos TXT / HEX",
+                                    summary = "Send TXT / HEX commands",
                                     expanded = manualSectionExpanded,
                                     onToggle = { manualSectionExpanded = !manualSectionExpanded },
                                 ) {

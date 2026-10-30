@@ -1,9 +1,9 @@
-# Validación de la adaptación Android — 29/10/2026
+# Validación de la adaptación Android — 30/10/2026
 
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 8. VersionName: `1.3.4-plc3`.
+- VersionCode: 9. VersionName: `1.3.5-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
@@ -108,3 +108,19 @@ El resultado confirmado permanece en el registro.
 Pendiente en tablet: plegado de binarios, orden PIN/ID, aviso sin autorización,
 autorización y guardado correcto con cierre, rechazo y timeout sin cierre de éxito.
 No se han ejecutado pruebas instrumentadas en un teléfono o PLC.
+
+
+## Textos propios en inglés (1.3.5)
+
+Se traducen menús, botones, diálogos, validación de campos, ayudas de red y OTA,
+mensajes BLE, estado de autorización, diagnóstico y accesibilidad. Se revisan
+los literales para distinguir UI de comandos y respuestas del protocolo. No se
+traduce CONECTADO ni los bytes que aparecen en el registro de tráfico real.
+
+La eliminación del PIN recordado tras ERR=AUTH se indica con el parámetro
+incorrectPin, en lugar de buscar una palabra española en un mensaje traducible.
+Se preserva su comportamiento y la autorización por conexión.
+
+Pendiente en tablet: revisar longitudes y saltos de línea, permisos/emparejamiento,
+PIN correcto/incorrecto/recordado, edición de ID con y sin acceso, errores de red,
+flujo OTA y lectura por accesibilidad. No hay pruebas instrumentadas de interfaz.

@@ -235,11 +235,11 @@ fun NetworkScreen(
                         field.any { it == ';' || it == '\r' || it == '\n' }
                     }
                 )
-                    add("Los campos no admiten punto y coma ni saltos de línea")
+                    add("Fields cannot contain semicolons or line breaks")
                 if (ssid.toByteArray(Charsets.UTF_8).size > 32)
-                    add("SSID demasiado largo (máximo 32 bytes)")
+                    add("SSID is too long (maximum 32 bytes)")
                 if (pwd.toByteArray(Charsets.UTF_8).size > 64)
-                    add("Contraseña demasiado larga (máximo 64 bytes)")
+                    add("Password is too long (maximum 64 bytes)")
                 if (host.isBlank()) add("Host is required")
                 if (portInt == null) add("Invalid port number")
             }
@@ -464,14 +464,14 @@ fun NetworkScreen(
 
             if (pwd == "***")
                 Text(
-                    "Contraseña guardada: se conservará al aplicar. Escribe otra para cambiarla.",
+                    "The stored password will be kept when you apply the configuration. Enter a new one to replace it.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             if (isStatic) {
                 CompactField(
                     value = ip,
                     onValueChange = { onIpChange(it) },
-                    placeholder = "IP PLC",
+                    placeholder = "PLC IP",
                     modifier = Modifier.fillMaxWidth(),
                     keyboardType = KeyboardType.Decimal,
                     imeAction = ImeAction.Done,
