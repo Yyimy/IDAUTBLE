@@ -8,6 +8,13 @@ internal class StatusRefreshPolicy {
     private var lastSuccess: Long? = null
     private var readingSince: Long? = null
     private var afterReading = false
+    // A user preference, deliberately retained across connection resets.
+    var refreshAfterReads = true
+        set(value) {
+            field = value
+            if (!value) afterReading = false
+        }
+
     var otaActive = false
         private set
 
@@ -66,8 +73,8 @@ internal class StatusRefreshPolicy {
     fun readReceived(now: Long): Boolean {
         if (!readPending(now)) return false
         readingSince = null
-        afterReading = true
-        return true
+        afterReading = refreshAfterReads
+        return refreshAfterReads
     }
 
     fun shouldRefresh(now: Long): Boolean {

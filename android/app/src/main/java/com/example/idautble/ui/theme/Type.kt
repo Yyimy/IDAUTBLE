@@ -6,29 +6,29 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// Set of Material typography styles to start with
-val Typography = Typography(
-    bodyLarge = TextStyle(
+// The same compact technical typography used by Readings and Device status.
+private val compactBody =
+    TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Normal,
-        fontSize = 16.sp,
-        lineHeight = 24.sp,
-        letterSpacing = 0.5.sp
-    )
-    /* Other default text styles to override
-    titleLarge = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Normal,
-        fontSize = 22.sp,
-        lineHeight = 28.sp,
-        letterSpacing = 0.sp
-    ),
-    labelSmall = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Medium,
         fontSize = 11.sp,
-        lineHeight = 16.sp,
-        letterSpacing = 0.5.sp
+        lineHeight = 13.sp,
+        letterSpacing = 0.sp,
     )
-    */
-)
+private val compactLabel = compactBody.copy(fontWeight = FontWeight.Medium)
+private val compactTitle =
+    compactBody.copy(fontWeight = FontWeight.SemiBold, fontSize = 12.sp, lineHeight = 15.sp)
+
+val Typography =
+    Typography(
+        bodyLarge = compactBody,
+        bodyMedium = compactBody,
+        bodySmall = compactBody,
+        labelLarge = compactLabel,
+        labelMedium = compactLabel,
+        labelSmall = compactLabel.copy(fontSize = 10.sp),
+        titleLarge = compactTitle.copy(fontSize = 14.sp, lineHeight = 18.sp),
+        titleMedium = compactTitle,
+        titleSmall = compactTitle,
+        headlineSmall = compactTitle.copy(fontSize = 16.sp, lineHeight = 20.sp),
+    )

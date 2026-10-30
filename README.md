@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.11-plc3, versionCode 15 |
+| App Android | [android/](android/) | 1.3.12-plc3, versionCode 16 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.6-rc1 |
 
 ## Trabajar sin ZIP
@@ -243,3 +243,37 @@ error terminal; BUSY/BAD_PARAMS no implican fin de OTA. Reset UI no elimina esa 
 
 Refresh permanece disponible y los datos pasan a antiguos después de 60 s sin
 respuesta válida. Se conserva el firmware 3.0.6-rc1 y el protocolo V2.
+
+
+## After reads (app 1.3.12)
+
+DEVICE STATUS incorpora un interruptor compacto **After reads**, junto a Refresh
+en la misma cabecera, sin una fila de explicación adicional. Empieza activado;
+la preferencia se guarda en la app y se conserva al cerrar, reconectar o cambiar
+de PLC. Se puede configurar también estando desconectado.
+
+Desactivarlo elimina la consulta STATUS? adicional tras L/B/A/P/D/I; mantiene
+STATUS al conectar, cada 30 s y con Refresh. La consulta periódica puede coincidir
+con una lectura aunque After reads esté apagado. La app sigue esperando el fin
+de la lectura antes de enviar una consulta periódica, para no intercalarlas.
+
+Al apagar se descarta la actualización tras lectura todavía no enviada; una
+petición STATUS ya enviada puede completar su respuesta. Activar el interruptor
+no envía comandos: afecta a las siguientes respuestas de lectura. No modifica
+READINGS, los tiempos de caducidad, la pausa OTA ni el firmware 3.0.6-rc1.
+
+
+## Estilo compacto uniforme (app 1.3.12)
+
+Las secciones utilizan la misma base tipográfica que READINGS y DEVICE STATUS:
+texto y botones de 11 sp / línea 13 sp, títulos de sección de 12 sp / línea 15 sp
+y valores técnicos editables de 12 sp / línea 14 sp en monoespaciado. También
+se aplica a NETWORK y OTA a través del tema común. Los títulos de diálogos
+conservan una jerarquía algo mayor y los porcentajes de STATUS mantienen su
+formato propio.
+
+Cabeceras con resumen compacto, tarjetas de radio 8 dp y botones/campos de radio
+6 dp sustituyen la apariencia de cápsula. BARCODE ID / RTC conserva sus acciones
+y campos, con etiquetas alineadas de 52 dp para evitar comprimir Pallet/Spot/RTC.
+Se mantienen colores funcionales, plegado, edición y comandos. El tamaño de
+fuente sigue escalando con los ajustes de Android.

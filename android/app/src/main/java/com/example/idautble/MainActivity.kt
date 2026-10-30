@@ -46,7 +46,6 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -90,7 +89,7 @@ private val PFX_W: Dp = 70.dp
 private val BTN_SET_W: Dp = 64.dp
 private val BTN_REFRESH_W: Dp = 80.dp
 private val BTN_ACTION_W: Dp = 90.dp
-private val LABEL_W: Dp = 32.dp // ancho fijo para "Pallet"/"Spot"/"RTC"
+private val LABEL_W: Dp = 52.dp // ancho fijo para "Pallet"/"Spot"/"RTC"
 private val ROW_H: Dp = 40.dp // igual que tus campos
 
 // ============================
@@ -325,6 +324,15 @@ class MainActivity : ComponentActivity() {
     private val uiDeviceStatusReady = mutableStateOf(false)
     private var deviceStatusRequest = 0L
     private val statusRefresh = StatusRefreshPolicy()
+    private val uiRefreshAfterReads = mutableStateOf(true)
+    private val statusPreferences by lazy { getSharedPreferences("device_status", MODE_PRIVATE) }
+
+    private fun setRefreshAfterReads(enabled: Boolean) {
+        uiRefreshAfterReads.value = enabled
+        statusRefresh.refreshAfterReads = enabled
+        statusPreferences.edit().putBoolean("refresh_after_reads", enabled).apply()
+    }
+
     private var appInForeground = false
     private val statusRefreshTick =
         object : Runnable {
@@ -1800,6 +1808,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         credentialStore = PlcCredentialStore(this)
+        val refreshAfterReads = statusPreferences.getBoolean("refresh_after_reads", true)
+        uiRefreshAfterReads.value = refreshAfterReads
+        statusRefresh.refreshAfterReads = refreshAfterReads
         ContextCompat.registerReceiver(
             this,
             bondReceiver,
@@ -1822,6 +1833,8 @@ class MainActivity : ComponentActivity() {
                     deviceStatusBusy = uiDeviceStatusBusy.value,
                     deviceStatusMessage = uiDeviceStatusMessage.value,
                     onStatusRefresh = { requestDeviceStatus() },
+                    refreshAfterReads = uiRefreshAfterReads.value,
+                    onRefreshAfterReadsChange = { setRefreshAfterReads(it) },
                     readings = uiReadings.value,
                     equipmentId = uiEquipmentId.value,
                     onIdentityClick = { openIdentityDialog() },
@@ -1960,6 +1973,8 @@ private fun PlcBleTesterLandscape(
     deviceStatusBusy: Boolean,
     deviceStatusMessage: String,
     onStatusRefresh: () -> Unit,
+    refreshAfterReads: Boolean,
+    onRefreshAfterReadsChange: (Boolean) -> Unit,
     readings: PlcReadingsState,
     equipmentId: String?,
     onIdentityClick: () -> Unit,
@@ -2162,6 +2177,7 @@ private fun PlcBleTesterLandscape(
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     ) {
                                         Button(
+                                            shape = RoundedCornerShape(6.dp),
                                             onClick = {
                                                 showDevices = true
                                                 onScan5s()
@@ -2183,24 +2199,26 @@ private fun PlcBleTesterLandscape(
                                         ) {
                                             Text(
                                                 if (!scanning) "Scan 5s" else "Scanning...",
-                                                fontSize = 12.sp,
+                                                fontSize = 11.sp,
                                                 maxLines = 1,
                                                 softWrap = false,
                                             )
                                         }
 
                                         OutlinedButton(
+                                            shape = RoundedCornerShape(6.dp),
                                             onClick = { showDevices = !showDevices },
                                             contentPadding = PaddingValues(10.dp, 6.dp),
                                         ) {
                                             Text(
                                                 if (showDevices) "Hide Devices" else "Show Devices",
-                                                fontSize = 12.sp,
+                                                fontSize = 11.sp,
                                                 maxLines = 1,
                                                 softWrap = false,
                                             )
                                         }
                                         Button(
+                                            shape = RoundedCornerShape(6.dp),
                                             onClick = { onConnect() },
                                             enabled = (!connected && selected != null),
                                             contentPadding = PaddingValues(10.dp, 6.dp),
@@ -2213,13 +2231,14 @@ private fun PlcBleTesterLandscape(
                                         ) {
                                             Text(
                                                 "Connect",
-                                                fontSize = 12.sp,
+                                                fontSize = 11.sp,
                                                 maxLines = 1,
                                                 softWrap = false,
                                             )
                                         }
 
                                         Button(
+                                            shape = RoundedCornerShape(6.dp),
                                             onClick = onDisconnect,
                                             enabled = connected,
                                             contentPadding = PaddingValues(10.dp, 6.dp),
@@ -2232,7 +2251,7 @@ private fun PlcBleTesterLandscape(
                                         ) {
                                             Text(
                                                 "Disconnect",
-                                                fontSize = 12.sp,
+                                                fontSize = 11.sp,
                                                 maxLines = 1,
                                                 softWrap = false,
                                             )
@@ -2245,7 +2264,7 @@ private fun PlcBleTesterLandscape(
                                                 "${selected.name} | ${selected.address} | RSSI:${selected.rssi}",
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
-                                            fontSize = 12.sp,
+                                            fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
                                         )
                                     }
@@ -2267,7 +2286,7 @@ private fun PlcBleTesterLandscape(
                                                     Text(
                                                         text =
                                                             "Scanning, Please Wait... ${scanRemainSec}s",
-                                                        fontSize = 12.sp,
+                                                        fontSize = 11.sp,
                                                     )
                                                     Box(
                                                         modifier =
@@ -2297,7 +2316,7 @@ private fun PlcBleTesterLandscape(
                                                 }
                                                 Text(
                                                     "Visible devices: ${devices.size}",
-                                                    fontSize = 12.sp,
+                                                    fontSize = 11.sp,
                                                 )
                                                 LazyColumn(Modifier.heightIn(max = 180.dp)) {
                                                     itemsIndexed(devices) { _, d ->
@@ -2310,12 +2329,12 @@ private fun PlcBleTesterLandscape(
                                                         ) {
                                                             Text(
                                                                 d.name,
-                                                                fontSize = 12.sp,
+                                                                fontSize = 11.sp,
                                                                 maxLines = 1,
                                                                 overflow = TextOverflow.Ellipsis,
                                                             )
-                                                            Text(d.address, fontSize = 12.sp)
-                                                            Text("RSSI:${d.rssi}", fontSize = 12.sp)
+                                                            Text(d.address, fontSize = 11.sp)
+                                                            Text("RSSI:${d.rssi}", fontSize = 11.sp)
                                                         }
                                                         Divider()
                                                     }
@@ -2362,6 +2381,8 @@ private fun PlcBleTesterLandscape(
                                     busy = deviceStatusBusy,
                                     message = deviceStatusMessage,
                                     onRefresh = onStatusRefresh,
+                                    refreshAfterReads = refreshAfterReads,
+                                    onRefreshAfterReadsChange = onRefreshAfterReadsChange,
                                 )
 
                                 CollapsibleSettingsSection(
@@ -2409,7 +2430,7 @@ private fun PlcBleTesterLandscape(
                                 ) {
                                     Text(
                                         "ID used for the Bluetooth name and PLC data frames.",
-                                        fontSize = 12.sp,
+                                        fontSize = 11.sp,
                                     )
                                     MaintenanceActionButton(
                                         text = "Configure ID",
@@ -2435,6 +2456,7 @@ private fun PlcBleTesterLandscape(
 
                                         // GET STATUS
                                         Button(
+                                            shape = RoundedCornerShape(6.dp),
                                             onClick = onAltQuery,
                                             contentPadding = PaddingValues(10.dp, 6.dp),
                                             colors =
@@ -2443,7 +2465,7 @@ private fun PlcBleTesterLandscape(
                                                     contentColor = Color.White,
                                                 ),
                                         ) {
-                                            Text("Get Status", fontSize = 12.sp)
+                                            Text("Get Status", fontSize = 11.sp)
                                         }
 
                                         if (altKnown) {
@@ -2451,6 +2473,7 @@ private fun PlcBleTesterLandscape(
                                             val isEnabled = altState == true
 
                                             Button(
+                                                shape = RoundedCornerShape(6.dp),
                                                 onClick = {
                                                     if (isEnabled) onAltDisable() else onAltEnable()
                                                 },
@@ -2466,7 +2489,7 @@ private fun PlcBleTesterLandscape(
                                                 Text(
                                                     if (isEnabled) "Disable Height Measurement"
                                                     else "Enable Height Measurement",
-                                                    fontSize = 12.sp,
+                                                    fontSize = 11.sp,
                                                 )
                                             }
                                         }
@@ -2474,7 +2497,7 @@ private fun PlcBleTesterLandscape(
                                 }
 
                                 CollapsibleSettingsSection(
-                                    title = "Barcode ID / RTC",
+                                    title = "BARCODE ID / RTC",
                                     summary = "Barcode prefixes and date/time",
                                     expanded = textSectionExpanded,
                                     onToggle = { textSectionExpanded = !textSectionExpanded },
@@ -2488,6 +2511,7 @@ private fun PlcBleTesterLandscape(
                                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                             // Fila Pallet
                                             Button(
+                                                shape = RoundedCornerShape(6.dp),
                                                 onClick = onCfgQuery,
                                                 modifier =
                                                     Modifier.width(BTN_ACTION_W).height(ROW_H),
@@ -2498,7 +2522,7 @@ private fun PlcBleTesterLandscape(
                                                         contentColor = Color.White,
                                                     ),
                                             ) {
-                                                Text("Get ID", fontSize = 12.sp)
+                                                Text("Get ID", fontSize = 11.sp)
                                             }
 
                                             // Fila Spot (vacía)
@@ -2506,6 +2530,7 @@ private fun PlcBleTesterLandscape(
 
                                             // Fila RTC
                                             Button(
+                                                shape = RoundedCornerShape(6.dp),
                                                 onClick = onRefreshRtc,
                                                 modifier =
                                                     Modifier.width(BTN_ACTION_W).height(ROW_H),
@@ -2516,7 +2541,7 @@ private fun PlcBleTesterLandscape(
                                                         contentColor = Color.White,
                                                     ),
                                             ) {
-                                                Text("Refresh", fontSize = 12.sp)
+                                                Text("Refresh", fontSize = 11.sp)
                                             }
                                         }
 
@@ -2534,7 +2559,7 @@ private fun PlcBleTesterLandscape(
                                             ) {
                                                 Text(
                                                     "Pallet",
-                                                    fontSize = 12.sp,
+                                                    fontSize = 11.sp,
                                                     modifier = Modifier.width(LABEL_W),
                                                     maxLines = 1,
                                                 )
@@ -2546,6 +2571,7 @@ private fun PlcBleTesterLandscape(
                                                 )
 
                                                 Button(
+                                                    shape = RoundedCornerShape(6.dp),
                                                     onClick = { showPrefixDialogFor = "PFXP" },
                                                     modifier = Modifier.width(70.dp).height(ROW_H),
                                                     contentPadding = PaddingValues(6.dp),
@@ -2555,7 +2581,7 @@ private fun PlcBleTesterLandscape(
                                                             contentColor = Color.White,
                                                         ),
                                                 ) {
-                                                    Text("Select", fontSize = 12.sp)
+                                                    Text("Select", fontSize = 11.sp)
                                                 }
                                             }
 
@@ -2567,7 +2593,7 @@ private fun PlcBleTesterLandscape(
                                             ) {
                                                 Text(
                                                     "Spot",
-                                                    fontSize = 12.sp,
+                                                    fontSize = 11.sp,
                                                     modifier = Modifier.width(LABEL_W),
                                                     maxLines = 1,
                                                 )
@@ -2579,6 +2605,7 @@ private fun PlcBleTesterLandscape(
                                                 )
 
                                                 Button(
+                                                    shape = RoundedCornerShape(6.dp),
                                                     onClick = { showPrefixDialogFor = "PFXU" },
                                                     modifier = Modifier.width(70.dp).height(ROW_H),
                                                     contentPadding = PaddingValues(6.dp),
@@ -2588,7 +2615,7 @@ private fun PlcBleTesterLandscape(
                                                             contentColor = Color.White,
                                                         ),
                                                 ) {
-                                                    Text("Select", fontSize = 12.sp)
+                                                    Text("Select", fontSize = 11.sp)
                                                 }
                                             }
 
@@ -2600,7 +2627,7 @@ private fun PlcBleTesterLandscape(
                                             ) {
                                                 Text(
                                                     "  RTC",
-                                                    fontSize = 12.sp,
+                                                    fontSize = 11.sp,
                                                     modifier = Modifier.width(LABEL_W),
                                                     maxLines = 1,
                                                 )
@@ -2615,6 +2642,7 @@ private fun PlcBleTesterLandscape(
                                         // ===== RIGHT COLUMN (WRITE ACTIONS)
                                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                             Button(
+                                                shape = RoundedCornerShape(6.dp),
                                                 onClick = onSetCfg,
                                                 modifier = Modifier.width(BTN_SET_W).height(ROW_H),
                                                 contentPadding = PaddingValues(10.dp, 6.dp),
@@ -2624,13 +2652,14 @@ private fun PlcBleTesterLandscape(
                                                         contentColor = Color.White,
                                                     ),
                                             ) {
-                                                Text("Set", fontSize = 12.sp)
+                                                Text("Set", fontSize = 11.sp)
                                             }
 
                                             // 🔹 Placeholder para que Spot no tenga Set
                                             Spacer(modifier = Modifier.height(ROW_H))
 
                                             Button(
+                                                shape = RoundedCornerShape(6.dp),
                                                 onClick = onSetRtc,
                                                 modifier = Modifier.width(BTN_SET_W).height(ROW_H),
                                                 contentPadding = PaddingValues(10.dp, 6.dp),
@@ -2640,7 +2669,7 @@ private fun PlcBleTesterLandscape(
                                                         contentColor = Color.White,
                                                     ),
                                             ) {
-                                                Text("Set", fontSize = 12.sp)
+                                                Text("Set", fontSize = 11.sp)
                                             }
                                         }
                                     }
@@ -2756,6 +2785,7 @@ private fun PlcBleTesterLandscape(
 
                                     // --- SEND BUTTON ---
                                     Button(
+                                        shape = RoundedCornerShape(6.dp),
                                         onClick = {
                                             if (manualMode == "TXT") {
                                                 onSendText(manualText.text)
@@ -2773,7 +2803,7 @@ private fun PlcBleTesterLandscape(
                                                 contentColor = Color.White,
                                             ),
                                     ) {
-                                        Text("SEND", fontSize = 12.sp)
+                                        Text("SEND", fontSize = 11.sp)
                                     }
                                 }
 
@@ -2798,6 +2828,7 @@ private fun PlcBleTesterLandscape(
                                         )
                                     }
                                     OutlinedButton(
+                                        shape = RoundedCornerShape(6.dp),
                                         onClick = onClearLog,
                                         contentPadding = PaddingValues(10.dp, 6.dp),
                                         modifier = Modifier.widthIn(min = 90.dp),
@@ -2999,6 +3030,7 @@ private fun PlcBleTesterLandscape(
 @Composable
 private fun CmdBtn(label: String, onClick: () -> Unit) {
     Button(
+        shape = RoundedCornerShape(6.dp),
         onClick = onClick,
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         modifier = Modifier.widthIn(min = 78.dp),
@@ -3010,31 +3042,40 @@ private fun CmdBtn(label: String, onClick: () -> Unit) {
                 disabledContentColor = Color.White.copy(alpha = 0.7f),
             ),
     ) {
-        Text("CMD $label", fontSize = 12.sp, maxLines = 1, softWrap = false)
+        Text(
+            "CMD $label",
+            fontSize = 11.sp,
+            lineHeight = 13.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            softWrap = false,
+        )
     }
 }
 
 @Composable
 private fun SmallTokenBtn(label: String, onClick: () -> Unit) {
     OutlinedButton(
+        shape = RoundedCornerShape(6.dp),
         onClick = onClick,
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
         modifier = Modifier.height(30.dp),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF6A1B9A)),
     ) {
-        Text(label, fontSize = 12.sp)
+        Text(label, fontSize = 11.sp, lineHeight = 13.sp, fontFamily = FontFamily.Monospace)
     }
 }
 
 @Composable
 private fun SmallHexBtn(label: String, onClick: () -> Unit) {
     OutlinedButton(
+        shape = RoundedCornerShape(6.dp),
         onClick = onClick,
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
         modifier = Modifier.height(30.dp),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF6C00)),
     ) {
-        Text(label, fontSize = 12.sp)
+        Text(label, fontSize = 11.sp, lineHeight = 13.sp, fontFamily = FontFamily.Monospace)
     }
 }
 
@@ -3045,6 +3086,7 @@ private fun ModeBtn(label: String, selected: Boolean, onClick: () -> Unit) {
     val disabledText = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
 
     Button(
+        shape = RoundedCornerShape(6.dp),
         onClick = onClick,
         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
         elevation =
@@ -3064,7 +3106,7 @@ private fun ModeBtn(label: String, selected: Boolean, onClick: () -> Unit) {
                     else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
             ),
     ) {
-        Text(text = label, fontSize = 13.sp, letterSpacing = 1.sp)
+        Text(text = label, fontSize = 11.sp, lineHeight = 13.sp, letterSpacing = 0.sp)
     }
 }
 
@@ -3080,7 +3122,7 @@ private fun CompactOutlinedFieldTFV(
     modifier: Modifier = Modifier,
     width: Dp? = null,
 ) {
-    val shape = RoundedCornerShape(10.dp)
+    val shape = RoundedCornerShape(6.dp)
     val outline = MaterialTheme.colorScheme.outline
     val textColor = LogColors.neutralText
     val cursor = MaterialTheme.colorScheme.primary
@@ -3098,7 +3140,13 @@ private fun CompactOutlinedFieldTFV(
             value = value,
             onValueChange = onValueChange,
             singleLine = true,
-            textStyle = TextStyle(fontSize = 12.sp, color = textColor),
+            textStyle =
+                MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 12.sp,
+                    lineHeight = 14.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = textColor,
+                ),
             cursorBrush = SolidColor(cursor),
             modifier = Modifier.fillMaxWidth(),
         )
@@ -3112,7 +3160,7 @@ private fun CompactOutlinedField(
     modifier: Modifier = Modifier,
     width: Dp? = null,
 ) {
-    val shape = RoundedCornerShape(10.dp)
+    val shape = RoundedCornerShape(6.dp)
     val outline = MaterialTheme.colorScheme.outline
     val textColor = LogColors.neutralText
     val cursor = MaterialTheme.colorScheme.primary
@@ -3130,7 +3178,13 @@ private fun CompactOutlinedField(
             value = value,
             onValueChange = onValueChange,
             singleLine = true,
-            textStyle = TextStyle(fontSize = 12.sp, color = textColor),
+            textStyle =
+                MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 12.sp,
+                    lineHeight = 14.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = textColor,
+                ),
             cursorBrush = SolidColor(cursor),
             modifier = Modifier.fillMaxWidth(),
         )
