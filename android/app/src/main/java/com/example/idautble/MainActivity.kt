@@ -318,6 +318,13 @@ class MainActivity : ComponentActivity() {
     private val uiRememberPin = mutableStateOf(false)
     private val uiMaintenanceStatus = mutableStateOf("Read-only / not authorised")
 
+    private val uiDeviceStatus = mutableStateOf<DeviceStatus?>(null)
+    private val uiDeviceStatusReceived = mutableStateOf<Long?>(null)
+    private val uiDeviceStatusBusy = mutableStateOf(false)
+    private val uiDeviceStatusMessage = mutableStateOf("")
+    private val uiDeviceStatusReady = mutableStateOf(false)
+    private var deviceStatusRequest = 0L
+
     private val uiIdentityDialog = mutableStateOf(false)
     private val uiIdentity = mutableStateOf<EquipmentIdentity?>(null)
     private val uiIdentityDraft = mutableStateOf("")
@@ -779,6 +786,12 @@ class MainActivity : ComponentActivity() {
         txTimeout = null
         maintenanceSession.reset()
         connectionHandshake.reset()
+        deviceStatusRequest++
+        uiDeviceStatus.value = null
+        uiDeviceStatusReceived.value = null
+        uiDeviceStatusBusy.value = false
+        uiDeviceStatusMessage.value = ""
+        uiDeviceStatusReady.value = false
         blockedByUser = false
         lockAwaiting = false
         authInFlight = false
@@ -1054,8 +1067,41 @@ class MainActivity : ComponentActivity() {
         mainHandler.postDelayed({ if (gatt === g) pumpWrites() }, 80)
     }
 
+    private fun requestDeviceStatus() {
+        if (!bleChannelReady || uiDeviceStatusBusy.value) return
+        val request = ++deviceStatusRequest
+        uiDeviceStatusBusy.value = true
+        uiDeviceStatusMessage.value = ""
+        sendText("STATUS?", true)
+        mainHandler.postDelayed(
+            {
+                if (request == deviceStatusRequest && uiDeviceStatusBusy.value) {
+                    uiDeviceStatusBusy.value = false
+                    uiDeviceStatusMessage.value =
+                        "No status response. Firmware 3.0.6 or later is required. Check the connection and retry."
+                }
+            },
+            6000,
+        )
+    }
+
     private fun handleProtocolControl(message: PlcMessage) {
         val text = message.text
+        if (message.acknowledged && text.startsWith("STATUS=")) {
+            val status = parseDeviceStatus(text)
+            uiDeviceStatusBusy.value = false
+            deviceStatusRequest++
+            if (status != null) {
+                uiDeviceStatus.value = status
+                uiDeviceStatusReceived.value = SystemClock.elapsedRealtime()
+                uiDeviceStatusMessage.value = "Snapshot received. Use Refresh status to update."
+            } else {
+                uiDeviceStatusMessage.value =
+                    if (uiDeviceStatus.value == null) "Invalid or unsupported status response."
+                    else "Invalid or unsupported status response. Previous snapshot retained."
+            }
+            return
+        }
         val identity = if (message.acknowledged) parseEquipmentIdentity(text) else null
         if (identity != null) {
             uiIdentity.value = identity
@@ -1078,6 +1124,7 @@ class MainActivity : ComponentActivity() {
                 identityRequest++
                 uiIdentityDialog.value = false
                 log(LogLevel.INFO, uiIdentityStatus.value)
+                requestDeviceStatus()
             } else if (identityExpected == null && uiIdentityBusy.value) {
                 uiIdentityDraft.value = identity.id
                 uiIdentityStatus.value = "Enter the device ID."
@@ -1107,10 +1154,12 @@ class MainActivity : ComponentActivity() {
         if (message.acknowledged && text == "CONECTADO") {
             readyOk = true
             bleChannelReady = true
+            uiDeviceStatusReady.value = true
             log(LogLevel.INFO, "BLE ready. Queries are available.")
             if (connectionHandshake.onConnected()) {
                 sendText("INFO?", true)
                 sendText("ID?", true)
+                requestDeviceStatus()
             }
             return
         }
@@ -1718,6 +1767,12 @@ class MainActivity : ComponentActivity() {
                     networkSnapshot = uiNetworkSnapshot.value,
                     maintenanceStatus = uiMaintenanceStatus.value,
                     maintenanceAuthorised = maintenanceSession.isAuthorized(),
+                    deviceStatus = uiDeviceStatus.value,
+                    deviceStatusReceived = uiDeviceStatusReceived.value,
+                    deviceStatusReady = uiDeviceStatusReady.value,
+                    deviceStatusBusy = uiDeviceStatusBusy.value,
+                    deviceStatusMessage = uiDeviceStatusMessage.value,
+                    onStatusRefresh = { requestDeviceStatus() },
                     equipmentId = uiIdentity.value?.id,
                     onIdentityClick = { openIdentityDialog() },
                     onMaintenanceClick = { openPinDialog() },
@@ -1836,6 +1891,12 @@ private fun PlcBleTesterLandscape(
     networkSnapshot: NetworkSnapshot,
     maintenanceStatus: String,
     maintenanceAuthorised: Boolean,
+    deviceStatus: DeviceStatus?,
+    deviceStatusReceived: Long?,
+    deviceStatusReady: Boolean,
+    deviceStatusBusy: Boolean,
+    deviceStatusMessage: String,
+    onStatusRefresh: () -> Unit,
     equipmentId: String?,
     onIdentityClick: () -> Unit,
     onMaintenanceClick: () -> Unit,
@@ -2283,6 +2344,15 @@ private fun PlcBleTesterLandscape(
                                         modifier = Modifier.fillMaxWidth(),
                                     )
                                 }
+
+                                DeviceStatusSection(
+                                    status = deviceStatus,
+                                    receivedMs = deviceStatusReceived,
+                                    ready = deviceStatusReady,
+                                    busy = deviceStatusBusy,
+                                    message = deviceStatusMessage,
+                                    onRefresh = onStatusRefresh,
+                                )
 
                                 CollapsibleSettingsSection(
                                     title = "HEIGHT MEASUREMENT",

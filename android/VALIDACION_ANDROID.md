@@ -1,13 +1,13 @@
 # Validación de la adaptación Android — 30/10/2026
 
-Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug`.
+Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lintDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 10. VersionName: `1.3.6-plc3`.
+- VersionCode: 11. VersionName: `1.3.7-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
-- 26 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
+- 34 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
 
 ## Pruebas ejecutadas
 
@@ -16,6 +16,7 @@ Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug`.
 | PlcProtocolTest | 12 | 0 |
 | NetParsingTest | 6 | 0 |
 | EquipmentIdentityTest | 7 | 0 |
+| DeviceStatusTest | 8 | 0 |
 | ExampleUnitTest (original) | 1 | 0 |
 
 Los casos de protocolo prueban todos los puntos de corte de la confirmación de conexión y de una trama V2, tamaños de fragmento 1/20/182 bytes, varios mensajes concatenados, UTF-8 partido, límites del buffer, resincronización, comandos protegidos/consultas, PIN con ceros iniciales, caducidad de sesión y redacción de secretos en el log. Las pruebas de red comprueban conservación de contraseña enmascarada, cambio explícito, contraseña vacía, valores con `=`, estados LINK/TCP independientes y recepción de NET/NETSTAT en una misma ráfaga.
@@ -157,3 +158,29 @@ APK generado, 26 pruebas JVM sin fallos ni errores y 14 comprobaciones de los
 helpers de permisos superadas. Lint 31.13.2 no informa errores ni MissingPermission.
 Se mantienen advertencias de dependencias/APIs/recursos de la base, sin actualizar
 librerías ni cambiar el target SDK en esta revisión.
+
+
+## Device status (1.3.7)
+
+Nueva sección plegable debajo de DEVICE ID. Consulta al completar handshake,
+tras confirmar un cambio de ID y al pulsar Refresh status; requiere canal BLE
+preparado, pero no autorización de mantenimiento. Espera hasta 6 s y muestra
+aviso de conexión/compatibilidad si no llega respuesta. El resto de la app
+sigue disponible con firmware anterior. No envía ACK de eventos ni sondea
+continuamente. La instantánea se borra junto con el transporte al desconectar.
+
+8 pruebas nuevas comprueban un slot ausente, medidas inválidas/antiguas, rechazo
+de datos parciales/duplicados/esquemas desconocidos, NaN/rangos, banda al 15 %,
+corte diferenciado, edad monotónica, recepción fragmentada y coexistencia con
+tramas V2 y carácter de solo lectura. También se superan las 14 aserciones host
+de permisos GATT de la versión anterior.
+
+Pendiente en Android físico: aspecto/scroll del panel desplegado, desconectar
+y cambiar de carretilla, retirar cada batería, probar firmware anterior,
+consultar durante actividad/OTA y comparar el motivo mostrado con el LED real.
+La comprobación del expansor no acredita el accionamiento mecánico del relé.
+
+Resultado final 1.3.7: `testDebugUnitTest assembleDebug lintDebug` correctos,
+34 pruebas JVM sin errores ni fallos, APK generado y Lint sin errores ni
+MissingPermission ni avisos en los archivos nuevos de Device status.
+Se mantienen 31 advertencias y 3 avisos informativos de la base.
