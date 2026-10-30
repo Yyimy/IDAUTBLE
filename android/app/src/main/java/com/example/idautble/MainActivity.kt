@@ -298,7 +298,7 @@ class MainActivity : ComponentActivity() {
     private val streamDecoder = PlcStreamDecoder()
     private val maintenanceSession = MaintenanceSession { SystemClock.elapsedRealtime() }
     private lateinit var credentialStore: PlcCredentialStore
-    private var sessionPin: String? = null
+    private var session: String? = null
     private val connectionHandshake = ConnectionHandshake()
     private var blockedByUser = false
     private var lockAwaiting = false
@@ -2301,6 +2301,15 @@ private fun PlcBleTesterLandscape(
 
                                 ReadingResultsSection(readings)
 
+                                DeviceStatusSection(
+                                    status = deviceStatus,
+                                    receivedMs = deviceStatusReceived,
+                                    ready = deviceStatusReady,
+                                    busy = deviceStatusBusy,
+                                    message = deviceStatusMessage,
+                                    onRefresh = onStatusRefresh,
+                                )
+
                                 CollapsibleSettingsSection(
                                     title = "PIN / ACCESS",
                                     summary = maintenanceStatus,
@@ -2357,14 +2366,9 @@ private fun PlcBleTesterLandscape(
                                     )
                                 }
 
-                                DeviceStatusSection(
-                                    status = deviceStatus,
-                                    receivedMs = deviceStatusReceived,
-                                    ready = deviceStatusReady,
-                                    busy = deviceStatusBusy,
-                                    message = deviceStatusMessage,
-                                    onRefresh = onStatusRefresh,
-                                )
+
+
+                                
 
                                 CollapsibleSettingsSection(
                                     title = "HEIGHT MEASUREMENT",
