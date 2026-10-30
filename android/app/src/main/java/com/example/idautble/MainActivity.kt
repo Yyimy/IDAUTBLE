@@ -1050,7 +1050,7 @@ class MainActivity : ComponentActivity() {
                 log(LogLevel.INFO, uiIdentityStatus.value)
             } else if (identityExpected == null && uiIdentityBusy.value) {
                 uiIdentityDraft.value = identity.id
-                uiIdentityStatus.value = "Enter the forklift ID."
+                uiIdentityStatus.value = "Enter the device ID."
                 uiIdentityBusy.value = false
                 identityRequest++
             }
@@ -2230,7 +2230,7 @@ private fun PlcBleTesterLandscape(
                                 }
 
                                 CollapsibleSettingsSection(
-                                    title = "FORKLIFT ID",
+                                    title = "DEVICE ID",
                                     summary = equipmentId ?: "ID not queried",
                                     expanded = equipmentSectionExpanded,
                                     onToggle = {
@@ -2304,8 +2304,8 @@ private fun PlcBleTesterLandscape(
                                 }
 
                                 CollapsibleSettingsSection(
-                                    title = "TEXT COMMANDS - AIM Code ID / RTC",
-                                    summary = "Scan prefixes and date/time",
+                                    title = "Barcode ID / RTC",
+                                    summary = "Barcode prefixes and date/time",
                                     expanded = textSectionExpanded,
                                     onToggle = { textSectionExpanded = !textSectionExpanded },
                                 ) {
