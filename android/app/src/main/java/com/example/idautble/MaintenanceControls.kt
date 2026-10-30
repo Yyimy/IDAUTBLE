@@ -34,6 +34,7 @@ fun MaintenanceActionButton(
 ) {
     Button(
         onClick = onClick,
+        shape = RoundedCornerShape(6.dp),
         enabled = enabled,
         modifier = modifier.heightIn(min = 40.dp),
         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
@@ -45,7 +46,7 @@ fun MaintenanceActionButton(
                 disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
             ),
     ) {
-        Text(text, fontSize = 12.sp)
+        Text(text, fontSize = 11.sp, lineHeight = 13.sp)
     }
 }
 

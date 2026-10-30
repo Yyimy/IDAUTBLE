@@ -121,4 +121,45 @@ class StatusRefreshPolicyTest {
         policy.otaMessage("ERR=NOT_IDLE")
         assertTrue(policy.shouldRefresh(32_000))
     }
+
+    @Test
+    fun disablingAfterReadsStillWaitsForReadingButKeepsPeriodicUpdates() {
+        val policy = StatusRefreshPolicy()
+        policy.refreshAfterReads = false
+        policy.requested(0)
+        policy.readSent(10_000)
+        assertFalse(policy.shouldRefresh(11_000))
+        assertFalse(policy.readReceived(12_000))
+        assertFalse(policy.shouldRefresh(12_150))
+        assertTrue(policy.shouldRefresh(30_000))
+    }
+
+    @Test
+    fun disablingCancelsDeferredReadRefreshAndCanBeReenabled() {
+        val policy = StatusRefreshPolicy()
+        policy.requested(0)
+        policy.readSent(10_000)
+        assertTrue(policy.readReceived(11_000))
+        policy.refreshAfterReads = false
+        assertFalse(policy.shouldRefresh(12_000))
+        policy.refreshAfterReads = true
+        assertFalse(policy.shouldRefresh(13_000)) // Enabling alone sends nothing.
+        policy.readSent(14_000)
+        assertTrue(policy.readReceived(15_000))
+        assertTrue(policy.shouldRefresh(15_150))
+    }
+
+    @Test
+    fun connectionResetRetainsUserPreferenceAndAllowsInitialAndManualStatus() {
+        val policy = StatusRefreshPolicy()
+        assertTrue(policy.refreshAfterReads)
+        policy.refreshAfterReads = false
+        policy.reset()
+        assertFalse(policy.refreshAfterReads)
+        assertTrue(policy.shouldRefresh(0))
+        policy.requested(0)
+        policy.requested(10_000) // Manual refresh is independent of the preference.
+        assertFalse(policy.shouldRefresh(39_999))
+        assertTrue(policy.shouldRefresh(40_000))
+    }
 }

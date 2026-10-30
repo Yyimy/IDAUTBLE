@@ -4,6 +4,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -19,7 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -54,7 +55,7 @@ private fun CompactField(
         if (value.isEmpty()) {
             Text(
                 text = placeholder,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -63,7 +64,13 @@ private fun CompactField(
             value = value,
             onValueChange = onValueChange,
             singleLine = true,
-            textStyle = TextStyle(fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface),
+            textStyle =
+                MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 12.sp,
+                    lineHeight = 14.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurface,
+                ),
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
             keyboardActions =
                 KeyboardActions(
@@ -102,7 +109,7 @@ private fun CompactPasswordField(
                 if (value.isEmpty()) {
                     Text(
                         text = placeholder,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -112,7 +119,12 @@ private fun CompactPasswordField(
                     onValueChange = onValueChange,
                     singleLine = true,
                     textStyle =
-                        TextStyle(fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface),
+                        MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 12.sp,
+                            lineHeight = 14.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        ),
                     visualTransformation =
                         if (show) {
                             VisualTransformation.None
@@ -408,6 +420,7 @@ fun NetworkScreen(
 
                 // DHCP
                 Button(
+                    shape = RoundedCornerShape(6.dp),
                     onClick = { onModeChange("DHCP") },
                     contentPadding = PaddingValues(12.dp, 4.dp),
                     colors =
@@ -425,6 +438,7 @@ fun NetworkScreen(
 
                 // STATIC
                 Button(
+                    shape = RoundedCornerShape(6.dp),
                     onClick = { onModeChange("STATIC") },
                     contentPadding = PaddingValues(12.dp, 4.dp),
                     colors =
@@ -523,6 +537,7 @@ fun NetworkScreen(
             // --- Actions ---
             Row(horizontalArrangement = Arrangement.spacedBy(H_SPACING)) {
                 Button(
+                    shape = RoundedCornerShape(6.dp),
                     onClick = {
                         readState = ReadState.READING_CONFIG
                         onSendText("NET?")
@@ -548,6 +563,7 @@ fun NetworkScreen(
                 }
 
                 Button(
+                    shape = RoundedCornerShape(6.dp),
                     onClick = { onSendText("NETSTAT?") },
                     contentPadding = PaddingValues(12.dp, 4.dp),
                 ) {
@@ -556,6 +572,7 @@ fun NetworkScreen(
             }
 
             Button(
+                shape = RoundedCornerShape(6.dp),
                 enabled = saveState == SaveState.DIRTY && canSave,
                 onClick = {
                     saveState = SaveState.SAVING

@@ -5,6 +5,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -16,6 +17,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
@@ -25,6 +27,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
@@ -39,6 +42,8 @@ fun DeviceStatusSection(
     busy: Boolean,
     message: String,
     onRefresh: () -> Unit,
+    refreshAfterReads: Boolean,
+    onRefreshAfterReadsChange: (Boolean) -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
@@ -75,6 +80,8 @@ fun DeviceStatusSection(
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(0.dp)) {
                         Text(
                             status?.id ?: "Device status",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             fontSize = 13.sp,
                             lineHeight = 15.sp,
                             fontWeight = FontWeight.Bold,
@@ -92,6 +99,26 @@ fun DeviceStatusSection(
                                     statusColour(if (fresh) StatusTone.INFO else StatusTone.WARNING),
                             )
                         }
+                    }
+                    Row(
+                        modifier =
+                            Modifier.heightIn(min = 48.dp)
+                                .toggleable(
+                                    value = refreshAfterReads,
+                                    role = Role.Switch,
+                                    onValueChange = onRefreshAfterReadsChange,
+                                )
+                                .semantics {
+                                    contentDescription = "Refresh device status after read commands"
+                                },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("After reads", fontSize = 10.sp, maxLines = 1)
+                        Switch(
+                            checked = refreshAfterReads,
+                            onCheckedChange = null,
+                            modifier = Modifier.requiredSize(40.dp, 32.dp).scale(0.65f),
+                        )
                     }
                     MaintenanceActionButton(
                         text = if (busy) "Querying..." else "Refresh",

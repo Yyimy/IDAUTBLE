@@ -9,12 +9,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -36,7 +38,7 @@ fun CollapsibleSettingsSection(
     summaryContent: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Card(Modifier.fillMaxWidth()) {
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp)) {
         Column {
             Row(
                 modifier =
@@ -48,17 +50,18 @@ fun CollapsibleSettingsSection(
                             onClickLabel = if (expanded) "Collapse section" else "Expand section",
                             onClick = onToggle,
                         )
-                        .padding(8.dp),
+                        .padding(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(title, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold)
                     if (summaryContent != null) summaryContent()
                     else
                         Text(
                             summary,
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
+                            lineHeight = 13.sp,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -71,12 +74,15 @@ fun CollapsibleSettingsSection(
                 )
             }
             AnimatedVisibility(visible = expanded) {
-                Column(
-                    modifier =
-                        Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    content = content,
-                )
+                ProvideTextStyle(MaterialTheme.typography.bodySmall) {
+                    Column(
+                        modifier =
+                            Modifier.fillMaxWidth()
+                                .padding(start = 6.dp, end = 6.dp, bottom = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        content = content,
+                    )
+                }
             }
         }
     }

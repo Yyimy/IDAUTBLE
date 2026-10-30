@@ -350,6 +350,7 @@ fun OtaScreen(
 
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Button(
+                shape = RoundedCornerShape(6.dp),
                 onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
                 colors =
                     ButtonDefaults.buttonColors(
@@ -410,6 +411,7 @@ fun OtaScreen(
 
             // Botón principal (ocupa el espacio)
             Button(
+                shape = RoundedCornerShape(6.dp),
                 onClick = {
                     if (!serverRunning) {
                         if (!canStartServer) {
@@ -451,6 +453,7 @@ fun OtaScreen(
 
             // Botón secundario (compacto)
             OutlinedButton(
+                shape = RoundedCornerShape(6.dp),
                 onClick = { refreshIpNow() },
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
             ) {
@@ -511,6 +514,7 @@ fun OtaScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Button(
+                            shape = RoundedCornerShape(6.dp),
                             onClick = { onSendOta("OTA=START") },
                             enabled =
                                 serverRunning &&
@@ -531,6 +535,7 @@ fun OtaScreen(
                         }
 
                         OutlinedButton(
+                            shape = RoundedCornerShape(6.dp),
                             onClick = {
                                 val intent = Intent(Settings.ACTION_WIFI_SETTINGS)
                                 context.startActivity(intent)
@@ -577,6 +582,7 @@ fun OtaScreen(
                     }
 
                     Button(
+                        shape = RoundedCornerShape(6.dp),
                         onClick = {
                             val cmd = cmdPhase2
                             if (cmd == null) {
@@ -695,6 +701,7 @@ fun OtaScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 OutlinedButton(
+                    shape = RoundedCornerShape(6.dp),
                     onClick = {
 
                         // 1️⃣ Cambiar estado visual

@@ -3,11 +3,11 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lintDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 15. VersionName: `1.3.11-plc3`.
+- VersionCode: 16. VersionName: `1.3.12-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
-- 57 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
+- 60 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
 
 ## Pruebas ejecutadas
 
@@ -19,7 +19,7 @@ Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lin
 | DeviceStatusTest | 8 | 0 |
 | DeviceStatusVisualsTest | 5 | 0 |
 | PlcReadingsTest | 8 | 0 |
-| StatusRefreshPolicyTest | 10 | 0 |
+| StatusRefreshPolicyTest | 13 | 0 |
 | ExampleUnitTest (original) | 1 | 0 |
 
 Los casos de protocolo prueban todos los puntos de corte de la confirmación de conexión y de una trama V2, tamaños de fragmento 1/20/182 bytes, varios mensajes concatenados, UTF-8 partido, límites del buffer, resincronización, comandos protegidos/consultas, PIN con ceros iniciales, caducidad de sesión y redacción de secretos en el log. Las pruebas de red comprueban conservación de contraseña enmascarada, cambio explícito, contraseña vacía, valores con `=`, estados LINK/TCP independientes y recepción de NET/NETSTAT en una misma ráfaga.
@@ -307,3 +307,39 @@ Resultado final 1.3.11: `testDebugUnitTest assembleDebug lintDebug` correctos
 57 pruebas JVM, 0 fallos/errores. Lint: 0 errores, 0 MissingPermission,
 30 advertencias y 3 avisos informativos; ningún aviso en StatusRefreshPolicy.
 `git diff --check` correcto. Sin ejecución en dispositivo físico.
+
+
+## Interruptor After reads (app 1.3.12)
+
+Interruptor en la misma fila que Refresh, con etiqueta corta, semántica accesible
+y área pulsable de al menos 48 dp de alto. Se guarda el booleano en preferencias
+privadas de la app, activado por defecto. La carga ocurre antes de construir la
+interfaz y se aplica a la política antes de iniciar las consultas.
+
+Tres pruebas JVM nuevas comprueban: desactivar evita la consulta tras lectura
+y mantiene la periódica, apagar cancela el refresco diferido y permite volver a
+activar sin enviar nada inmediatamente, y reiniciar la conexión conserva la
+preferencia sin bloquear consultas iniciales/manuales.
+
+Pendiente en tablet/PLC: tamaño/posición del interruptor, fuente ampliada,
+persistencia al cerrar/reabrir y alternar After reads durante lecturas, además
+de comprobar STATUS periódico y manual en ambos estados. Sin prueba física ni
+pruebas instrumentadas del almacenamiento Android.
+
+
+La revisión visual 1.3.12 extiende el estilo compacto de READINGS/DEVICE STATUS
+al tema común, cabeceras/cuerpos plegables, acciones de mantenimiento, Barcode ID,
+terminal manual, campos NETWORK y botones de NETWORK/OTA. Tipografía 11/13 sp
+para cuerpo/acciones y 12/14 sp monoespaciada para valores editables. Botones y
+campos con esquinas de 6 dp, tarjetas plegables de 8 dp y etiquetas Barcode de
+52 dp. No cambia callbacks ni comandos de esas secciones.
+Pendiente revisar en tablet: fuentes ampliadas, ambos temas, textos largos y
+campos editables (prefijos/RTC/red/manual) junto al nuevo interruptor.
+
+Resultado final 1.3.12: `testDebugUnitTest assembleDebug lintDebug` correctos
+(BUILD SUCCESSFUL, 4 min 16 s). APK 1.3.12-plc3 / versionCode 16 generado.
+60 pruebas JVM: 0 fallos, 0 errores y 0 omitidas. Lint: 0 errores,
+0 MissingPermission, 32 advertencias y 3 avisos informativos. Respecto a 1.3.11,
+aparecen la sugerencia UseKtx para editar la nueva preferencia y un aviso de
+versión de Kotlin disponible; no se actualizan dependencias.
+`git diff --check` correcto. Sin validación física de interfaz/BLE/almacenamiento.
