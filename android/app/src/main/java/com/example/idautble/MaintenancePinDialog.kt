@@ -44,9 +44,12 @@ fun MaintenancePinDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onConfirm, enabled = validMaintenancePin(pin)) {
-                Text("Authorise")
-            }
+            MaintenanceActionButton(
+                text = "Authorise",
+                onClick = onConfirm,
+                tone = MaintenanceActionTone.SUCCESS,
+                enabled = validMaintenancePin(pin),
+            )
         },
         dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )

@@ -584,9 +584,7 @@ class MainActivity : ComponentActivity() {
         val addr = lastConnectedAddress ?: return
 
         // 🔴 Forzar limpieza absoluta
-        try {
-            gatt?.close()
-        } catch (_: Exception) {}
+        gatt?.let { closeGattSafely(it) }
         gatt = null
         txChar = null
 
@@ -617,7 +615,32 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @SuppressLint("MissingPermission")
+    private fun closeGattSafely(g: BluetoothGatt) {
+        if (!hasConnectPermission()) return
+        try {
+            g.close()
+        } catch (_: SecurityException) {
+            log(LogLevel.WARN, "Bluetooth permission was revoked while closing the connection")
+        } catch (_: Exception) {}
+    }
+
+    private fun handleBluetoothPermissionLoss() {
+        failWrite("Bluetooth permission was revoked. Grant access and reconnect.")
+        disconnectGatt(silentLog = true)
+    }
+
+    private fun completeReliableWrite(g: BluetoothGatt) {
+        if (!hasConnectPermission()) {
+            handleBluetoothPermissionLoss()
+            return
+        }
+        try {
+            if (!g.executeReliableWrite()) failWrite("Could not confirm the long write")
+        } catch (_: SecurityException) {
+            handleBluetoothPermissionLoss()
+        }
+    }
+
     private fun disconnectGatt(silentLog: Boolean = false, keepBleLinkState: Boolean = false) {
         resetSecureTransport()
         if (!keepBleLinkState) {
@@ -627,12 +650,14 @@ class MainActivity : ComponentActivity() {
         }
         val g = gatt
         if (g != null) {
-            try {
-                g.disconnect()
-            } catch (_: Exception) {}
-            try {
-                g.close()
-            } catch (_: Exception) {}
+            if (hasConnectPermission()) {
+                try {
+                    g.disconnect()
+                } catch (_: SecurityException) {
+                    log(LogLevel.WARN, "Bluetooth permission was revoked while disconnecting")
+                } catch (_: Exception) {}
+            }
+            closeGattSafely(g)
         }
         gatt = null
         txChar = null
@@ -922,6 +947,10 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("MissingPermission")
     private fun pumpWrites() {
         if (activeWrite != null || writeQueue.isEmpty()) return
+        if (!hasConnectPermission()) {
+            handleBluetoothPermissionLoss()
+            return
+        }
         val g = gatt ?: return
         val ch = txChar ?: return
         val packet = writeQueue.removeFirst()
@@ -975,18 +1004,19 @@ class MainActivity : ComponentActivity() {
             txTimeout = timeout
             mainHandler.postDelayed(timeout, 10000)
         } catch (_: SecurityException) {
-            failWrite("Bluetooth permission was not granted")
+            handleBluetoothPermissionLoss()
             requestBlePermissions()
         } catch (_: Exception) {
             failWrite("Failed to send the BLE command")
         }
     }
 
-    @SuppressLint("MissingPermission")
     private fun failWrite(reason: String) {
-        if (activeReliableWrite)
+        if (activeReliableWrite && hasConnectPermission())
             try {
                 gatt?.abortReliableWrite()
+            } catch (_: SecurityException) {
+                // Permission may be revoked between the check and the abort.
             } catch (_: Exception) {}
         txTimeout?.let { mainHandler.removeCallbacks(it) }
         txTimeout = null
@@ -1392,9 +1422,7 @@ class MainActivity : ComponentActivity() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
                 mainHandler.post {
                     if (gatt !== g) {
-                        try {
-                            g.close()
-                        } catch (_: Exception) {}
+                        closeGattSafely(g)
                         return@post
                     }
                     if (
@@ -1414,9 +1442,7 @@ class MainActivity : ComponentActivity() {
                         val shouldReconnect = otaRebootExpected
                         log(LogLevel.INFO, "BLE disconnected (status=$status)")
                         resetSecureTransport()
-                        try {
-                            g.close()
-                        } catch (_: Exception) {}
+                        closeGattSafely(g)
                         gatt = null
                         txChar = null
                         deviceConnected = false
@@ -1508,7 +1534,7 @@ class MainActivity : ComponentActivity() {
                             failWrite("The long write does not match the command")
                             return@post
                         }
-                        if (!g.executeReliableWrite()) failWrite("Could not confirm the long write")
+                        completeReliableWrite(g)
                     } else completeWrite()
                 }
             }
@@ -1691,6 +1717,7 @@ class MainActivity : ComponentActivity() {
                 PlcBleTesterLandscape(
                     networkSnapshot = uiNetworkSnapshot.value,
                     maintenanceStatus = uiMaintenanceStatus.value,
+                    maintenanceAuthorised = maintenanceSession.isAuthorized(),
                     equipmentId = uiIdentity.value?.id,
                     onIdentityClick = { openIdentityDialog() },
                     onMaintenanceClick = { openPinDialog() },
@@ -1808,6 +1835,7 @@ class MainActivity : ComponentActivity() {
 private fun PlcBleTesterLandscape(
     networkSnapshot: NetworkSnapshot,
     maintenanceStatus: String,
+    maintenanceAuthorised: Boolean,
     equipmentId: String?,
     onIdentityClick: () -> Unit,
     onMaintenanceClick: () -> Unit,
@@ -2203,30 +2231,36 @@ private fun PlcBleTesterLandscape(
                                 CollapsibleSettingsSection(
                                     title = "PIN / ACCESS",
                                     summary = maintenanceStatus,
+                                    summaryContent = {
+                                        MaintenanceAccessBadge(
+                                            authorised = maintenanceAuthorised,
+                                            label = maintenanceStatus,
+                                        )
+                                    },
                                     expanded = pinSectionExpanded,
                                     onToggle = { pinSectionExpanded = !pinSectionExpanded },
                                 ) {
-                                    OutlinedButton(
+                                    MaintenanceActionButton(
+                                        text = "Enter PIN / Authorise",
                                         onClick = onMaintenanceClick,
+                                        tone = MaintenanceActionTone.SUCCESS,
                                         enabled = connected,
                                         modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        Text("Enter PIN / Authorise", fontSize = 12.sp)
-                                    }
-                                    OutlinedButton(
+                                    )
+                                    MaintenanceActionButton(
+                                        text = "Lock access",
                                         onClick = onLockMaintenance,
+                                        tone = MaintenanceActionTone.WARNING,
                                         enabled = connected,
                                         modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        Text("Lock access", fontSize = 12.sp)
-                                    }
-                                    TextButton(
+                                    )
+                                    MaintenanceActionButton(
+                                        text = "Forget saved PIN",
                                         onClick = onForgetPin,
+                                        tone = MaintenanceActionTone.DANGER,
                                         enabled = connected,
                                         modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        Text("Forget saved PIN", fontSize = 12.sp)
-                                    }
+                                    )
                                 }
 
                                 CollapsibleSettingsSection(
@@ -2241,13 +2275,13 @@ private fun PlcBleTesterLandscape(
                                         "ID used for the Bluetooth name and PLC data frames.",
                                         fontSize = 12.sp,
                                     )
-                                    OutlinedButton(
+                                    MaintenanceActionButton(
+                                        text = "Configure ID",
                                         onClick = onIdentityClick,
+                                        tone = MaintenanceActionTone.INFO,
                                         enabled = connected,
                                         modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        Text("Configure ID", fontSize = 12.sp)
-                                    }
+                                    )
                                 }
 
                                 CollapsibleSettingsSection(

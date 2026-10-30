@@ -3,7 +3,7 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 9. VersionName: `1.3.5-plc3`.
+- VersionCode: 10. VersionName: `1.3.6-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
@@ -47,7 +47,7 @@ del diálogo ni del controlador BLE; quedan para el terminal real.
 - Esta app de mantenimiento no es el registro de operaciones del SGA/WMS: no envía ACK de eventos automáticamente. Usar ACKMODE=0 salvo que un receptor integrado confirme esos eventos. La app avisa si INFO informa ACKMODE=1.
 - El PIN del firmware y la contraseña WiFi OTA son valores distintos. La app no puede obtener automáticamente la contraseña OTA, que el firmware actual publica por USB con `info`.
 - “Olvidar PIN” borra el valor recordado y solicita AUTH=OFF. “Bloquear acceso” no borra el PIN, pero no reautoriza silenciosamente en esa conexión. No se elimina el vínculo de Android. Si no se confirma el bloqueo, se desconecta.
-- La compilación conserva avisos de APIs de compatibilidad y de componentes de la interfaz original obsoletos. No hay errores de compilación; no se afirma una ejecución de Android Lint ni pruebas instrumentadas en un dispositivo.
+- La compilación conserva avisos de APIs de compatibilidad y de componentes de la interfaz original obsoletos. La ejecución de Lint y sus resultados se detallan en la revisión 1.3.6; no hay pruebas instrumentadas en un dispositivo.
 - Se mantienen los UUID FFE0/FFE1. Esta revisión requiere firmware 3.0.4 para configurar el ID (la autorización por sesión está disponible desde 3.0.2).
 
 Las dos pruebas añadidas comprueban que una autorización por sesión sigue vigente tras cien días simulados, se revoca con reset y conserva compatibilidad con TTL numérico; y que INFO se solicita una sola vez aunque se repita C, habilitándose otra consulta al iniciar una conexión nueva. El flujo real de Bloquear acceso y AUTH=OFF sigue pendiente de validación en el PLC.
@@ -124,3 +124,36 @@ Se preserva su comportamiento y la autorización por conexión.
 Pendiente en tablet: revisar longitudes y saltos de línea, permisos/emparejamiento,
 PIN correcto/incorrecto/recordado, edición de ID con y sin acceso, errores de red,
 flujo OTA y lectura por accesibilidad. No hay pruebas instrumentadas de interfaz.
+
+
+## Estilo de mantenimiento y permisos GATT (1.3.6)
+
+Se añaden botones compactos de color y un indicador textual verde/gris del acceso.
+Se mantienen las condiciones enabled de las acciones y el flujo de PIN/ID. El
+contraste del texto blanco sobre azul, verde y naranja es al menos 4,6:1; los
+controles deshabilitados siguen la atenuación del tema.
+
+Los dos close() de callbacks y executeReliableWrite() de la captura pasan por
+helpers con comprobación de permiso y captura explícita de SecurityException.
+Desconexión, cancelación de escritura y envío desde cola también gestionan la
+revocación. No se añaden SuppressLint para ocultar esos avisos; se retiran las
+supresiones de los métodos de desconexión y fallo de escritura.
+
+`python3 android/tests/test_gatt_permissions.py` compila y ejecuta las tres
+funciones reales extraídas de MainActivity con el compilador Kotlin 2.0.21 de la
+caché de Gradle y dobles de BluetoothGatt. Sus 14 comprobaciones cubren ausencia
+de permiso, operación correcta, revocación entre comprobación y llamada, rechazo
+del stack y cierre de una conexión ya cerrada. Requiere Python 3 y JDK 17;
+JAVA_HOME y GRADLE_USER_HOME seleccionan los mismos recursos que Gradle.
+No prueba los diálogos del sistema ni el controlador Bluetooth de Android.
+
+Pendiente en tablet/PLC: revisión visual con modo claro/oscuro, botones habilitados
+y deshabilitados, indicador de acceso y revocación real de permiso durante conexión
+y escritura larga. La protección física del PLC no se modifica.
+
+
+Resultados de esta revisión: `testDebugUnitTest assembleDebug lintDebug` correctos,
+APK generado, 26 pruebas JVM sin fallos ni errores y 14 comprobaciones de los
+helpers de permisos superadas. Lint 31.13.2 no informa errores ni MissingPermission.
+Se mantienen advertencias de dependencias/APIs/recursos de la base, sin actualizar
+librerías ni cambiar el target SDK en esta revisión.
