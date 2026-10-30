@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.6
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.7-plc3** (versionCode 11).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.8-plc3** (versionCode 12).
 
 ## Abrir y compilar
 
@@ -238,3 +238,19 @@ No se consulta continuamente. El botón espera a que BLE esté preparado; una
 consulta sin respuesta termina a los 6 s con una explicación. Firmware anterior
 a 3.0.6 mantiene las demás funciones. Desconectar borra datos y peticiones; una
 respuesta malformada conserva la instantánea anterior con aviso.
+
+
+## Panel visual (1.3.8)
+
+El estado se organiza en tarjetas de LED, baterías y conexiones/periféricos.
+El círculo del LED reproduce su cadencia con un color de severidad y conserva
+su explicación textual. Es una vista previa: su fase no está sincronizada con
+la placa. Las barras muestran el porcentaje estimado y la tensión; Not fitted,
+Invalid reading y Old measurement aparecen sin porcentaje ni nivel útil.
+Se destaca con un borde la batería presente de menor nivel (ambas en empate).
+
+Los datos caducados se ven en gris, con Out of date/Last snapshot; el parpadeo
+se detiene. También se pausa al plegar o abandonar la pestaña. La consulta sigue
+siendo manual y al conectar/cambiar ID, como antes. No cambia el protocolo ni
+requiere actualizar el firmware 3.0.6. Tema claro/oscuro y fuente ampliada están
+contemplados; comprobar la presentación en el terminal real.
