@@ -16,6 +16,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -1047,6 +1048,8 @@ class MainActivity : ComponentActivity() {
                 identityExpected = null
                 uiIdentityBusy.value = false
                 identityRequest++
+                uiIdentityDialog.value = false
+                log(LogLevel.INFO, uiIdentityStatus.value)
             } else if (identityExpected == null && uiIdentityBusy.value) {
                 uiIdentityDraft.value = identity.id
                 uiIdentityStatus.value = "Introduce el identificador de la carretilla."
@@ -1615,9 +1618,22 @@ class MainActivity : ComponentActivity() {
     // ============================
     // EQUIPMENT ID
     // ============================
+    private fun showIdentityAuthorizationMessage() {
+        Toast.makeText(
+                this,
+                "Primero debes introducir la contraseña en PIN / ACCESO.",
+                Toast.LENGTH_LONG,
+            )
+            .show()
+    }
+
     private fun openIdentityDialog() {
         if (!bleChannelReady) {
             log(LogLevel.WARN, "Espera a completar la conexión BLE")
+            return
+        }
+        if (!maintenanceSession.isAuthorized()) {
+            showIdentityAuthorizationMessage()
             return
         }
         uiIdentityDialog.value = true
@@ -1633,9 +1649,8 @@ class MainActivity : ComponentActivity() {
         val id = normalizedEquipmentId(uiIdentityDraft.value)
         if (!validEquipmentId(id) || uiIdentityBusy.value || !bleChannelReady) return
         if (!maintenanceSession.isAuthorized()) {
-            uiIdentityStatus.value =
-                "Autoriza el mantenimiento con el PIN y vuelve a pulsar Guardar ID."
-            openPinDialog()
+            uiIdentityDialog.value = false
+            showIdentityAuthorizationMessage()
             return
         }
         uiIdentityDraft.value = id
@@ -1855,6 +1870,7 @@ private fun PlcBleTesterLandscape(
     onResetOtaUi: () -> Unit,
 ) {
     var showDevices by remember { mutableStateOf(false) } // oculto por defecto
+    var binarySectionExpanded by rememberSaveable { mutableStateOf(true) }
     var equipmentSectionExpanded by rememberSaveable { mutableStateOf(false) }
     var pinSectionExpanded by rememberSaveable { mutableStateOf(false) }
     var connectionSectionExpanded by rememberSaveable { mutableStateOf(true) }
@@ -2164,59 +2180,31 @@ private fun PlcBleTesterLandscape(
                                     }
                                 }
 
-                                Card(Modifier.fillMaxWidth()) {
-                                    Column(
-                                        Modifier.padding(6.dp),
-                                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                                    ) {
-                                        Text("BINARY COMMANDS", fontSize = 12.sp)
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement =
-                                                Arrangement.spacedBy(
-                                                    6.dp,
-                                                    Alignment.CenterHorizontally,
-                                                ),
-                                        ) {
-                                            CmdBtn("L") { onCmd('L') }
-                                            CmdBtn("B") { onCmd('B') }
-                                            CmdBtn("A") { onCmd('A') }
-                                            CmdBtn("P") { onCmd('P') }
-                                        }
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement =
-                                                Arrangement.spacedBy(
-                                                    6.dp,
-                                                    Alignment.CenterHorizontally,
-                                                ),
-                                        ) {
-                                            CmdBtn("D") { onCmd('D') }
-                                            CmdBtn("I") { onCmd('I') }
-                                            CmdBtn("C") { onCmd('C') }
-                                            CmdBtn("O") { onCmd('O') }
-                                        }
-                                    }
-                                }
-
                                 CollapsibleSettingsSection(
-                                    title = "ID DE LA CARRETILLA",
-                                    summary = equipmentId ?: "ID sin consultar",
-                                    expanded = equipmentSectionExpanded,
-                                    onToggle = {
-                                        equipmentSectionExpanded = !equipmentSectionExpanded
-                                    },
+                                    title = "BINARY COMMANDS",
+                                    summary = "L · B · A · P · D · I · C · O",
+                                    expanded = binarySectionExpanded,
+                                    onToggle = { binarySectionExpanded = !binarySectionExpanded },
                                 ) {
-                                    Text(
-                                        "Identificador utilizado en el nombre Bluetooth y en las tramas del PLC.",
-                                        fontSize = 12.sp,
-                                    )
-                                    OutlinedButton(
-                                        onClick = onIdentityClick,
-                                        enabled = connected,
+                                    Row(
                                         modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement =
+                                            Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
                                     ) {
-                                        Text("Configurar ID", fontSize = 12.sp)
+                                        CmdBtn("L") { onCmd('L') }
+                                        CmdBtn("B") { onCmd('B') }
+                                        CmdBtn("A") { onCmd('A') }
+                                        CmdBtn("P") { onCmd('P') }
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement =
+                                            Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                                    ) {
+                                        CmdBtn("D") { onCmd('D') }
+                                        CmdBtn("I") { onCmd('I') }
+                                        CmdBtn("C") { onCmd('C') }
+                                        CmdBtn("O") { onCmd('O') }
                                     }
                                 }
 
@@ -2246,6 +2234,27 @@ private fun PlcBleTesterLandscape(
                                         modifier = Modifier.fillMaxWidth(),
                                     ) {
                                         Text("Olvidar PIN en esta app", fontSize = 12.sp)
+                                    }
+                                }
+
+                                CollapsibleSettingsSection(
+                                    title = "ID DE LA CARRETILLA",
+                                    summary = equipmentId ?: "ID sin consultar",
+                                    expanded = equipmentSectionExpanded,
+                                    onToggle = {
+                                        equipmentSectionExpanded = !equipmentSectionExpanded
+                                    },
+                                ) {
+                                    Text(
+                                        "Identificador utilizado en el nombre Bluetooth y en las tramas del PLC.",
+                                        fontSize = 12.sp,
+                                    )
+                                    OutlinedButton(
+                                        onClick = onIdentityClick,
+                                        enabled = connected,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text("Configurar ID", fontSize = 12.sp)
                                     }
                                 }
 
