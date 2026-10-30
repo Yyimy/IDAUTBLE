@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.4-plc3, versionCode 8 |
+| App Android | [android/](android/) | 1.3.5-plc3, versionCode 9 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.5-rc1 |
 
 ## Trabajar sin ZIP
@@ -74,11 +74,11 @@ C verifica que el PLC responde. La app consulta INFO? una sola vez por conexión
 
 ## ID de la carretilla
 
-Con firmware 3.0.5 y app 1.3.4, conecta y abre la pestaña TERMINAL. Debajo de
-BINARY COMMANDS, despliega **PIN / ACCESO** y pulsa **Introducir PIN / Autorizar**.
-Después despliega **ID DE LA CARRETILLA** y pulsa **Configurar ID**. Sin acceso
+Con firmware 3.0.5 y app 1.3.5, conecta y abre la pestaña TERMINAL. Debajo de
+BINARY COMMANDS, despliega **PIN / ACCESS** y pulsa **Enter PIN / Authorise**.
+Después despliega **FORKLIFT ID** y pulsa **Configure ID**. Sin acceso
 autorizado, ese botón muestra únicamente un aviso para introducir antes la
-contraseña en PIN / ACCESO. Tras confirmar el PLC el nuevo ID, la ventana se cierra. Admite 1–20 caracteres ASCII (A-Z, 0-9, espacios,
+contraseña en PIN / ACCESS. Tras confirmar el PLC el nuevo ID, la ventana se cierra. Admite 1–20 caracteres ASCII (A-Z, 0-9, espacios,
 guion y guion bajo), por ejemplo `E 1234 BCD`. Se normaliza a mayúsculas y
 se guarda en el PLC. El nombre Bluetooth pasa a ser exactamente ese ID y las
 tramas nuevas utilizan el mismo valor. No se reinicia el PLC ni cambia el PIN.
@@ -86,8 +86,8 @@ Desconecta y vuelve a buscar para ver el nuevo nombre anunciado.
 
 Todas las secciones del panel de comandos de TERMINAL se pliegan de forma
 independiente, incluida BINARY COMMANDS. Conexión Bluetooth y comandos binarios
-empiezan desplegados; el resto empieza plegado. PIN / ACCESO aparece justo
-después de BINARY COMMANDS y antes de ID DE LA CARRETILLA.
+empiezan desplegados; el resto empieza plegado. PIN / ACCESS aparece justo
+después de BINARY COMMANDS y antes de FORKLIFT ID.
 Las cabeceras de ID y acceso conservan el ID
 y el estado de acceso visibles. La elección se mantiene al cambiar de pestaña
 y durante recreaciones de pantalla compatibles con el estado guardado de Android.
@@ -110,3 +110,12 @@ y [app](android/LEEME_PLC3.md#id-de-la-carretilla).
 - Las pruebas de emparejamiento, electrónica, relé, baterías y OTA en el equipo real siguen pendientes.
 
 Informes: [Android](android/VALIDACION_ANDROID.md) y [firmware](firmware/VALIDACION.md).
+
+
+## Idioma de la app (1.3.5)
+
+Todos los textos propios de la app se presentan en inglés: menú, diálogos, avisos,
+errores, registro de diagnóstico y accesibilidad. Los comandos, UUID y respuestas
+recibidas del PLC se conservan literalmente; por ejemplo, CONECTADO sigue siendo
+el token del protocolo. Los diálogos del sistema Android mantienen el idioma del
+terminal. No requiere actualizar firmware.

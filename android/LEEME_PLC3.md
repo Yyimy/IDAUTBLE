@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.5
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.4-plc3** (versionCode 8).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.5-plc3** (versionCode 9).
 
 ## Abrir y compilar
 
@@ -22,7 +22,7 @@ gradlew.bat testDebugUnitTest assembleDebug
 2. En la app, concede los permisos Bluetooth, activa Bluetooth, busca y conecta al PLC.
 3. **Android muestra el diálogo de emparejamiento.** Introduce el PIN que has definido en el firmware. Si ya estaba vinculado y has cambiado el PIN, olvida/desvincula el PLC en los ajustes de Android y empareja otra vez.
 4. Espera a que la app indique que el canal BLE está listo. La app verifica las notificaciones y recibe la línea completa `CONECTADO`.
-5. Pulsa **PIN / Acceso**, introduce el mismo PIN y autoriza el mantenimiento. También aparece ese diálogo al solicitar el primer cambio protegido.
+5. Pulsa **PIN / ACCESS**, introduce el mismo PIN y autoriza el mantenimiento. También aparece ese diálogo al solicitar el primer cambio protegido.
 6. Puedes marcar **Recordar en este dispositivo**. El PIN se guarda por dirección BLE, cifrado mediante una clave de Android Keystore, y se excluye de copias de seguridad y transferencias entre dispositivos.
 
 **No hay que escribir ni cambiar el PIN en el código de Android.** Se introduce en la app. Android conserva su propia vinculación Bluetooth; la opción “Recordar” de la app se utiliza para la autorización posterior `AUTH`, no para rellenar por su cuenta el diálogo de emparejamiento del sistema.
@@ -87,13 +87,13 @@ La app reconoce también una autorización temporal de firmware anterior y lo in
 
 ## ID de la carretilla
 
-1. Actualizar el firmware a 3.0.5 y la app a 1.3.4. Abrir en Arduino IDE la carpeta
+1. Actualizar el firmware a 3.0.5 y la app a 1.3.5. Abrir en Arduino IDE la carpeta
    completa del sketch, incluyendo Types.h. Conservar el PIN propio antes de cargar.
 2. Conectar al PLC. En TERMINAL, justo debajo de BINARY COMMANDS, desplegar
-   **PIN / ACCESO** y pulsar **Introducir PIN / Autorizar**.
+   **PIN / ACCESS** y pulsar **Enter PIN / Authorise**.
 3. Sin lecturas, eventos u OTA pendientes (se admite un palet cargado), pulsar
-   **Configurar ID** dentro de la sección **ID DE LA CARRETILLA**. La app consulta el ID real y muestra también HWID.
-4. Introducir, por ejemplo, `E 1234 BCD` y pulsar **Guardar ID**. Se admite de
+   **Configure ID** dentro de la sección **FORKLIFT ID**. La app consulta el ID real y muestra también HWID.
+4. Introducir, por ejemplo, `E 1234 BCD` y pulsar **Save ID**. Se admite de
    1 a 20 caracteres A-Z, 0-9, espacios interiores, guion y guion bajo. Se
    normaliza a mayúsculas; no se permiten acentos ni separadores del protocolo.
 5. Esperar a **ID guardado en el PLC**. Una escritura GATT completada no basta:
@@ -113,8 +113,8 @@ caracteres. La app de mantenimiento no convierte ni confirma eventos del SGA.
 
 En TERMINAL, inmediatamente después de BINARY COMMANDS, aparecen:
 
-1. **ID DE LA CARRETILLA**: ID actual y botón Configurar ID.
-2. **PIN / ACCESO**: estado de mantenimiento y controles Introducir PIN / Autorizar,
+1. **FORKLIFT ID**: ID actual y botón Configurar ID.
+2. **PIN / ACCESS**: estado de mantenimiento y controles Introducir PIN / Autorizar,
    Bloquear acceso y Olvidar PIN en esta app.
 
 Se retiran los controles de la parte superior. Cada tarjeta se abre o cierra
@@ -170,3 +170,26 @@ Configurar ID. La ventana se cierra automáticamente cuando el PLC confirma el
 ID guardado; el resultado sigue visible en el registro. Si el PLC rechaza el cambio
 o no responde, la ventana permanece abierta y muestra la causa. No requiere
 modificar el firmware.
+
+
+## Interfaz en inglés (app 1.3.5)
+
+Se traduce toda la interfaz propia, incluidos diálogos PIN e ID, mensajes de
+validación/red/OTA, avisos Bluetooth, entradas de diagnóstico generadas por la app
+y etiquetas de accesibilidad. Los nombres actuales son BLUETOOTH CONNECTION,
+BINARY COMMANDS, PIN / ACCESS, FORKLIFT ID, HEIGHT MEASUREMENT, TEXT COMMANDS
+- AIM Code ID / RTC y MANUAL TERMINAL.
+
+Para autorizar: PIN / ACCESS > Enter PIN / Authorise. Para editar el identificador:
+FORKLIFT ID > Configure ID > Save ID. Sin acceso autorizado se muestra únicamente
+«Enter the PIN in PIN / ACCESS first.». El guardado confirmado sigue cerrando
+la ventana. Se conservan los controles de plegado y la autorización por sesión.
+
+El tráfico ASCII/HEX muestra los bytes reales del PLC sin traducir, incluidos
+los tokens de protocolo como CONECTADO. Los diálogos nativos de permisos y
+emparejamiento pertenecen a Android y siguen el idioma configurado en el móvil.
+Esta revisión no cambia comandos, tramas, credenciales ni firmware.
+
+Si Git bloquea Pull por traducciones locales, guardarlas antes con Stash y hacer
+Pull de la revisión integrada. Revisar después el Stash antes de restaurarlo
+para no reintroducir textos antiguos ni perder redacciones propias.

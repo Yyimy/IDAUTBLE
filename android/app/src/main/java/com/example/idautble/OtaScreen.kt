@@ -499,11 +499,11 @@ fun OtaScreen(
                     }
 
                     Text(
-                        "Red del PLC: ${otaApSsid ?: "PLC_OTA_<ID>"}. Usa su contraseña WiFi OTA propia, distinta del PIN BLE. Se consulta por USB con info.",
+                        "PLC network: ${otaApSsid ?: "PLC_OTA_<ID>"}. Use its dedicated OTA WiFi password, which is different from the BLE PIN. Run info over USB to view it.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
-                        "Inicia con las horquillas vacías y sin lecturas pendientes.",
+                        "Start with empty forks and no pending scans.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Row(

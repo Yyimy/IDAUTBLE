@@ -41,10 +41,10 @@ fun CollapsibleSettingsSection(
                 modifier =
                     Modifier.fillMaxWidth()
                         .heightIn(min = 48.dp)
-                        .semantics { stateDescription = if (expanded) "Desplegado" else "Plegado" }
+                        .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
                         .clickable(
                             role = Role.Button,
-                            onClickLabel = if (expanded) "Plegar sección" else "Desplegar sección",
+                            onClickLabel = if (expanded) "Collapse section" else "Expand section",
                             onClick = onToggle,
                         )
                         .padding(8.dp),

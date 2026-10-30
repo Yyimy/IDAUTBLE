@@ -24,36 +24,36 @@ fun EquipmentIdDialog(
     val valid = validEquipmentId(normalized)
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text("ID de la carretilla") },
+        title = { Text("Forklift ID") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("ID actual: ${current?.id ?: "sin consultar"}")
-                current?.let { Text("Identificador técnico: ${it.hardwareId}") }
+                Text("Current ID: ${current?.id ?: "not queried"}")
+                current?.let { Text("Hardware ID: ${it.hardwareId}") }
                 OutlinedTextField(
                     value = draft,
                     onValueChange = onDraftChanged,
                     enabled = !busy,
                     singleLine = true,
-                    label = { Text("Nuevo ID") },
+                    label = { Text("New ID") },
                     supportingText = {
-                        Text("1–20 caracteres: A-Z, 0-9, espacios, - y _. Ejemplo: E 1234 BCD.")
+                        Text("1–20 characters: A-Z, 0-9, spaces, - and _. Example: E 1234 BCD.")
                     },
                     isError = draft.isNotEmpty() && !valid,
                 )
                 Text(
-                    "Este ID se mostrará por Bluetooth y se enviará en las tramas. Se conserva al apagar. Evita repetir el mismo ID en otras carretillas."
+                    "This ID will be shown over Bluetooth and included in data frames. It is kept after power-off. Use a unique ID for each forklift."
                 )
                 Text(
-                    "Puedes cambiar el ID con un palet cargado. Espera a que terminen las operaciones pendientes."
+                    "You can change the ID with a pallet loaded. Wait for pending operations to finish."
                 )
                 if (status.isNotEmpty()) Text(status)
             }
         },
         confirmButton = {
             Button(onClick = onSave, enabled = valid && !busy && current != null) {
-                Text(if (busy) "Esperando..." else "Guardar ID")
+                Text(if (busy) "Waiting..." else "Save ID")
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cerrar") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Close") } },
     )
 }

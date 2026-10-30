@@ -18,36 +18,36 @@ fun MaintenancePinDialog(
 ) {
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("Acceso de mantenimiento") },
+        title = { Text("Maintenance access") },
         text = {
             Column {
                 Text(
-                    "Introduce las seis cifras de PLC_MAINTENANCE_PIN configuradas en el firmware. Android solicita ese mismo PIN al emparejar."
+                    "Enter the six-digit PLC_MAINTENANCE_PIN configured in the firmware. Android asks for the same PIN when pairing."
                 )
                 OutlinedTextField(
                     value = pin,
                     onValueChange = { value ->
                         onPinChanged(value.filter { it in '0'..'9' }.take(6))
                     },
-                    label = { Text("PIN del PLC") },
+                    label = { Text("PLC PIN") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                 )
                 Row {
                     Checkbox(checked = remember, onCheckedChange = onRememberChanged)
-                    Text("Recordar en este dispositivo (almacenamiento cifrado)")
+                    Text("Remember on this device (encrypted storage)")
                 }
                 Text(
-                    "La autorización se mantiene hasta que pulses Bloquear acceso o desconectes el PLC. No necesitas autorizar para consultar datos."
+                    "Authorisation remains active until you select Lock access or disconnect the PLC. Queries do not require authorisation."
                 )
             }
         },
         confirmButton = {
             TextButton(onClick = onConfirm, enabled = validMaintenancePin(pin)) {
-                Text("Autorizar")
+                Text("Authorise")
             }
         },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancelar") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
 }
