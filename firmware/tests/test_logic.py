@@ -76,7 +76,7 @@ int digitalRead(int){return rawFoto;}void countersIncPalCargado(){++loaded;}void
 void powerCut(const char*){gCutRequested=true;}
 '''
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
-names=['handleAuthCommand','maintenanceAuthorized','runtimeLoad','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueFrame','sendFrame','bleCanNotify','txTick','parseU32','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
+names=['handleAuthCommand','maintenanceAuthorized','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueFrame','sendFrame','bleCanNotify','txTick','parseU32','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
 #define V_BAT_ABSENT 2.0f
@@ -108,13 +108,14 @@ bool gAckMode=false,gEventInFlight=false;PersistentOutbox gOutbox{};
 void outboxPop(){if(gOutbox.count)--gOutbox.count;}
 '''
 pin_declaration=re.search(r'static constexpr char PLC_MAINTENANCE_PIN\[\] = "[0-9]+";',source).group()
-shim += "\n" + pin_declaration + "\n"
+ota_declaration=re.search(r'static constexpr char PLC_OTA_WIFI_PASSWORD\[\] = "[^"\n]*";',source).group()
+shim += "\n" + pin_declaration + "\n" + ota_declaration + "\n"
 shim += r'''
 #include <map>
 #define FIRMWARE_VERSION "3.0.1-rc1"
 #define REQUIRE_MAINT_AUTH 1
 std::atomic<bool> gMaintenanceAuthorized{false};uint32_t gAuthBlockedUntil=0;uint8_t gAuthFails=0;
-String gMaintenancePin,gOtaApPass;bool gPinChangedOnBoot=false,gHeartbeatEnabled=false;
+String gMaintenancePin,gOtaApPass,gOtaApSsid;bool gPinChangedOnBoot=false,gHeartbeatEnabled=false;
 const char* OTA_AP_PASS=nullptr;
 std::map<std::string,String> storedSettings;
 struct Preferences {
@@ -202,11 +203,20 @@ int main(){
  // The compiled PIN wins over any prior NVS value and invalidates old bonds.
  storedSettings["pin"]="987654";storedSettings["apkey"]="ABCDEF0123456789";
  runtimeLoad();CHECK(gMaintenancePin==PLC_MAINTENANCE_PIN);CHECK(gPinChangedOnBoot);
- CHECK(gOtaApPass=="ABCDEF0123456789");
+ CHECK(gOtaApPass==PLC_OTA_WIFI_PASSWORD);CHECK(String(OTA_AP_PASS)==PLC_OTA_WIFI_PASSWORD);
+ CHECK(storedSettings["apkey"]=="ABCDEF0123456789"); // Retained for rollback, never used as the active key.
  applyConfiguredPin();CHECK(bondsRemoved==2);CHECK(!gPinChangedOnBoot);CHECK(storedSettings["pin"]==PLC_MAINTENANCE_PIN);
  runtimeLoad();CHECK(!gPinChangedOnBoot);applyConfiguredPin();CHECK(bondsRemoved==2);
  storedSettings["pin"]="987654";bondCount=-1;runtimeLoad();applyConfiguredPin();
  CHECK(gMaintenancePin==PLC_MAINTENANCE_PIN);CHECK(gPinChangedOnBoot);CHECK(storedSettings["pin"]=="987654");
+
+ // A missing or stale NVS key cannot override the compiled OTA password.
+ storedSettings.erase("apkey");runtimeLoad();CHECK(gOtaApPass==PLC_OTA_WIFI_PASSWORD);CHECK(storedSettings.count("apkey")==0);
+ storedSettings["apkey"]="short";runtimeLoad();CHECK(gOtaApPass==PLC_OTA_WIFI_PASSWORD);CHECK(String(OTA_AP_PASS)==PLC_OTA_WIFI_PASSWORD);
+ gId="TRUCK-7";otaUpdateApSsid();CHECK(gOtaApSsid=="PLC_OTA_TRUCK-7");
+ gId="FORK 7";otaUpdateApSsid();CHECK(gOtaApSsid=="PLC_OTA_FORK 7");
+ gId="ABCDEFGHIJKLMNOPQRST";otaUpdateApSsid();CHECK(gOtaApSsid.length()==28);
+ gId="AABBCCDDEEFF";otaUpdateApSsid();CHECK(gOtaApSsid=="PLC_OTA_AABBCCDDEEFF");
 
  // Production authentication grants an entire BLE session, not a timed lease.
  gMaintenancePin="001234";gAuthFails=0;gAuthBlockedUntil=0;nowMs=1000;

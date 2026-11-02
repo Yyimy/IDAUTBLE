@@ -502,7 +502,7 @@ fun OtaScreen(
                     }
 
                     Text(
-                        "PLC network: ${otaApSsid ?: "PLC_OTA_<ID>"}. Use its dedicated OTA WiFi password, which is different from the BLE PIN. Run info over USB to view it.",
+                        "PLC network: ${otaApSsid ?: "PLC_OTA_<ID>"}. Use the OTA WiFi password configured in the firmware. It is different from the BLE PIN; run info over USB to view it.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(

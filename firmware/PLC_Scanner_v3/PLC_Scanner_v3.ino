@@ -45,6 +45,23 @@ static_assert(
     "PLC_MAINTENANCE_PIN debe contener exactamente 6 cifras entre comillas");
 // ============================================================================
 
+// ================== WIFI OTA: CONTRASENA POR EL INSTALADOR ==================
+// Cambia SOLO el texto entre comillas antes de compilar y cargar el firmware.
+// Entre 8 y 63 bytes (usa letras, numeros o simbolos ASCII). Independiente del PIN BLE.
+// Se aplica siempre; una clave aleatoria antigua guardada en NVS no la sustituye.
+static constexpr char PLC_OTA_WIFI_PASSWORD[] = "12345678";
+static constexpr bool otaPasswordPrintable(const char *password, unsigned bytes) {
+  for (unsigned i = 0; i < bytes; ++i) {
+    const unsigned char c = (unsigned char)password[i];
+    if (c < 32 || c > 126) return false;
+  }
+  return true;
+}
+static_assert(sizeof(PLC_OTA_WIFI_PASSWORD) >= 9 && sizeof(PLC_OTA_WIFI_PASSWORD) <= 64 &&
+                  otaPasswordPrintable(PLC_OTA_WIFI_PASSWORD, sizeof(PLC_OTA_WIFI_PASSWORD) - 1),
+              "PLC_OTA_WIFI_PASSWORD debe contener entre 8 y 63 caracteres ASCII imprimibles");
+// ============================================================================
+
 #include "mbedtls/sha256.h"
 
 // ============================================================================
@@ -228,7 +245,7 @@ static const uint16_t TCP_CONNECT_TIMEOUT_MS = 200;
 // --- OTA AUTÓNOMO (SoftAP del PLC) ---
 static String gOtaApSsid;  // "PLC_OTA_<ID>"
 static String gOtaApPass;
-static const char *OTA_AP_PASS = nullptr;  // mínimo 8 chars (SAT)
+static const char *OTA_AP_PASS = PLC_OTA_WIFI_PASSWORD;
 static IPAddress OTA_AP_IP(192, 168, 4, 1);
 static IPAddress OTA_AP_GW(192, 168, 4, 1);
 static IPAddress OTA_AP_MASK(255, 255, 255, 0);
@@ -469,7 +486,7 @@ static std::atomic<bool> gBleSecure{false};
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.7-rc1"
+#define FIRMWARE_VERSION "3.0.8-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static BLE2902 *gCccd = nullptr;
@@ -2442,6 +2459,7 @@ static void bleProcessPendingOnce() {
         gOtaUrl = "";
         gOtaSha256 = "";
         gOtaSize = 0;
+        otaUpdateApSsid();  // Use the latest configured ID without requiring a reboot.
 
         BaseType_t ok = xTaskCreatePinnedToCore(otaTask, "otaTask", 8192,
                                                 nullptr, 1, &gOtaTaskHandle, 1);
@@ -2982,7 +3000,7 @@ void setup() {
   String btName = gBluetoothName;
 
   // SSID del modo OTA autónomo
-  gOtaApSsid = "PLC_OTA_" + gHardwareId;
+  otaUpdateApSsid();
   logf("OTA AP SSID: %s (PASS: %s)\n", gOtaApSsid.c_str(), OTA_AP_PASS);
 
   logf("ID equipo: %s\n", gId.c_str());
@@ -3136,6 +3154,12 @@ static bool maintenanceAuthorized() {
   return true;
 #endif
 }
+static void otaUpdateApSsid() {
+  // ID is 1..20 ASCII bytes; prefix + ID is at most 28 bytes (WiFi limit: 32).
+  gOtaApSsid = "PLC_OTA_";
+  gOtaApSsid += gId;
+}
+
 static void runtimeLoad() {
   Preferences p;
   p.begin("runtime3", false);
@@ -3143,15 +3167,9 @@ static void runtimeLoad() {
   // para detectar cambios y retirar las vinculaciones BLE anteriores.
   gMaintenancePin = PLC_MAINTENANCE_PIN;
   gPinChangedOnBoot = p.getString("pin", "") != gMaintenancePin;
-  gOtaApPass = p.getString("apkey", "");
-  if (gOtaApPass.length() != 16) {
-    char pass[17];
-    snprintf(pass, sizeof(pass), "%08lX%08lX", (unsigned long)esp_random(),
-             (unsigned long)esp_random());
-    gOtaApPass = pass;
-    p.putString("apkey", gOtaApPass);
-  }
-  OTA_AP_PASS = gOtaApPass.c_str();
+  // La clave del codigo es la fuente de verdad. Se ignora apkey de versiones anteriores.
+  gOtaApPass = PLC_OTA_WIFI_PASSWORD;
+  OTA_AP_PASS = PLC_OTA_WIFI_PASSWORD;
   gAckMode = p.getBool("ack", false);
   gHeartbeatEnabled = p.getBool("heartbeat", false);
   size_t stored = p.getBytesLength("outbox");
@@ -3984,5 +4002,5 @@ static void handleIdentityCommand(const String &s, uint8_t source) {
   gBluetoothName = id;
   identitySendCurrent();
   // Se mantiene el enlace actual. Al volver a buscar se anuncia el nuevo ID.
-  // PIN, bonds, HWID y SSID OTA no cambian.
+  // PIN, bonds and HWID do not change. OTA SSID is refreshed at the next START.
 }

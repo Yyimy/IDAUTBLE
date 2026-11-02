@@ -1,4 +1,4 @@
-# PLC Scanner 3.0.7-rc1 — código completo corregido
+# PLC Scanner 3.0.8-rc1 — código completo corregido
 
 Versión candidata para validación en banco. Derivada del archivo adjunto del 29/10/2026. Conserva los comandos binarios de cuatro bytes y la trama V2, con las diferencias de integración indicadas abajo. No se ha probado físicamente en la placa.
 
@@ -48,7 +48,7 @@ Se entrega el fuente, no un binario para instalar indiscriminadamente en placas 
 ## Primera conexión: cambios que afectan a la app
 
 1. Abrir el monitor serie USB a **115200**. El comando de consola `info` vuelve a mostrar versión, PIN y contraseña del AP OTA.
-2. El **PIN se define en el propio INO**, en `PLC_MAINTENANCE_PIN`, al principio del archivo. Se entrega `"123456"` como valor de ejemplo. Exactamente seis cifras entre comillas, incluidos ceros iniciales si se desean. El valor compilado se aplica siempre, incluso si NVS contiene un PIN anterior. El mismo PIN se usa para emparejamiento BLE y para autorizar mantenimiento. La contraseña del AP OTA sigue siendo independiente, de 16 caracteres y persistente por equipo.
+2. El **PIN se define en el propio INO**, en `PLC_MAINTENANCE_PIN`, al principio del archivo. Se entrega `"123456"` como valor de ejemplo. Exactamente seis cifras entre comillas, incluidos ceros iniciales si se desean. El valor compilado se aplica siempre, incluso si NVS contiene un PIN anterior. El mismo PIN se usa para emparejamiento BLE y para autorizar mantenimiento. La contraseña del AP OTA es independiente y se define en `PLC_OTA_WIFI_PASSWORD`, junto al PIN; se entrega `12345678` como ejemplo.
 3. Por defecto se exige **emparejamiento BLE con cifrado y MITM**, conservando las claves de vinculación. Introducir el PIN cuando Android/Windows lo solicite. Según el cliente, puede ser necesario iniciar el emparejamiento desde los ajustes de Bluetooth.
 4. Conectar y habilitar las notificaciones en FFE1. El receptor debe concatenar los fragmentos recibidos: una notificación no equivale necesariamente a una trama. Se conserva ETX como final de trama V2 y CRLF para líneas de texto.
 5. Para configurar o apagar, enviar por BLE `AUTH=123456` con el PIN real. Respuesta: `<ACK>AUTH=OK;TTL=SESSION\r\n`. La autorización no caduca por tiempo: dura hasta `AUTH=OFF`, desconexión BLE o reinicio del PLC. Cinco intentos incorrectos bloquean la autorización durante un minuto.
@@ -199,8 +199,8 @@ carácter. Un ejemplo válido es `E 1234 BCD`.
 - El nombre personalizado es exactamente el ID, sin añadir `ISP-`. Sin ID
   personalizado se conserva el comportamiento anterior: ID=HWID y nombre ISP-HWID.
 - HWID permanece inmutable para diagnóstico. Las credenciales de la app siguen
-  asociadas a la dirección BLE. PIN, vínculos y clave/SSID OTA no se cambian.
-  El SSID OTA utiliza siempre HWID, aunque se cambie la matrícula.
+  asociadas a la dirección BLE. PIN, vínculos y clave OTA no se cambian al editar el ID.
+  Desde 3.0.8, el siguiente OTA=START anuncia `PLC_OTA_<ID configurado>`.
 - Se permite cambiar el ID con palet cargado (fotocélula=1) o vacío (0).
   Se rechaza con `ERR=ID_BUSY` ante fotocélula inicial sin estabilizar, corte
   solicitado, lecturas activas/encoladas, eventos pendientes
@@ -351,3 +351,38 @@ flags desconocidos, rango, caducidad estricta, no reutilización de datos, colas
 MTU, transmisión parcial, fallo del canal de origen, desconexión/cambio de
 sesión y rollover. Ver tests/resultado.txt para resultados de esta revisión.
 La validación con sensor, cableado RS485 y tablet reales sigue pendiente.
+
+
+## Contraseña fija de OTA y SSID (3.0.8-rc1)
+
+Al comienzo de PLC_Scanner_v3.ino, justo después del PIN, cambiar solo:
+
+```cpp
+static constexpr char PLC_OTA_WIFI_PASSWORD[] = "12345678";
+```
+
+Compilar y cargar con las opciones habituales. El compilador rechaza una clave
+de menos de 8 o más de 63 bytes, incluida una clave vacía que podría dejar un AP
+sin contraseña. Usar caracteres ASCII; escapar comillas o barras si se utilizan
+dentro de una cadena C++. El valor de ejemplo del repositorio no es una clave
+generada por equipo.
+
+El firmware usa siempre esa constante; ignora la entrada apkey de versiones
+anteriores y no la crea ni la sobrescribe. Se conserva la entrada antigua para
+rollback, pero no controla el AP en esta versión. No se borra NVS, no se cambia
+la autorización BLE y no se retiran vínculos por cambiar solo la clave OTA.
+`info` en el monitor USB a 115200 muestra la clave activa.
+
+El SSID es PLC_OTA_ seguido del ID configurado, no del HWID cuando hay un ID
+personalizado. Se calcula al arrancar y de nuevo antes de crear la tarea de
+cada OTA=START, con el ID más reciente. Un ID de hasta 20 bytes ASCII produce
+un SSID de hasta 28 bytes; se conservan espacios y signos admitidos en el ID.
+Sin ID personalizado el sufijo sigue siendo el identificador de fábrica.
+
+Ejemplos: 777 → PLC_OTA_777; FORK 7 → PLC_OTA_FORK 7. La app 1.3.14 interpreta
+la respuesta AP_ON usando el delimitador IP=, evitando cortar el nombre en su
+primer espacio. La red aparece al iniciar OTA desde la app, no permanentemente.
+
+Tras actualizar clave o nombre, seleccionar la red correcta en Android y
+actualizar sus credenciales guardadas si fuera necesario. El flujo OTA de dos
+fases, el hash, la trama V2 y las funciones de altura/baterías no se modifican.

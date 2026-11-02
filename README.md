@@ -4,8 +4,8 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.13-plc3, versionCode 17 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.7-rc1 |
+| App Android | [android/](android/) | 1.3.14-plc3, versionCode 18 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.8-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -58,6 +58,7 @@ python3 firmware/tests/test_led.py
 python3 firmware/tests/test_identity.py
 python3 firmware/tests/test_status.py
 python3 firmware/tests/test_height.py
+python3 firmware/tests/test_ota_config.py
 ```
 
 Estados del indicador: [LED del PLC](firmware/LEEME.md#led-de-estado-version-303).
@@ -96,7 +97,7 @@ y durante recreaciones de pantalla compatibles con el estado guardado de Android
 
 El cambio admite un palet cargado: no exige fotocélula a 0. Se requiere ausencia
 de lecturas, eventos pendientes u OTA y fotocélula inicial estabilizada. El identificador técnico de fábrica sigue disponible como HWID y el SSID
-OTA sigue basándose en él. Si no se configura un ID propio, se conserva el ID
+OTA utiliza `PLC_OTA_<ID configurado>` a partir del firmware 3.0.8. Si no se configura un ID propio, se conserva el ID
 original y el nombre `ISP-<HWID>`.
 
 **Integración:** el campo ID de V2 deja de estar limitado a 12 HEX y puede tener
@@ -334,3 +335,27 @@ También se centran los botones Get Status / Enable-Disable de HEIGHT MEASUREMEN
 En BARCODE ID / RTC se centra el conjunto de botones/campos y se limita a 560 dp
 cuando sobra anchura, manteniendo las columnas y la alineación de Pallet/Spot/RTC.
 En espacios menores sigue adaptándose al ancho disponible.
+
+
+## WiFi OTA: clave fija y nombre personalizado (firmware 3.0.8 / app 1.3.14)
+
+La clave se edita al principio del INO, junto al PIN, en esta única línea:
+
+```cpp
+static constexpr char PLC_OTA_WIFI_PASSWORD[] = "12345678";
+```
+
+El repositorio entrega ese valor de ejemplo. Se permiten 8…63 bytes; usar letras,
+números o símbolos ASCII y respetar las comillas de C++. Compilar y cargar para
+aplicar la nueva clave. El valor compilado prevalece siempre sobre la antigua
+clave aleatoria del equipo; no hace falta borrar NVS. No modifica el PIN ni
+las vinculaciones Bluetooth. `info` por USB sigue mostrando la clave activa.
+
+La red se anuncia como `PLC_OTA_<ID configurado>`: con ID 777, `PLC_OTA_777`;
+con ID FORK 7, `PLC_OTA_FORK 7`. Se recalcula en cada OTA=START, por lo que un
+cambio de ID se refleja en la siguiente sesión OTA sin reiniciar el equipo.
+La red solo se anuncia mientras está activo el AP OTA.
+
+La app conserva el SSID completo aunque el ID tenga espacios. Si Android tiene
+guardada la red con la contraseña anterior, olvidar esa red o actualizar su
+clave y conectarse de nuevo. No se cambia la trama V2 ni el transporte OTA.

@@ -3,11 +3,11 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lintDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 17. VersionName: `1.3.13-plc3`.
+- VersionCode: 18. VersionName: `1.3.14-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
-- 65 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
+- 71 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
 
 ## Pruebas ejecutadas
 
@@ -20,6 +20,7 @@ Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lin
 | DeviceStatusVisualsTest | 5 | 0 |
 | PlcReadingsTest | 8 | 0 |
 | StatusRefreshPolicyTest | 18 | 0 |
+| OtaProtocolTest | 6 | 0 |
 | ExampleUnitTest (original) | 1 | 0 |
 
 Los casos de protocolo prueban todos los puntos de corte de la confirmación de conexión y de una trama V2, tamaños de fragmento 1/20/182 bytes, varios mensajes concatenados, UTF-8 partido, límites del buffer, resincronización, comandos protegidos/consultas, PIN con ceros iniciales, caducidad de sesión y redacción de secretos en el log. Las pruebas de red comprueban conservación de contraseña enmascarada, cambio explícito, contraseña vacía, valores con `=`, estados LINK/TCP independientes y recepción de NET/NETSTAT en una misma ráfaga.
@@ -34,7 +35,7 @@ del diálogo ni del controlador BLE; quedan para el terminal real.
 
 ## Comprobaciones pendientes en el equipo
 
-0. ID de carretilla: consulta, guardado confirmado, rechazo por actividad, timeout, búsqueda con nombre nuevo, reconexión, reinicio, PIN recordado y OTA con SSID original.
+0. ID de carretilla: consulta, guardado confirmado, rechazo por actividad, timeout, búsqueda con nombre nuevo, reconexión, reinicio, PIN recordado y OTA con SSID PLC_OTA_<ID configurado>.
 1. Primera instalación y permisos en Android 11 o anterior y Android 12 o posterior, si se utilizan ambas familias.
 2. Emparejar con el PIN del firmware: correcto, incorrecto, cancelación y cambio de PIN tras olvidar el vínculo antiguo.
 3. Consultar datos sin AUTH. Solicitar una configuración: debe aparecer el diálogo y enviarse después de AUTH=OK.
@@ -374,3 +375,19 @@ Resultado final 1.3.13: `testDebugUnitTest assembleDebug lintDebug` correctos
 32 advertencias y 3 avisos informativos. Ningún aviso en StatusRefreshPolicy.
 `git diff --check` correcto. Sin ejecución en tablet ni prueba instrumentada
 de las preferencias; presentación y persistencia quedan pendientes en equipo real.
+
+
+## SSID OTA completo (app 1.3.14)
+
+Se sustituye la extracción hasta el primer espacio por parseOtaApSsid, que
+interpreta AP_ON SSID=<nombre> IP=<direccion>. Se conservan IDs con espacios.
+Seis pruebas JVM comprueban nombre de fábrica, personalizado, con espacios,
+ID máximo, mensajes ajenos/incompletos y nombres vacíos/controles/excesivos.
+El texto OTA remite a la contraseña configurada en el firmware.
+Pendiente en Android/PLC reales: anuncio del nombre, asociación WiFi con la
+nueva clave y transferencia OTA de dos fases.
+
+Validación final 02/11/2026: `testDebugUnitTest assembleDebug lintDebug` correcto.
+71 pruebas JVM, 0 fallos/errores/omitidas; APK 1.3.14-plc3 (versionCode 18).
+Lint: 0 errores, 0 MissingPermission, 31 advertencias y 3 avisos informativos.
+Sin validación de asociación WiFi ni transferencia OTA en un dispositivo físico.
