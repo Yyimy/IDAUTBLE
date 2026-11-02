@@ -11,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -57,18 +58,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import androidx.lifecycle.lifecycleScope
 import com.example.idautble.ui.theme.IDAUTBLETheme
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
-
-private var otaReconnectAttempts = 0
-private val maxOtaReconnectAttempts = 15 // ~30 segundos si cada 2s
-private var otaReconnectActive = false
-private var otaRebootExpected = false
-private var otaReconnectDeadline = 0L
+import kotlinx.coroutines.launch
 
 // BLE UUIDs PLC
 private val SERVICE_UUID: UUID = UUID.fromString("0000FFE0-0000-1000-8000-00805F9B34FB")
@@ -163,6 +160,12 @@ class MainActivity : ComponentActivity() {
         permLauncher.launch(perms.toTypedArray())
     }
 
+    private var otaReconnectAttempts = 0
+    private val maxOtaReconnectAttempts = 15 // ~30 segundos si cada 2s
+    private var otaReconnectActive = false
+    private var otaRebootExpected = false
+    private var otaReconnectDeadline = 0L
+
     private fun startOtaReconnectLoop() {
 
         if (otaReconnectActive || !otaRebootExpected) return
@@ -186,6 +189,7 @@ class MainActivity : ComponentActivity() {
                             SystemClock.elapsedRealtime() > otaReconnectDeadline
                     ) {
                         log(LogLevel.ERR, "OTA reconnect timeout")
+                        otaSession.confirmationTimedOut()
                         otaReconnectActive = false
                         otaRebootExpected = false
                         otaReconnectDeadline = 0
@@ -387,6 +391,28 @@ class MainActivity : ComponentActivity() {
     // ============================
     // OTA UI State
     // ============================
+    private val otaSession by lazy {
+        val appContext = applicationContext
+        OtaSession { file ->
+            HttpFileServer(port = 8080, fileSize = file.size) {
+                appContext.contentResolver.openInputStream(Uri.parse(file.uri))
+            }
+        }
+    }
+
+    private fun selectOtaFirmware(uri: Uri) {
+        val ticket = otaSession.beginSelection(uri.lastPathSegment ?: "Firmware") ?: return
+        lifecycleScope.launch {
+            otaSession.finishSelection(ticket, loadOtaFirmware(applicationContext, uri))
+        }
+    }
+
+    private fun abortOta() {
+        sendText("OTA!", addCrlf = false)
+        otaSession.aborted()
+        resetOtaUi()
+    }
+
     private val uiOtaApSsid = mutableStateOf<String?>(null)
     private val uiOtaPct = mutableStateOf<Int?>(null) // null = indeterminado
     private val uiOtaStatus = mutableStateOf<String?>(null) // última línea OTA (sin prefijos raros)
@@ -1034,6 +1060,10 @@ class MainActivity : ComponentActivity() {
             }
             val text = packet.data.toString(Charsets.UTF_8).trim()
             if (text == "OTA=START" || text.startsWith("OTA=URL=")) {
+                if (text == "OTA=START") {
+                    otaSession.startSent(lastConnectedAddress, uiDeviceStatus.value?.firmware)
+                    otaReconnectDeadline = 0L
+                }
                 statusRefresh.otaStarted()
                 uiOtaPct.value = null
                 uiOtaErr.value = null
@@ -1148,6 +1178,10 @@ class MainActivity : ComponentActivity() {
             uiDeviceStatusBusy.value = false
             deviceStatusRequest++
             if (status != null) {
+                if (otaSession.reportedVersion(lastConnectedAddress, status.firmware)) {
+                    log(LogLevel.INFO, otaSession.confirmationText ?: "PLC firmware confirmed")
+                    resetOtaUi()
+                }
                 uiDeviceStatus.value = status
                 uiEquipmentId.value = status.id
                 if (uiIdentity.value?.id != status.id) uiIdentity.value = null
@@ -1216,6 +1250,10 @@ class MainActivity : ComponentActivity() {
             bleChannelReady = true
             uiDeviceStatusReady.value = true
             log(LogLevel.INFO, "BLE ready. Queries are available.")
+            if (otaSession.ready(lastConnectedAddress)) {
+                val attempt = otaSession.attempt
+                mainHandler.postDelayed({ otaSession.confirmationTimedOut(attempt) }, 10000)
+            }
             for (query in connectionHandshake.onConnected()) {
                 if (query == "STATUS?") requestDeviceStatus() else sendText(query, true)
             }
@@ -1291,6 +1329,7 @@ class MainActivity : ComponentActivity() {
                 text == "ERR=NOT_IDLE" -> {
                     uiOtaErr.value =
                         "Unload the forks and wait for scans to finish before starting OTA."
+                    otaSession.failed("PLC is busy. Unload the forks and wait for pending scans.")
                     uiOtaActive.value = false
                 }
                 text.startsWith("ERR=") -> log(LogLevel.WARN, "PLC rejected the operation: $text")
@@ -1481,6 +1520,7 @@ class MainActivity : ComponentActivity() {
 
                 if (payloadText.startsWith("OTA_ERR=", ignoreCase = true)) {
                     uiOtaErr.value = payloadText.substringAfter("OTA_ERR=").trim()
+                    otaSession.failed(uiOtaErr.value!!)
                     uiOtaStatus.value = "ERROR: ${uiOtaErr.value}"
                 } else {
                     val body = payloadText.substringAfter("OTA=").trim()
@@ -1494,10 +1534,13 @@ class MainActivity : ComponentActivity() {
                     }
 
                     // Done
-                    if (body.contains("DONE", ignoreCase = true)) {
+                    if (body == "DONE REBOOT") {
                         uiOtaDone.value = true
                         uiOtaPct.value = 100
-                        otaRebootExpected = true // 🔥 activar reconexión automática
+                        otaRebootExpected = true
+                        otaSession.doneReceived()
+                        val attempt = otaSession.attempt
+                        mainHandler.postDelayed({ otaSession.confirmationTimedOut(attempt) }, 45000)
                     }
                 }
             }
@@ -1552,6 +1595,7 @@ class MainActivity : ComponentActivity() {
                             status != BluetoothGatt.GATT_SUCCESS
                     ) {
                         val shouldReconnect = otaRebootExpected
+                        otaSession.disconnected(lastConnectedAddress)
                         log(LogLevel.INFO, "BLE disconnected (status=$status)")
                         resetSecureTransport()
                         closeGattSafely(g)
@@ -1915,7 +1959,9 @@ class MainActivity : ComponentActivity() {
                     otaErr = uiOtaErr.value,
                     otaDone = uiOtaDone.value,
                     bleLinkState = uiBleLinkState.value,
-                    onResetOtaUi = { resetOtaUi() },
+                    otaSession = otaSession,
+                    onSelectOtaFirmware = ::selectOtaFirmware,
+                    onAbortOta = ::abortOta,
                 )
                 if (uiIdentityDialog.value)
                     EquipmentIdDialog(
@@ -1961,6 +2007,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        otaSession.close()
         stopScan()
         disconnectGatt(silentLog = true)
         try {
@@ -2040,7 +2087,9 @@ private fun PlcBleTesterLandscape(
     otaErr: String?,
     otaDone: Boolean,
     bleLinkState: BleLinkState,
-    onResetOtaUi: () -> Unit,
+    otaSession: OtaSession,
+    onSelectOtaFirmware: (Uri) -> Unit,
+    onAbortOta: () -> Unit,
 ) {
     var showDevices by remember { mutableStateOf(false) } // oculto por defecto
     var binarySectionExpanded by rememberSaveable { mutableStateOf(true) }
@@ -2127,7 +2176,9 @@ private fun PlcBleTesterLandscape(
                 Tab(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 },
-                    text = { Text("OTA") },
+                    text = {
+                        Text(if (otaSession.busy && otaPct != null) "OTA · $otaPct%" else "OTA")
+                    },
                 )
             }
 
@@ -3037,7 +3088,9 @@ private fun PlcBleTesterLandscape(
                     otaErr = otaErr,
                     otaDone = otaDone,
                     bleLinkState = bleLinkState,
-                    onResetOtaUi = onResetOtaUi,
+                    session = otaSession,
+                    onSelectFirmware = onSelectOtaFirmware,
+                    onAbortOta = onAbortOta,
                 )
             }
             if (showPrefixDialogFor != null) {

@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.6
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.14-plc3** (versionCode 18).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.15-plc3** (versionCode 19).
 
 ## Abrir y compilar
 
@@ -67,9 +67,9 @@ La detección de IP comprueba las redes WiFi disponibles, priorizando la subred 
 
 ## Validación
 
-El proyecto ha compilado y generado el APK de depuración como comprobación. Las **19 pruebas unitarias han pasado**. Consulta `VALIDACION_ANDROID.md` para conocer el alcance y la matriz de pruebas físicas pendientes.
+El proyecto ha compilado y generado el APK de depuración como comprobación. Las **88 pruebas unitarias han pasado**. Consulta `VALIDACION_ANDROID.md` para conocer el alcance y la matriz de pruebas físicas pendientes.
 
-No se ha probado la conexión real con tu PLC, el emparejamiento del terminal, la persistencia real de Android Keystore ni una carga OTA física. La primera prueba debe hacerse en banco.
+Esta revisión no se ha probado en un teléfono/PLC real. La navegación durante OTA, el emparejamiento y la persistencia real de Android Keystore requieren comprobación en banco.
 
 ## INFO y comando C
 
@@ -388,3 +388,33 @@ La contraseña se configura en PLC_OTA_WIFI_PASSWORD al principio del INO;
 valor de ejemplo 12345678, 8…63 bytes. Tras cargar el firmware, activar OTA y
 seleccionar esa red con la clave compilada. Actualizar/olvidar credenciales WiFi
 antiguas si Android sigue usando la contraseña previa.
+
+
+## OTA independiente de la pestaña (app 1.3.15)
+
+Puedes pasar de OTA a TERMINAL o NETWORK y volver durante una actualización.
+La sesión pertenece a la Activity: conserva el archivo, tamaño, SHA256, servidor,
+progreso y resultado. El cálculo de SHA256 también continúa al cambiar de pestaña.
+El porcentaje aparece en el título OTA mientras se actualiza. El archivo servido
+queda fijado al arrancar el servidor; para elegir otro, detener primero el servidor.
+Durante una OTA activa no se permite cambiar el archivo ni detener el servidor
+accidentalmente; el botón Abort OTA sigue disponible cuando BLE está conectado.
+
+Tras DONE REBOOT y la desconexión, se libera el servidor aunque OTA no sea visible.
+La reconexión BLE mantiene el procedimiento existente; el handshake consulta STATUS
+independientemente de los toggles Auto-refresh / After reads. Solo una respuesta
+válida del mismo PLC después de reconectar confirma la versión en ejecución.
+El resultado muestra FW anterior y actual y se conserva para poder leerlo al volver.
+No se deduce la versión esperada del nombre del BIN: volver a cargar la misma versión
+es válido y se muestra como tal. Se verifica la versión declarada por el firmware,
+no se vuelve a calcular el hash de la imagen instalada desde Android.
+
+Si no se confirma reconexión/versión, se muestra un resultado sin confirmar, sin
+confundirlo con un fallo de flasheo. Se puede reconectar manualmente y pulsar Refresh
+en DEVICE STATUS. Para repetir A/B: ejecutar el servidor, iniciar OTA, conectarse
+al AP y enviar el archivo; tras acabar se puede seleccionar el siguiente BIN.
+
+Esta persistencia cubre cambios de pestaña y la ida/vuelta normal a Ajustes WiFi;
+no garantiza continuidad si Android destruye la Activity o mata el proceso. Al
+cerrar/destruir la Activity se libera el servidor. Mantener la app abierta durante
+la transferencia. No se añade servicio en primer plano ni actualización en segundo plano.

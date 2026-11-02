@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.14-plc3, versionCode 18 |
+| App Android | [android/](android/) | 1.3.15-plc3, versionCode 19 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.8-rc1 |
 
 ## Trabajar sin ZIP
@@ -359,3 +359,13 @@ La red solo se anuncia mientras está activo el AP OTA.
 La app conserva el SSID completo aunque el ID tenga espacios. Si Android tiene
 guardada la red con la contraseña anterior, olvidar esa red o actualizar su
 clave y conectarse de nuevo. No se cambia la trama V2 ni el transporte OTA.
+
+
+## OTA al cambiar de pestaña (app 1.3.15)
+
+La actualización continúa al pasar entre OTA, TERMINAL y NETWORK. Se conservan
+archivo, SHA256, servidor y progreso; el porcentaje aparece en la pestaña OTA.
+Tras reiniciar y reconectar, se muestra la versión del firmware en ejecución junto
+a la anterior. El resultado permanece disponible al volver a OTA y se puede repetir
+la prueba con otro BIN. Mantener la app abierta: no se garantiza continuidad si
+Android destruye la Activity o finaliza el proceso. No requiere cambiar el firmware.
