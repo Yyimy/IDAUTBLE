@@ -162,4 +162,79 @@ class StatusRefreshPolicyTest {
         assertFalse(policy.shouldRefresh(39_999))
         assertTrue(policy.shouldRefresh(40_000))
     }
+
+    @Test
+    fun autoRefreshOffKeepsInitialQueryButStopsPeriodicAttempts() {
+        val policy = StatusRefreshPolicy()
+        assertTrue(policy.autoRefreshEnabled)
+        policy.autoRefreshEnabled = false
+        assertTrue(policy.shouldRefresh(0))
+        policy.requested(0)
+        assertFalse(policy.shouldRefresh(30_000))
+        assertFalse(policy.shouldRefresh(120_000))
+        policy.requested(120_000) // Manual refresh remains independent of the automatic policy.
+        assertFalse(policy.shouldRefresh(150_000))
+    }
+
+    @Test
+    fun allFourToggleCombinationsAreIndependent() {
+        for (periodic in listOf(false, true)) for (afterReads in listOf(false, true)) {
+            val policy = StatusRefreshPolicy()
+            policy.autoRefreshEnabled = periodic
+            policy.refreshAfterReads = afterReads
+            policy.requested(0)
+            policy.received(0)
+            policy.readSent(10_000)
+            assertEquals(afterReads, policy.readReceived(11_000))
+            assertEquals(afterReads, policy.shouldRefresh(11_150))
+            if (afterReads) policy.requested(11_150)
+            assertEquals(periodic, policy.shouldRefresh(41_150))
+        }
+    }
+
+    @Test
+    fun reenablePeriodicRefreshDoesNotAccumulateMissedQueries() {
+        val policy = StatusRefreshPolicy()
+        policy.requested(0)
+        policy.autoRefreshEnabled = false
+        assertFalse(policy.shouldRefresh(300_000))
+        policy.autoRefreshEnabled = true
+        assertTrue(policy.shouldRefresh(300_000))
+        policy.requested(300_000)
+        assertFalse(policy.shouldRefresh(300_001))
+        assertFalse(policy.shouldRefresh(329_999))
+        assertTrue(policy.shouldRefresh(330_000))
+    }
+
+    @Test
+    fun resetRetainsBothPreferencesAndRestoresOnlyInitialQuery() {
+        val policy = StatusRefreshPolicy()
+        policy.autoRefreshEnabled = false
+        policy.refreshAfterReads = false
+        policy.requested(0)
+        policy.reset()
+        assertFalse(policy.autoRefreshEnabled)
+        assertFalse(policy.refreshAfterReads)
+        assertTrue(policy.shouldRefresh(10_000))
+        policy.requested(10_000)
+        assertFalse(policy.shouldRefresh(40_000))
+    }
+
+    @Test
+    fun periodicOffStillHonoursReadWaitFreshnessAndOtaPause() {
+        val policy = StatusRefreshPolicy()
+        policy.autoRefreshEnabled = false
+        policy.requested(0)
+        policy.received(0)
+        policy.readSent(2_000)
+        assertFalse(policy.shouldRefresh(2_500))
+        assertTrue(policy.readReceived(3_000))
+        assertFalse(policy.shouldRefresh(3_150)) // Fresh status suppresses the after-read query.
+        policy.readSent(10_000)
+        assertTrue(policy.readReceived(11_000))
+        policy.otaStarted()
+        assertFalse(policy.shouldRefresh(30_000))
+        policy.otaMessage("OTA=STATE=0;PCT=0")
+        assertFalse(policy.shouldRefresh(31_000))
+    }
 }

@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import com.example.idautble.ui.theme.IDAUTBLETheme
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
@@ -325,12 +326,19 @@ class MainActivity : ComponentActivity() {
     private var deviceStatusRequest = 0L
     private val statusRefresh = StatusRefreshPolicy()
     private val uiRefreshAfterReads = mutableStateOf(true)
+    private val uiAutoRefreshEnabled = mutableStateOf(true)
     private val statusPreferences by lazy { getSharedPreferences("device_status", MODE_PRIVATE) }
 
     private fun setRefreshAfterReads(enabled: Boolean) {
         uiRefreshAfterReads.value = enabled
         statusRefresh.refreshAfterReads = enabled
         statusPreferences.edit().putBoolean("refresh_after_reads", enabled).apply()
+    }
+
+    private fun setAutoRefresh(enabled: Boolean) {
+        uiAutoRefreshEnabled.value = enabled
+        statusRefresh.autoRefreshEnabled = enabled
+        statusPreferences.edit { putBoolean("auto_refresh", enabled) }
     }
 
     private var appInForeground = false
@@ -1811,6 +1819,9 @@ class MainActivity : ComponentActivity() {
         val refreshAfterReads = statusPreferences.getBoolean("refresh_after_reads", true)
         uiRefreshAfterReads.value = refreshAfterReads
         statusRefresh.refreshAfterReads = refreshAfterReads
+        val autoRefresh = statusPreferences.getBoolean("auto_refresh", true)
+        uiAutoRefreshEnabled.value = autoRefresh
+        statusRefresh.autoRefreshEnabled = autoRefresh
         ContextCompat.registerReceiver(
             this,
             bondReceiver,
@@ -1835,6 +1846,8 @@ class MainActivity : ComponentActivity() {
                     onStatusRefresh = { requestDeviceStatus() },
                     refreshAfterReads = uiRefreshAfterReads.value,
                     onRefreshAfterReadsChange = { setRefreshAfterReads(it) },
+                    autoRefreshEnabled = uiAutoRefreshEnabled.value,
+                    onAutoRefreshChange = { setAutoRefresh(it) },
                     readings = uiReadings.value,
                     equipmentId = uiEquipmentId.value,
                     onIdentityClick = { openIdentityDialog() },
@@ -1975,6 +1988,8 @@ private fun PlcBleTesterLandscape(
     onStatusRefresh: () -> Unit,
     refreshAfterReads: Boolean,
     onRefreshAfterReadsChange: (Boolean) -> Unit,
+    autoRefreshEnabled: Boolean,
+    onAutoRefreshChange: (Boolean) -> Unit,
     readings: PlcReadingsState,
     equipmentId: String?,
     onIdentityClick: () -> Unit,
@@ -2174,7 +2189,8 @@ private fun PlcBleTesterLandscape(
                                     Row(
                                         Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        horizontalArrangement =
+                                            Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
                                     ) {
                                         Button(
                                             shape = RoundedCornerShape(6.dp),
@@ -2383,6 +2399,8 @@ private fun PlcBleTesterLandscape(
                                     onRefresh = onStatusRefresh,
                                     refreshAfterReads = refreshAfterReads,
                                     onRefreshAfterReadsChange = onRefreshAfterReadsChange,
+                                    autoRefreshEnabled = autoRefreshEnabled,
+                                    onAutoRefreshChange = onAutoRefreshChange,
                                 )
 
                                 CollapsibleSettingsSection(
@@ -2450,7 +2468,12 @@ private fun PlcBleTesterLandscape(
                                     onToggle = { heightSectionExpanded = !heightSectionExpanded },
                                 ) {
                                     Row(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement =
+                                            Arrangement.spacedBy(
+                                                8.dp,
+                                                Alignment.CenterHorizontally,
+                                            ),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
 
@@ -2503,8 +2526,15 @@ private fun PlcBleTesterLandscape(
                                     onToggle = { textSectionExpanded = !textSectionExpanded },
                                 ) {
                                     Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        modifier =
+                                            Modifier.align(Alignment.CenterHorizontally)
+                                                .widthIn(max = 560.dp)
+                                                .fillMaxWidth(),
+                                        horizontalArrangement =
+                                            Arrangement.spacedBy(
+                                                10.dp,
+                                                Alignment.CenterHorizontally,
+                                            ),
                                     ) {
 
                                         // ===== LEFT COLUMN (READ ACTIONS)
