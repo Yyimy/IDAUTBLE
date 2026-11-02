@@ -469,7 +469,7 @@ static std::atomic<bool> gBleSecure{false};
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.6-rc1"
+#define FIRMWARE_VERSION "3.0.7-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static BLE2902 *gCccd = nullptr;
@@ -500,6 +500,8 @@ static String gReaderBuffer;
 static bool gReaderOverflow = false;
 static uint8_t gHeightReply[3];
 static uint8_t gHeightCount = 0;
+static bool gHeightInvalidBytes = false;
+static const uint32_t HEIGHT_TIMEOUT_MS = 250;
 
 // ============================================================================
 // LOGGING
@@ -1095,8 +1097,10 @@ static void tcpPollRx() {
         n = 0;
         BleCmd cmd = {};
         cmd.type = cmdFromBinary4(binary);
+        cmd.receivedMs = millis();
         cmd.source = 1;
         if (cmd.type != BLECMD_NONE && !xQueueSend(gCommandQueue, &cmd, 0)) {
+          logHeightRejected(cmd, "COMMAND_QUEUE_FULL");
           const uint8_t busy[] = {0x15, 'B', 'U', 'S', 'Y', 13, 10};
           tcpWriteAvailable(busy, sizeof(busy));
         }
@@ -1424,18 +1428,61 @@ static bool otaParseStart(const String &s) {
 // ============================================================================
 // BLE: enviar trama binaria
 // ============================================================================
-void sendFrame(const uint8_t *data, size_t len) {
-  // Producers never access BLECharacteristic or TCP. The loop owns
-  // transmission.
-  if (!gTxQueue || !data || !len || len > MAX_FRAME_BYTES) return;
+static void logHeightTiming(const HeightTiming &timing, const char *txResult,
+                            uint32_t txStartedMs) {
+  if (!timing.active) return;
+  const char *result = "INVALID";
+  switch (timing.result) {
+    case HEIGHT_OK: result = "OK"; break;
+    case HEIGHT_DISABLED: result = "DISABLED"; break;
+    case HEIGHT_TIMEOUT: result = "TIMEOUT"; break;
+    case HEIGHT_INCOMPLETE: result = "INCOMPLETE"; break;
+    case HEIGHT_INVALID: result = "INVALID"; break;
+    case HEIGHT_OUT_OF_RANGE: result = "OUT_OF_RANGE"; break;
+  }
+  const uint32_t now = millis();
+  logf("HEIGHT A | request_ms=%lu | source=%s | result=%s | "
+       "queue_ms=%lu | sensor_ms=%lu | tx_queue_ms=%lu | tx_ms=%lu | "
+       "total_ms=%lu | tx=%s\n",
+       (unsigned long)timing.receivedMs, timing.source ? "TCP" : "BLE", result,
+       (unsigned long)(timing.sensorStartedMs - timing.receivedMs),
+       (unsigned long)(timing.sensorFinishedMs - timing.sensorStartedMs),
+       (unsigned long)(txStartedMs - timing.queuedMs),
+       (unsigned long)(now - txStartedMs),
+       (unsigned long)(now - timing.receivedMs), txResult);
+}
+
+static void logHeightRejected(const BleCmd &cmd, const char *reason) {
+  if (cmd.type != BLECMD_A) return;
+  logf("HEIGHT A | request_ms=%lu | source=%s | result=%s | "
+       "total_ms=%lu | tx=NOT_SENT\n",
+       (unsigned long)cmd.receivedMs, cmd.source ? "TCP" : "BLE", reason,
+       (unsigned long)(millis() - cmd.receivedMs));
+}
+
+static bool queueFrame(const uint8_t *data, size_t len,
+                       const HeightTiming *heightTiming) {
+  if (!gTxQueue || !data || !len || len > MAX_FRAME_BYTES) return false;
   TxPacket p = {};
   p.len = len;
   p.session = gBleSession;
   memcpy(p.data, data, len);
-  if (xQueueSend(gTxQueue, &p, 0) != pdTRUE) {
-    ++gTxDropped;  // Observable; event outbox is separate and is not discarded
-                   // here.
+  if (heightTiming && heightTiming->active) {
+    p.heightTiming = *heightTiming;
+    p.heightTiming.queuedMs = millis();
+    if (!heightTiming->source) p.session = heightTiming->session;
   }
+  if (xQueueSend(gTxQueue, &p, 0) != pdTRUE) {
+    ++gTxDropped;
+    logHeightTiming(p.heightTiming, "TX_QUEUE_FULL", p.heightTiming.queuedMs);
+    return false;
+  }
+  return true;
+}
+
+void sendFrame(const uint8_t *data, size_t len) {
+  // Producers never access BLECharacteristic or TCP. The loop owns transmission.
+  queueFrame(data, len, nullptr);
 }
 
 // ============================================================================
@@ -1950,13 +1997,15 @@ void sendResponse_I() {
 
 class MyCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pChar) override {
+    const uint32_t receivedMs = millis();
     String rxString = pChar->getValue();
     if (rxString.length() == 0) return;
 
     String rxTrim = rxString;
     rxTrim.trim();
 
-    BleCmd cmd;
+    BleCmd cmd = {};
+    cmd.receivedMs = receivedMs;
     cmd.type = BLECMD_NONE;
     cmd.payload[0] = '\0';
     if (rxString.length() >= sizeof(cmd.payload)) {
@@ -2044,8 +2093,10 @@ class MyCallbacks : public BLECharacteristicCallbacks {
 
     cmd.source = 0;
     cmd.session = gBleSession;
-    if (!gCommandQueue || xQueueSend(gCommandQueue, &cmd, 0) != pdTRUE)
+    if (!gCommandQueue || xQueueSend(gCommandQueue, &cmd, 0) != pdTRUE) {
+      logHeightRejected(cmd, "COMMAND_QUEUE_FULL");
       bleSendBusy();
+    }
   }
 };
 
@@ -2126,8 +2177,10 @@ void ensureAdvertising() {
 static void bleProcessPendingOnce() {
   BleCmd cmd = {};
   if (xQueueReceive(gCommandQueue, &cmd, 0) != pdTRUE) return;
-  if (cmd.source == 0 && (!deviceConnected || cmd.session != gBleSession))
+  if (cmd.source == 0 && (!deviceConnected || cmd.session != gBleSession)) {
+    logHeightRejected(cmd, "SESSION_EXPIRED");
     return;
+  }
   if (cmd.type == BLECMD_TEXT) {
     handleTextCommand(cmd);
     return;
@@ -2145,6 +2198,7 @@ static void bleProcessPendingOnce() {
   if (otaActive && cmd.type != BLECMD_OTA_STATUS &&
       cmd.type != BLECMD_OTA_START && cmd.type != BLECMD_OTA_ABORT &&
       cmd.type != BLECMD_C && cmd.type != BLECMD_B) {
+    logHeightRejected(cmd, "OTA_ACTIVE");
     replyLine(false, "ERR=MAINTENANCE_MODE");
     return;
   }
@@ -2161,7 +2215,7 @@ static void bleProcessPendingOnce() {
   }
   if (cmd.type == BLECMD_L || cmd.type == BLECMD_A || cmd.type == BLECMD_D ||
       cmd.type == BLECMD_I) {
-    enqueueScan(cmd.type, false);
+    enqueueCommandScan(cmd);
     return;
   }
   // Ejecutar el comando (AQUÍ sí se puede tardar 2s)
@@ -3342,9 +3396,11 @@ static void txTick() {
               accepted = false;
   static size_t offset = 0, tcpOffset = 0;
   static uint32_t started = 0, lastChunk = 0;
+  static bool heightTimingReported = false;
   if (!active) {
     if (xQueueReceive(gTxQueue, &p, 0) != pdTRUE) return;
     active = true;
+    heightTimingReported = false;
     tcpDone = false;
     bleDone = false;
     accepted = false;
@@ -3378,6 +3434,12 @@ static void txTick() {
       }
     }
   }
+  if (p.heightTiming.active && p.heightTiming.source == 1 && tcpDone &&
+      !heightTimingReported) {
+    logHeightTiming(p.heightTiming,
+                    tcpOffset == p.len ? "TCP_SUBMITTED" : "TCP_NOT_SENT", started);
+    heightTimingReported = true;
+  }
   if (!bleDone) {
     if (!bleCanNotify() || p.session != gBleSession)
       bleDone = true;
@@ -3395,6 +3457,12 @@ static void txTick() {
     }
   }
   if (millis() - started > 5000) bleDone = true;
+  if (p.heightTiming.active && p.heightTiming.source == 0 && bleDone &&
+      !heightTimingReported) {
+    logHeightTiming(p.heightTiming,
+                    offset == p.len ? "BLE_SUBMITTED" : "BLE_NOT_SENT", started);
+    heightTimingReported = true;
+  }
   if (tcpDone && bleDone) {
     if (p.eventId) {
       if (accepted && !gAckMode && gOutbox.count &&
@@ -3414,12 +3482,29 @@ static void enqueueScan(BleCmdType type, bool event) {
     return;
   }
   ScanJob &j = gScanJobs[(gScanHead + gScanCount) % 16];
+  j = {};  // Queue slots are reused; never inherit timing from an earlier A.
   j.type = type;
   j.event = event;
   strlcpy(j.iso, gRtcIso.c_str(), sizeof(j.iso));
   j.photo = gFotoEstado;
   ++gScanCount;
 }
+static void enqueueCommandScan(const BleCmd &cmd) {
+  const uint8_t previousCount = gScanCount;
+  enqueueScan(cmd.type, false);
+  if (gScanCount == previousCount) {
+    logHeightRejected(cmd, gCutRequested ? "POWER_CUT" : "SCAN_QUEUE_FULL");
+    return;
+  }
+  if (cmd.type == BLECMD_A) {
+    ScanJob &job = gScanJobs[(gScanHead + gScanCount - 1) % 16];
+    job.heightTiming.active = true;
+    job.heightTiming.receivedMs = cmd.receivedMs;
+    job.heightTiming.source = cmd.source;
+    job.heightTiming.session = cmd.session;
+  }
+}
+
 static String frameForScan(const ScanJob &j) {
   String f;
   f.reserve(480);
@@ -3442,17 +3527,20 @@ static String frameForScan(const ScanJob &j) {
   return f;
 }
 static void finishScan() {
+  gCurrentScan.heightTiming.sensorFinishedMs = millis();
   actualizarCampoBateriaBLE();
   String f = frameForScan(gCurrentScan);
   if (gCurrentScan.event)
     outboxPush(f);
   else
-    sendFrame((const uint8_t *)f.c_str(), f.length());
+    queueFrame((const uint8_t *)f.c_str(), f.length(), &gCurrentScan.heightTiming);
   gScanActive = false;
   gScanPhase = 0;
 }
 static void beginHeight() {
   gAltura = "-";
+  gCurrentScan.heightTiming.sensorStartedMs = millis();
+  gCurrentScan.heightTiming.result = HEIGHT_DISABLED;
   if (!gAlturaEnabled ||
       (gCurrentScan.type != BLECMD_L && gCurrentScan.type != BLECMD_A)) {
     finishScan();
@@ -3460,11 +3548,43 @@ static void beginHeight() {
   }
   clearRxBuffer_RS485();
   gHeightCount = 0;
+  gHeightInvalidBytes = false;
+  gCurrentScan.heightTiming.result = HEIGHT_TIMEOUT;
+  gScanStarted = millis();
   RS485.write(tramaRS,
               sizeof(tramaRS));  // UART driver controls half-duplex RTS.
-  gScanStarted = millis();
   gScanPhase = 2;
 }
+
+// S85: 01xxdddd, 10dddddd, 11dddddd. Unknown xx flags are rejected.
+static bool heightReplyByte(uint8_t value, uint16_t &millimetres) {
+  if ((value & 0xF0) == 0x40) {
+    if (gHeightCount) gHeightInvalidBytes = true;
+    gHeightReply[0] = value;
+    gHeightCount = 1;
+  } else if (gHeightCount == 1 && (value & 0xC0) == 0x80) {
+    gHeightReply[1] = value;
+    gHeightCount = 2;
+  } else if (gHeightCount == 2 && (value & 0xC0) == 0xC0) {
+    millimetres = ((uint16_t)(gHeightReply[0] & 0x0F) << 12) |
+                  ((uint16_t)(gHeightReply[1] & 0x3F) << 6) | (value & 0x3F);
+    gHeightCount = 0;
+    return true;
+  } else {
+    gHeightInvalidBytes = true;
+    gHeightCount = 0;
+  }
+  return false;
+}
+
+static void heightTimeout() {
+  gAltura = "-";
+  gCurrentScan.heightTiming.result =
+      gHeightCount ? HEIGHT_INCOMPLETE :
+      gHeightInvalidBytes ? HEIGHT_INVALID : HEIGHT_TIMEOUT;
+  finishScan();
+}
+
 static void scanTick() {
   if (gCutRequested) return;
   if (!gScanActive) {
@@ -3515,18 +3635,26 @@ static void scanTick() {
       beginHeight();
     }
   } else if (gScanPhase == 2) {
-    while (RS485.available() && gHeightCount < 3)
-      gHeightReply[gHeightCount++] = (uint8_t)RS485.read();
-    if (gHeightCount == 3) {
-      float m = ((gHeightReply[0] & 0x3F) * 4096UL +
-                 (gHeightReply[1] & 0x3F) * 64UL + (gHeightReply[2] & 0x3F)) /
-                1000.0f;
-      if (m >= 0.2f && m <= 20.0f) gAltura = formatAltura(m);
-      finishScan();
-    } else if (millis() - gScanStarted >= 250) {
-      gAltura = "-";
-      finishScan();
+    // Deadline is checked before accepting buffered bytes. A late packet is not a fresh measure.
+    if (millis() - gScanStarted >= HEIGHT_TIMEOUT_MS) {
+      heightTimeout();
+      return;
     }
+    for (unsigned budget = 0; budget < 64 && RS485.available(); ++budget) {
+      if (millis() - gScanStarted >= HEIGHT_TIMEOUT_MS) break;
+      uint16_t millimetres = 0;
+      if (heightReplyByte((uint8_t)RS485.read(), millimetres)) {
+        if (millimetres >= 200 && millimetres <= 20000) {
+          gAltura = formatAltura(millimetres / 1000.0f);
+          gCurrentScan.heightTiming.result = HEIGHT_OK;
+        } else {
+          gCurrentScan.heightTiming.result = HEIGHT_OUT_OF_RANGE;
+        }
+        finishScan();
+        return;
+      }
+    }
+    if (millis() - gScanStarted >= HEIGHT_TIMEOUT_MS) heightTimeout();
   }
 }
 // ------------------------- Photocell and inactivity -------------------------

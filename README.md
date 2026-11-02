@@ -5,7 +5,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 | Componente | Carpeta | Versión |
 |---|---|---|
 | App Android | [android/](android/) | 1.3.12-plc3, versionCode 16 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.6-rc1 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.7-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -56,6 +56,8 @@ python3 firmware/tests/test_logic.py
 python3 firmware/tests/test_pin_constant.py
 python3 firmware/tests/test_led.py
 python3 firmware/tests/test_identity.py
+python3 firmware/tests/test_status.py
+python3 firmware/tests/test_height.py
 ```
 
 Estados del indicador: [LED del PLC](firmware/LEEME.md#led-de-estado-version-303).
@@ -277,3 +279,24 @@ Cabeceras con resumen compacto, tarjetas de radio 8 dp y botones/campos de radio
 y campos, con etiquetas alineadas de 52 dp para evitar comprimir Pallet/Spot/RTC.
 Se mantienen colores funcionales, plegado, edición y comandos. El tamaño de
 fuente sigue escalando con los ajustes de Android.
+
+
+## Altura RS485 y temporizador de A (firmware 3.0.7-rc1)
+
+El receptor S85 valida el orden de los tres bytes (01/10/11), usa los 4 bits de
+datos del primero y 6 de los siguientes y recupera sincronización tras ruido o
+respuestas parciales. Los bits xx no documentados del primer byte se rechazan
+conservadoramente (antes tampoco podían producir una distancia dentro de rango).
+Solo acepta 200…20000 mm y mantiene el formato V2 MM.CC en metros. El plazo
+de 250 ms se comprueba antes de leer/aceptar bytes y el trabajo RX se limita a
+64 bytes por vuelta. Las respuestas inválidas, incompletas o fuera de plazo no
+reutilizan alturas anteriores.
+
+Cada A explícita produce por USB una línea HEIGHT A con el tiempo desde la
+recepción del comando en el PLC hasta entregar la respuesta completa al
+transporte de origen. Incluye las colas de comandos, escáner y transmisión, y
+desglosa sensor_ms y total_ms. No incluye el tiempo previo desde el clic en la
+app ni confirma recepción en la tablet. No añade mensajes BLE/TCP ni campos V2.
+La app actual no necesita actualización.
+
+Instrucciones y significado de tiempos/resultados: [firmware/LEEME.md](firmware/LEEME.md#altura-y-temporizador-del-comando-a-firmware-307-rc1).

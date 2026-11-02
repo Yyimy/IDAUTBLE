@@ -1,4 +1,4 @@
-# PLC Scanner 3.0.6-rc1 — código completo corregido
+# PLC Scanner 3.0.7-rc1 — código completo corregido
 
 Versión candidata para validación en banco. Derivada del archivo adjunto del 29/10/2026. Conserva los comandos binarios de cuatro bytes y la trama V2, con las diferencias de integración indicadas abajo. No se ha probado físicamente en la placa.
 
@@ -276,3 +276,78 @@ histórica del corte. La banda de batería conserva confirmación de 3 s e hist�
 STATUS no guarda nada en NVS ni genera eventos de negocio. La app conserva
 hora local monotónica de recepción, avisa tras 60 s (app 1.3.9) y borra la instantánea al
 perder conexión. El firmware no cambia la calibración ni la política de corte.
+
+
+## Altura y temporizador del comando A (firmware 3.0.7-rc1)
+
+Actualizar juntos PLC_Scanner_v3.ino y Types.h mediante Pull; mantener Arduino-ESP32
+3.0.7 y las opciones de placa/flash/USB correspondientes al equipo. No requiere
+cambios de la app, calibración de montaje ni borrado de configuración.
+
+1. Cargar el firmware y abrir el monitor serie USB a 115200.
+2. Habilitar altura desde la app si está deshabilitada (ALT? consulta; ALT=1
+   requiere mantenimiento autorizado). El estado guardado se conserva al reiniciar.
+3. Conectar BLE y pulsar A. La respuesta V2 sigue llegando a READINGS como antes.
+4. Buscar HEIGHT A en el monitor. Se imprime al completar la salida por el
+   transporte de origen o al detectar que no se ha podido enviar.
+
+Ejemplo ilustrativo (prueba simulada, no medida en placa):
+
+```text
+HEIGHT A | request_ms=900 | source=BLE | result=OK | queue_ms=100 | sensor_ms=25 | tx_queue_ms=75 | tx_ms=32 | total_ms=232 | tx=BLE_SUBMITTED
+```
+
+| Campo | Significado |
+|---|---|
+| request_ms | Tiempo de arranque del PLC al recibir el comando; permite identificar la petición. |
+| source | Canal que recibió A: BLE o TCP. |
+| queue_ms | Espera desde recibir A hasta iniciar la operación RS485, incluidas ambas colas de entrada. |
+| sensor_ms | Tiempo observado por el PLC desde iniciar RS485 hasta completar la medida o resolver su error. |
+| tx_queue_ms | Espera de la respuesta en la cola de salida. |
+| tx_ms | Tiempo desde activar su transmisión hasta completar la salida por el canal de origen. |
+| total_ms | Tiempo completo en el PLC desde recibir A hasta ese punto de salida. |
+
+Los tiempos utilizan millis() con resolución de 1 ms y resta sin signo para
+soportar su vuelta a cero. Cada paquete conserva sus propios tiempos, incluso
+con varias A seguidas o comandos anteriores en espera. No se imprime un contador
+continuo mientras espera: se emite una línea al terminar para no perturbar la medida.
+El total se mide directamente; puede incluir pequeños costes de preparación
+adicionales a los intervalos desglosados.
+
+result puede ser OK, DISABLED, TIMEOUT (sin respuesta), INCOMPLETE, INVALID o
+OUT_OF_RANGE. Una petición rechazada informa COMMAND_QUEUE_FULL, SCAN_QUEUE_FULL,
+SESSION_EXPIRED, OTA_ACTIVE o POWER_CUT con tx=NOT_SENT. Si la cola de salida
+está llena se informa tx=TX_QUEUE_FULL. Una A ya en curso puede terminar
+sin dato y enviar una trama normal con altura '-'; no se confunde con una
+transmisión fallida.
+
+tx=BLE_SUBMITTED significa que el PLC ha llamado a notify para el último
+fragmento de la respuesta. **No confirma entrega radio ni recepción en Android**.
+TCP_SUBMITTED indica que el socket ha aceptado todos los bytes, no que la
+aplicación remota los haya procesado. BLE_NOT_SENT/TCP_NOT_SENT indican fallo
+del canal de origen aunque otro canal haya aceptado una copia. El contador no
+espera a terminar una copia por un canal distinto del que solicitó A. Una
+respuesta A antigua no se entrega por BLE a una nueva sesión tras reconectar.
+
+Se conserva la petición 40 43 00 00 01 (nodo 0), 115200 8N1 y dirección RTS
+automática. Se comprueban las marcas 01/10/11 de los bytes y los límites
+200…20000 mm; no se añade un CRC que el protocolo no incluye. Los bits xx no
+documentados del primer byte se rechazan conservadoramente. Ruido o secuencias
+incompletas pueden recuperarse si llega otra cabecera válida dentro del plazo
+de 250 ms. El trabajo por iteración se limita a 64 bytes. Una respuesta
+bufferizada que se procesa al vencer el plazo se descarta aunque pudiera haber
+llegado antes: sin marcas de tiempo de la UART no puede conocerse su instante
+exacto de llegada.
+
+La trama fija V2, los eventos y el formato MM.CC no cambian. El temporizador
+solo corresponde a A explícitas; L y los eventos siguen leyendo altura en su
+fase habitual, después del lector de códigos. No hay compensación de montaje nueva.
+
+Referencia: [guía de comunicación RS485 S85 de Datalogic](https://www.eltron.pl/files/photos/producers/8594ec4326f42db747749f37054eeafabbc79393.pdf).
+
+Pruebas de host extraen las funciones reales del firmware. test_height.py cubre
+todo el rango de 19.801 distancias en milímetros, fragmentación, ruido, orden,
+flags desconocidos, rango, caducidad estricta, no reutilización de datos, colas,
+MTU, transmisión parcial, fallo del canal de origen, desconexión/cambio de
+sesión y rollover. Ver tests/resultado.txt para resultados de esta revisión.
+La validación con sensor, cableado RS485 y tablet reales sigue pendiente.
