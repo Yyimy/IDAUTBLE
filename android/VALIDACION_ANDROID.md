@@ -1,13 +1,13 @@
-# Validación de la adaptación Android — 30/10/2026
+# Validación de la adaptación Android — 02/11/2026
 
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lintDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 16. VersionName: `1.3.12-plc3`.
+- VersionCode: 17. VersionName: `1.3.13-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
-- 60 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
+- 65 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
 
 ## Pruebas ejecutadas
 
@@ -19,7 +19,7 @@ Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lin
 | DeviceStatusTest | 8 | 0 |
 | DeviceStatusVisualsTest | 5 | 0 |
 | PlcReadingsTest | 8 | 0 |
-| StatusRefreshPolicyTest | 13 | 0 |
+| StatusRefreshPolicyTest | 18 | 0 |
 | ExampleUnitTest (original) | 1 | 0 |
 
 Los casos de protocolo prueban todos los puntos de corte de la confirmación de conexión y de una trama V2, tamaños de fragmento 1/20/182 bytes, varios mensajes concatenados, UTF-8 partido, límites del buffer, resincronización, comandos protegidos/consultas, PIN con ceros iniciales, caducidad de sesión y redacción de secretos en el log. Las pruebas de red comprueban conservación de contraseña enmascarada, cambio explícito, contraseña vacía, valores con `=`, estados LINK/TCP independientes y recepción de NET/NETSTAT en una misma ráfaga.
@@ -343,3 +343,34 @@ Resultado final 1.3.12: `testDebugUnitTest assembleDebug lintDebug` correctos
 aparecen la sugerencia UseKtx para editar la nueva preferencia y un aviso de
 versión de Kotlin disponible; no se actualizan dependencias.
 `git diff --check` correcto. Sin validación física de interfaz/BLE/almacenamiento.
+
+
+## Auto-refresh y botones Bluetooth centrados (1.3.13)
+
+Se añade una preferencia periódica independiente de After reads, activada por
+defecto. Se carga antes de iniciar la interfaz y se conserva durante el reset
+de conexión. La consulta inicial/manual no se somete a ese interruptor. Al
+reactivar no hay recuperación de consultas atrasadas; se respeta el intervalo
+desde el último intento. Los controles usan el mismo interruptor compacto con
+semántica accesible y área pulsable de 48 dp; cabecera adaptada a anchura/fuente.
+Se centra únicamente la fila de cuatro botones de BLUETOOTH CONNECTION.
+
+Cinco pruebas nuevas verifican: apagado con consulta inicial/manual, las cuatro
+combinaciones con After reads, reactivación sin ráfagas, reset conservando ambas
+preferencias y conservación de espera de lectura/deduplicación/pausa OTA.
+
+Pendiente tablet real: posición de los dos interruptores, fuente ampliada,
+persistencia al cerrar/reabrir y comprobar RX/TX en las cuatro combinaciones,
+además del centrado de botones. Sin pruebas instrumentadas de preferencias.
+
+También se centran los botones Get Status / Enable-Disable de HEIGHT MEASUREMENT.
+En BARCODE ID / RTC se centra el conjunto de botones/campos y se limita a 560 dp
+cuando sobra anchura, manteniendo las columnas y la alineación de Pallet/Spot/RTC.
+En espacios menores sigue adaptándose al ancho disponible.
+
+Resultado final 1.3.13: `testDebugUnitTest assembleDebug lintDebug` correctos
+(BUILD SUCCESSFUL, 7 min 7 s). APK 1.3.13-plc3 / versionCode 17 generado.
+65 pruebas JVM, 0 fallos/errores/omitidas. Lint: 0 errores y 0 MissingPermission;
+32 advertencias y 3 avisos informativos. Ningún aviso en StatusRefreshPolicy.
+`git diff --check` correcto. Sin ejecución en tablet ni prueba instrumentada
+de las preferencias; presentación y persistencia quedan pendientes en equipo real.

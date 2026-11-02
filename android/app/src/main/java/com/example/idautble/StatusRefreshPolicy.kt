@@ -9,6 +9,7 @@ internal class StatusRefreshPolicy {
     private var readingSince: Long? = null
     private var afterReading = false
     // A user preference, deliberately retained across connection resets.
+    var autoRefreshEnabled = true
     var refreshAfterReads = true
         set(value) {
             field = value
@@ -84,7 +85,8 @@ internal class StatusRefreshPolicy {
             if (lastSuccess?.let { now - it < 5_000L } == true) return false
             return true
         }
-        return lastRequest?.let { now - it >= 30_000L } ?: true
+        // The initial query is independent of periodic refresh (including resume after pairing).
+        return lastRequest?.let { autoRefreshEnabled && now - it >= 30_000L } ?: true
     }
 }
 

@@ -21,6 +21,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -44,6 +45,8 @@ fun DeviceStatusSection(
     onRefresh: () -> Unit,
     refreshAfterReads: Boolean,
     onRefreshAfterReadsChange: (Boolean) -> Unit,
+    autoRefreshEnabled: Boolean,
+    onAutoRefreshChange: (Boolean) -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
@@ -72,60 +75,88 @@ fun DeviceStatusSection(
             MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 13.sp)
         ) {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                        Text(
-                            status?.id ?: "Device status",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            fontSize = 13.sp,
-                            lineHeight = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        status?.let {
-                            Text(
-                                "FW ${it.firmware}",
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                if (fresh) "Snapshot • ${age}s" else "Out of date • ${age ?: 0}s",
-                                fontSize = 10.sp,
-                                color =
-                                    statusColour(if (fresh) StatusTone.INFO else StatusTone.WARNING),
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val stackToggles = maxWidth < 340.dp || LocalDensity.current.fontScale > 1.3f
+                    Column(Modifier.fillMaxWidth()) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Column(
+                                Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(0.dp),
+                            ) {
+                                Text(
+                                    status?.id ?: "Device status",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontSize = 13.sp,
+                                    lineHeight = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                status?.let {
+                                    Text(
+                                        "FW ${it.firmware}",
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(
+                                        if (fresh) "Snapshot • ${age}s"
+                                        else "Out of date • ${age ?: 0}s",
+                                        fontSize = 10.sp,
+                                        color =
+                                            statusColour(
+                                                if (fresh) StatusTone.INFO else StatusTone.WARNING
+                                            ),
+                                    )
+                                }
+                            }
+                            if (!stackToggles) {
+                                StatusRefreshToggle(
+                                    "Auto-refresh",
+                                    "Refresh device status every 30 seconds",
+                                    autoRefreshEnabled,
+                                    onAutoRefreshChange,
+                                )
+                                StatusRefreshToggle(
+                                    "After reads",
+                                    "Refresh device status after read commands",
+                                    refreshAfterReads,
+                                    onRefreshAfterReadsChange,
+                                )
+                            }
+                            MaintenanceActionButton(
+                                text = if (busy) "Querying..." else "Refresh",
+                                onClick = onRefresh,
+                                tone = MaintenanceActionTone.INFO,
+                                enabled = ready && !busy,
                             )
                         }
-                    }
-                    Row(
-                        modifier =
-                            Modifier.heightIn(min = 48.dp)
-                                .toggleable(
-                                    value = refreshAfterReads,
-                                    role = Role.Switch,
-                                    onValueChange = onRefreshAfterReadsChange,
+                        if (stackToggles) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                StatusRefreshToggle(
+                                    "Auto-refresh",
+                                    "Refresh device status every 30 seconds",
+                                    autoRefreshEnabled,
+                                    onAutoRefreshChange,
+                                    Modifier.weight(1f),
+                                    true,
                                 )
-                                .semantics {
-                                    contentDescription = "Refresh device status after read commands"
-                                },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("After reads", fontSize = 10.sp, maxLines = 1)
-                        Switch(
-                            checked = refreshAfterReads,
-                            onCheckedChange = null,
-                            modifier = Modifier.requiredSize(40.dp, 32.dp).scale(0.65f),
-                        )
+                                StatusRefreshToggle(
+                                    "After reads",
+                                    "Refresh device status after read commands",
+                                    refreshAfterReads,
+                                    onRefreshAfterReadsChange,
+                                    Modifier.weight(1f),
+                                    true,
+                                )
+                            }
+                        }
                     }
-                    MaintenanceActionButton(
-                        text = if (busy) "Querying..." else "Refresh",
-                        onClick = onRefresh,
-                        tone = MaintenanceActionTone.INFO,
-                        enabled = ready && !busy,
-                    )
                 }
                 if (message.isNotBlank()) {
                     Text(message, fontSize = 11.sp)
@@ -491,4 +522,36 @@ private fun CompactStatusIndicator(
 @Composable
 private fun StatusDot(colour: Color) {
     Canvas(Modifier.size(6.dp)) { drawCircle(colour) }
+}
+
+@Composable
+private fun StatusRefreshToggle(
+    label: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    fillLabel: Boolean = false,
+) {
+    Row(
+        modifier =
+            modifier
+                .heightIn(min = 48.dp)
+                .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+                .semantics { contentDescription = description },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            modifier = if (fillLabel) Modifier.weight(1f) else Modifier,
+            fontSize = 10.sp,
+            lineHeight = 13.sp,
+            maxLines = 2,
+        )
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
+            modifier = Modifier.requiredSize(40.dp, 32.dp).scale(0.65f),
+        )
+    }
 }

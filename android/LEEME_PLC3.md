@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.6
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.12-plc3** (versionCode 16).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.13-plc3** (versionCode 17).
 
 ## Abrir y compilar
 
@@ -342,3 +342,37 @@ Cabeceras con resumen compacto, tarjetas de radio 8 dp y botones/campos de radio
 y campos, con etiquetas alineadas de 52 dp para evitar comprimir Pallet/Spot/RTC.
 Se mantienen colores funcionales, plegado, edición y comandos. El tamaño de
 fuente sigue escalando con los ajustes de Android.
+
+
+## Auto-refresh y conexión centrada (app 1.3.13)
+
+DEVICE STATUS añade **Auto-refresh**, activado por defecto, para habilitar o
+deshabilitar únicamente las consultas periódicas STATUS? de cada 30 s. La
+preferencia se guarda en la app, se conserva al cerrar/reabrir y reconectar,
+y se puede ajustar desconectado. **After reads** conserva su propia preferencia.
+
+| Auto-refresh | After reads | Consultas posteriores a la conexión |
+|---|---|---|
+| ON | ON | Cada 30 s y después de lecturas, con las protecciones contra duplicados. |
+| ON | OFF | Solo cada 30 s o con Refresh. |
+| OFF | ON | Solo después de lecturas o con Refresh. |
+| OFF | OFF | Solo con Refresh. |
+
+La consulta inicial al conectar es independiente de ambos interruptores, incluso
+si quedó aplazada hasta volver al primer plano. Una petición ya enviada puede
+terminar tras apagar el interruptor. Al reactivarlo se consulta una sola vez
+si ya han transcurrido 30 s desde el último intento; no se acumulan consultas
+atrasadas. Se mantienen pausa OTA/segundo plano, espera de lecturas, cola BLE y
+caducidad visual de 60 s.
+
+Ambos interruptores mantienen el aspecto compacto de After reads y comparten
+la cabecera con Refresh. En anchuras inferiores a 340 dp o fuente ampliada
+se sitúan juntos en una fila debajo para evitar apretar los datos del equipo.
+La fila Scan 5s / Show Devices / Connect / Disconnect de BLUETOOTH CONNECTION
+queda centrada horizontalmente, conservando sus separaciones, colores y acciones.
+Solo requiere actualizar la app; el firmware no cambia.
+
+También se centran los botones Get Status / Enable-Disable de HEIGHT MEASUREMENT.
+En BARCODE ID / RTC se centra el conjunto de botones/campos y se limita a 560 dp
+cuando sobra anchura, manteniendo las columnas y la alineación de Pallet/Spot/RTC.
+En espacios menores sigue adaptándose al ancho disponible.
