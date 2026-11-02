@@ -17,7 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,13 +30,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import fi.iki.elonen.NanoHTTPD
-import java.io.InputStream
 import java.net.Inet4Address
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private val SelectFirmwareColor = Color(0xFFFFC107) // Amarillo
 private val StartServerColor = Color(0xFF2E7D32) // Verde
@@ -98,30 +93,19 @@ fun OtaScreen(
     otaErr: String?,
     otaDone: Boolean,
     bleLinkState: BleLinkState,
-    onResetOtaUi: () -> Unit, // 👈 nuevo
+    session: OtaSession,
+    onSelectFirmware: (Uri) -> Unit,
+    onAbortOta: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var otaUiState by remember { mutableStateOf(OtaUiState.IDLE) }
-    LaunchedEffect(otaStatus, otaPct, otaErr, otaDone) {
-        otaUiState = deriveOtaUiState(otaStatus, otaPct, otaErr, otaDone)
-    }
-
-    // ---------- Estado que debe sobrevivir al "me voy a Ajustes WiFi y vuelvo" ----------
-    var fileName by rememberSaveable { mutableStateOf<String?>(null) }
-    var fileSize by rememberSaveable { mutableStateOf<Long?>(null) }
-    var selectedUriString by rememberSaveable { mutableStateOf<String?>(null) }
-    var sha256 by rememberSaveable { mutableStateOf<String?>(null) }
-    var serverRunning by rememberSaveable { mutableStateOf(false) }
-    var deviceIp by rememberSaveable { mutableStateOf<String?>(null) }
-    var otaUiStarted by rememberSaveable { mutableStateOf(false) }
-
-    // ---------- Estado de runtime (no saveable) ----------
-    var calculating by remember { mutableStateOf(false) }
-    var server by remember { mutableStateOf<HttpFileServer?>(null) }
-
-    // Uri reconstruida desde string
-    val selectedUri: Uri? = selectedUriString?.let { Uri.parse(it) }
+    val otaUiState = deriveOtaUiState(otaStatus, otaPct, otaErr, otaDone)
+    val fileName = session.fileName
+    val fileSize = session.firmware?.size
+    val sha256 = session.firmware?.sha256
+    val serverRunning = session.serverRunning
+    val calculating = session.calculating
+    val deviceIp = session.deviceIp
 
     // ---------- Helpers ----------
     fun getActiveWifiIpv4(context: Context): String? {
@@ -144,40 +128,7 @@ fun OtaScreen(
     }
 
     fun refreshIpNow() {
-        deviceIp = getActiveWifiIpv4(context)
-    }
-
-    fun calculateSha256Async(uri: Uri) {
-        calculating = true
-        sha256 = null
-
-        scope.launch {
-            val hash =
-                withContext(Dispatchers.IO) {
-                    try {
-                        val digest = java.security.MessageDigest.getInstance("SHA-256")
-                        context.contentResolver.openInputStream(uri)?.use { stream ->
-                            val buffer = ByteArray(8192)
-                            while (true) {
-                                val n = stream.read(buffer)
-                                if (n <= 0) break
-                                digest.update(buffer, 0, n)
-                            }
-                        } ?: return@withContext null
-
-                        digest.digest().joinToString("") { "%02x".format(it) }
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
-
-            if (hash == null) {
-                Toast.makeText(context, "SHA256 error", Toast.LENGTH_SHORT).show()
-            } else {
-                sha256 = hash
-            }
-            calculating = false
-        }
+        session.deviceIp = getActiveWifiIpv4(context)
     }
 
     fun isOnPlcAp(ip: String?): Boolean = ip?.startsWith("192.168.4.") == true
@@ -202,78 +153,17 @@ fun OtaScreen(
     // Refresco inicial cuando se arranca/parar servidor
     LaunchedEffect(serverRunning) { refreshIpNow() }
 
-    // Si serverRunning estaba a true (porque volviste de Ajustes) y server quedó null, lo
-    // reconstruimos
-    LaunchedEffect(serverRunning, selectedUriString, fileSize) {
-        if (serverRunning && server == null && selectedUri != null && (fileSize ?: 0L) > 0L) {
-            server =
-                HttpFileServer(port = 8080, fileSize = fileSize ?: 0L) {
-                    context.contentResolver.openInputStream(selectedUri)
-                }
-
-            try {
-                server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
-            } catch (_: Exception) {
-                Toast.makeText(context, "Server restore error", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    var sawRebootDisconnect by remember { mutableStateOf(false) }
-    LaunchedEffect(bleLinkState, otaUiState) {
-        if (otaUiState == OtaUiState.DONE && bleLinkState != BleLinkState.CONNECTED)
-            sawRebootDisconnect = true
-        if (
-            otaUiState == OtaUiState.DONE &&
-                sawRebootDisconnect &&
-                bleLinkState == BleLinkState.CONNECTED
-        ) {
-            sawRebootDisconnect = false
-            delay(1200)
-            try {
-                server?.stop()
-            } catch (_: Exception) {}
-            server = null
-            serverRunning = false
-
-            onResetOtaUi()
-            otaUiStarted = false
-            otaUiState = OtaUiState.IDLE
-        }
-    }
-
-    // ---------- File picker ----------
+    // File reading and hashing belong to Activity, so changing tabs cannot cancel them.
     val filePickerLauncher =
         rememberLauncherForActivityResult(contract = ActivityResultContracts.OpenDocument()) {
             uri: Uri? ->
-            if (uri != null) {
-                try {
-                    context.contentResolver.takePersistableUriPermission(
-                        uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                    )
-                } catch (_: Exception) {
-                    // Algunos proveedores no soportan persistable permission; ok.
-                }
-                selectedUriString = uri.toString()
-                sha256 = null
-                calculateSha256Async(uri)
-                val cursor = context.contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                    val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    val sizeIndex = it.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                    if (it.moveToFirst()) {
-                        fileName = it.getString(nameIndex)
-                        fileSize = it.getLong(sizeIndex)
-                    }
-                }
-            }
+            if (uri != null) onSelectFirmware(uri)
         }
 
     // ---------- UI ----------
     val scrollState = rememberScrollState()
 
-    val canStartServer = selectedUri != null && (fileSize ?: 0L) > 0L
+    val canStartServer = session.firmware != null && !session.busy
     val canComputeCmd = serverRunning && (fileSize ?: 0L) > 0L && sha256 != null
     val ipNow = deviceIp
     val onPlc = isOnPlcAp(ipNow)
@@ -346,12 +236,32 @@ fun OtaScreen(
             }
         }
 
+        session.confirmationText
+            ?.takeIf { otaUiState == OtaUiState.IDLE }
+            ?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color =
+                        if (session.confirmation == OtaConfirmation.CONFIRMED) Color(0xFF2E7D32)
+                        else MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        session.localError?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
         // ===== FILA SUPERIOR =====
 
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Button(
                 shape = RoundedCornerShape(6.dp),
                 onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+                enabled = !session.busy && !serverRunning && !calculating,
                 colors =
                     ButtonDefaults.buttonColors(
                         containerColor = SelectFirmwareColor,
@@ -413,35 +323,11 @@ fun OtaScreen(
             Button(
                 shape = RoundedCornerShape(6.dp),
                 onClick = {
-                    if (!serverRunning) {
-                        if (!canStartServer) {
-                            Toast.makeText(context, "Select firmware first", Toast.LENGTH_SHORT)
-                                .show()
-                            return@Button
-                        }
-
-                        server =
-                            HttpFileServer(port = 8080, fileSize = fileSize ?: 0L) {
-                                context.contentResolver.openInputStream(selectedUri!!)
-                            }
-
-                        try {
-                            server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
-                            serverRunning = true
-                            refreshIpNow()
-                        } catch (_: Exception) {
-                            Toast.makeText(context, "Server start error", Toast.LENGTH_SHORT).show()
-                            serverRunning = false
-                        }
-                    } else {
-                        try {
-                            server?.stop()
-                        } catch (_: Exception) {}
-                        server = null
-                        serverRunning = false
-                    }
+                    if (serverRunning) session.stopServer() else session.startServer()
+                    refreshIpNow()
                 },
                 modifier = Modifier.weight(1f),
+                enabled = !session.busy && (serverRunning || canStartServer),
                 colors =
                     ButtonDefaults.buttonColors(
                         containerColor = if (serverRunning) StopServerColor else StartServerColor,
@@ -520,6 +406,7 @@ fun OtaScreen(
                                 serverRunning &&
                                     !onPlc &&
                                     !otaModeActive &&
+                                    !session.busy &&
                                     bleLinkState == BleLinkState.CONNECTED,
                             modifier = Modifier.weight(1f),
                             colors =
@@ -646,9 +533,10 @@ fun OtaScreen(
 
                     otaUiState == OtaUiState.ABORTING -> "Aborting OTA..."
 
-                    otaUiState == OtaUiState.DONE -> "Update completed. Rebooting..."
+                    otaUiState == OtaUiState.DONE ->
+                        session.confirmationText ?: "Firmware accepted. Waiting for restart..."
 
-                    otaUiStarted -> "Waiting PLC response..."
+                    session.busy -> "Waiting PLC response..."
 
                     else -> ""
                 }
@@ -702,28 +590,7 @@ fun OtaScreen(
 
                 OutlinedButton(
                     shape = RoundedCornerShape(6.dp),
-                    onClick = {
-
-                        // 1️⃣ Cambiar estado visual
-                        otaUiState = OtaUiState.ABORTING
-
-                        // 2️⃣ Enviar comando al PLC
-                        onSendOta("OTA!")
-
-                        // 3️⃣ Parar servidor HTTP inmediatamente
-                        try {
-                            server?.stop()
-                        } catch (_: Exception) {}
-                        server = null
-                        serverRunning = false
-
-                        // 4️⃣ Reset total del estado OTA
-                        onResetOtaUi()
-
-                        // 5️⃣ Reset flags locales
-                        otaUiStarted = false
-                        otaUiState = OtaUiState.IDLE
-                    },
+                    onClick = onAbortOta,
                     enabled = abortEnabled,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFC62828)),
@@ -732,35 +599,6 @@ fun OtaScreen(
                 }
             }
         }
-    }
-}
-
-class HttpFileServer(
-    port: Int,
-    private val fileSize: Long,
-    private val inputStreamProvider: () -> InputStream?,
-) : NanoHTTPD(port) {
-
-    override fun serve(session: IHTTPSession): Response {
-        if (session.uri == "/firmware.bin") {
-            val inputStream =
-                inputStreamProvider()
-                    ?: return newFixedLengthResponse(
-                        Response.Status.INTERNAL_ERROR,
-                        "text/plain",
-                        "File error",
-                    )
-
-            // Fixed-length response => Content-Length correcto
-            return newFixedLengthResponse(
-                Response.Status.OK,
-                "application/octet-stream",
-                inputStream,
-                fileSize,
-            )
-        }
-
-        return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not Found")
     }
 }
 

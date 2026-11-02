@@ -3,11 +3,11 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lintDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 18. VersionName: `1.3.14-plc3`.
+- VersionCode: 19. VersionName: `1.3.15-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
-- 71 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
+- 88 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
 
 ## Pruebas ejecutadas
 
@@ -21,6 +21,7 @@ Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lin
 | PlcReadingsTest | 8 | 0 |
 | StatusRefreshPolicyTest | 18 | 0 |
 | OtaProtocolTest | 6 | 0 |
+| OtaSessionTest | 17 | 0 |
 | ExampleUnitTest (original) | 1 | 0 |
 
 Los casos de protocolo prueban todos los puntos de corte de la confirmación de conexión y de una trama V2, tamaños de fragmento 1/20/182 bytes, varios mensajes concatenados, UTF-8 partido, límites del buffer, resincronización, comandos protegidos/consultas, PIN con ceros iniciales, caducidad de sesión y redacción de secretos en el log. Las pruebas de red comprueban conservación de contraseña enmascarada, cambio explícito, contraseña vacía, valores con `=`, estados LINK/TCP independientes y recepción de NET/NETSTAT en una misma ráfaga.
@@ -387,7 +388,38 @@ El texto OTA remite a la contraseña configurada en el firmware.
 Pendiente en Android/PLC reales: anuncio del nombre, asociación WiFi con la
 nueva clave y transferencia OTA de dos fases.
 
-Validación final 02/11/2026: `testDebugUnitTest assembleDebug lintDebug` correcto.
+Validación de la revisión 1.3.14 (02/11/2026): `testDebugUnitTest assembleDebug lintDebug` correcto.
 71 pruebas JVM, 0 fallos/errores/omitidas; APK 1.3.14-plc3 (versionCode 18).
 Lint: 0 errores, 0 MissingPermission, 31 advertencias y 3 avisos informativos.
 Sin validación de asociación WiFi ni transferencia OTA en un dispositivo físico.
+
+
+## Sesión OTA fuera de la pestaña (1.3.15)
+
+OtaSession pertenece a MainActivity; OtaScreen solo presenta estado y acciones.
+El servidor recibe una selección inmutable. La carga/hash usa lifecycleScope y
+Dispatchers.IO y cuenta los bytes leídos, sin depender del tamaño del proveedor.
+Se ignoran hashes obsoletos y callbacks de selección tras destruir la Activity.
+El resultado de versión exige DONE, desconexión, handshake y STATUS válido del
+mismo PLC; los temporizadores anteriores no pueden cerrar la siguiente prueba A/B.
+
+Pruebas OtaSessionTest: selección fijada, hash fuera de orden, archivo vacío,
+fallos de creación/arranque de servidor y liberación, respuestas antiguas u otro
+PLC, DONE sin verificación, recuperación manual tras timeout, A/B/A y misma versión,
+limpieza sin pantalla, aborto y errores terminales/no terminales, cierre y lectura
+HTTP real de 256 KiB manteniendo una sesión común entre vistas.
+
+Pendiente en teléfono: cambiar OTA → TERMINAL → NETWORK → OTA durante SHA256,
+WAIT_PARAMS, descarga y reinicio; comprobar archivo/hash/progreso, ausencia de
+segundo servidor, resultado persistente y alternancia A/B varias veces. Probar
+reconexión tardía y pérdida de STATUS con ambos toggles apagados. La prueba HTTP
+JVM no sustituye una prueba instrumentada de navegación ni una OTA física.
+
+
+Validación final 02/11/2026: `testDebugUnitTest assembleDebug lintDebug` correcto.
+88 pruebas JVM, 0 fallos, 0 errores y 0 omitidas. Incluye 17 casos de sesión OTA
+y transferencia HTTP local real. APK 1.3.15-plc3 (versionCode 19) generado.
+Lint: 0 errores, 0 MissingPermission, 32 advertencias y 3 avisos informativos;
+ningún aviso en OtaSession, OtaFileLoader, OtaHttpServer u OtaScreen.
+`git diff --check` correcto. Firmware y protocolo V2 sin cambios.
+Sin prueba instrumentada de navegación, BLE físico ni flasheo OTA en esta revisión.
