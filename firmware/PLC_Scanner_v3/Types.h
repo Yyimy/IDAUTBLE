@@ -45,6 +45,7 @@ struct BleCmd {
   BleCmdType type;
   uint8_t source;  // 0=BLE, 1=TCP
   uint32_t session;
+  uint32_t receivedMs;  // Complete command received by the PLC, before queueing.
   char payload[384];  // para RTC=... o CFG=...
 };
 
@@ -79,11 +80,29 @@ enum OutputIndex {
   O_RESERVA7 = 7
 };
 
+enum HeightReadResult : uint8_t {
+  HEIGHT_OK, HEIGHT_DISABLED, HEIGHT_TIMEOUT, HEIGHT_INCOMPLETE,
+  HEIGHT_INVALID, HEIGHT_OUT_OF_RANGE
+};
+
+// Diagnostic metadata only; never serialized into V2 or persistent event records.
+struct HeightTiming {
+  bool active;
+  uint8_t source;  // 0=BLE, 1=TCP
+  uint32_t session;
+  uint32_t receivedMs;
+  uint32_t sensorStartedMs;
+  uint32_t sensorFinishedMs;
+  uint32_t queuedMs;
+  HeightReadResult result;
+};
+
 struct TxPacket {
   uint16_t len;
   uint32_t session;
   uint32_t eventId;
   uint8_t data[512];
+  HeightTiming heightTiming;
 };
 
 struct ScanJob {
@@ -91,6 +110,7 @@ struct ScanJob {
   bool event;
   char iso[20];
   char photo;
+  HeightTiming heightTiming;
 };
 
 struct EventRecord {

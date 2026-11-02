@@ -1,2 +1,24 @@
+Revisión de altura y temporizador A — 02/11/2026
+Firmware: 3.0.7-rc1. Arduino-ESP32: 3.0.7.
+
 PASS: 97 assertions against extracted production functions
-PASS: 5 compilation checks for configurable PIN (including leading zeros and invalid settings)
+PASS: 5 compilation checks for configurable PIN
+PASS: 48041 LED assertions against production functions
+PASS: 65 identity assertions against production functions
+PASS: 30 STATUS assertions against production functions
+PASS: 79297 height/transport assertions, including 19801 valid millimetre values
+
+Compilación Arduino CLI correcta:
+esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,PartitionScheme=min_spiffs
+Sketch: 1617213 / 1966080 bytes (82%). Globals: 71644 / 327680 bytes (21%).
+Adafruit ADS1X15 2.5.0; Adafruit BusIO 1.16.2.
+git diff --check: correcto.
+
+Las pruebas host usan funciones extraídas de producción y mocks de UART/BLE/TCP.
+El harness compartido emite avisos de funciones auxiliares no usadas en algunos
+binarios de prueba; no representan errores del firmware. No hay cambios Android
+ni en la trama V2. No se ha validado sensor, bus RS485, radio ni monitor físico.
+
+Ver LEEME.md: el reloj empieza cuando el PLC recibe A, incluye colas y termina
+al entregar el último fragmento al transporte de origen. BLE_SUBMITTED/TCP_SUBMITTED
+no confirman entrega o procesamiento por el receptor remoto.

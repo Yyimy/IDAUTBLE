@@ -63,7 +63,7 @@ String formatAltura(float m){char b[20];snprintf(b,sizeof(b),"%05.2f",m);return 
 struct UARTMock {std::string rx;int triggers=0;int available(){return rx.size();}int read(){char c=rx[0];rx.erase(0,1);return (unsigned char)c;}void print(const char*){++triggers;}void write(uint8_t*,size_t){} } PLCSerial,RS485;
 void clearRxBuffer_RS485(){RS485.rx.clear();}
 bool gCutRequested=false,gScanActive=false,gAlturaEnabled=false;uint8_t gScanPhase=0,gScanHead=0,gScanCount=0,gHeightCount=0;ScanJob gCurrentScan{},gScanJobs[16]{};
-uint32_t gScanStarted=0,gScanOverflow=0;String gReaderBuffer;bool gReaderOverflow=false;uint8_t gHeightReply[3]{},tramaRS[5]{};
+uint32_t gScanStarted=0,gScanOverflow=0;String gReaderBuffer;bool gReaderOverflow=false,gHeightInvalidBytes=false;const uint32_t HEIGHT_TIMEOUT_MS=250;uint8_t gHeightReply[3]{},tramaRS[5]{};
 int failCount=0,ponCount=0;void countersIncPon(){++ponCount;}void countersIncLecturaFallida(){++failCount;}void actualizarCampoBateriaBLE(){}
 std::vector<String> emitted;void outboxPush(const String&s){emitted.push_back(s);}void sendFrame(const uint8_t*,size_t);String authReply;bool authReplyOk=false;void replyLine(bool ok,const String&text){authReplyOk=ok;authReply=text;}
 #define HIGH 1
@@ -76,7 +76,7 @@ int digitalRead(int){return rawFoto;}void countersIncPalCargado(){++loaded;}void
 void powerCut(const char*){gCutRequested=true;}
 '''
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
-names=['handleAuthCommand','maintenanceAuthorized','runtimeLoad','applyConfiguredPin','batteryTick','pctFrom2Digits','sendFrame','bleCanNotify','txTick','parseU32','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','scanTick','enqueueScan','photoTick']
+names=['handleAuthCommand','maintenanceAuthorized','runtimeLoad','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueFrame','sendFrame','bleCanNotify','txTick','parseU32','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
 #define V_BAT_ABSENT 2.0f
