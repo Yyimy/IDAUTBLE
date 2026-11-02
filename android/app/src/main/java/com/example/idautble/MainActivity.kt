@@ -1484,9 +1484,7 @@ class MainActivity : ComponentActivity() {
                     uiOtaStatus.value = "ERROR: ${uiOtaErr.value}"
                 } else {
                     val body = payloadText.substringAfter("OTA=").trim()
-                    Regex("SSID=([^ ]+)").find(body)?.groupValues?.get(1)?.let {
-                        uiOtaApSsid.value = it
-                    }
+                    parseOtaApSsid(body)?.let { uiOtaApSsid.value = it }
                     uiOtaStatus.value = body
 
                     // Progreso

@@ -1,6 +1,6 @@
-# Validación — PLC Scanner 3.0.6-rc1
+# Validación — PLC Scanner 3.0.8-rc1
 
-Fecha: 30 de octubre de 2026.
+Fecha: 2 de noviembre de 2026.
 
 ## Comprobado en este entorno
 
@@ -11,9 +11,9 @@ Fecha: 30 de octubre de 2026.
 | Objetivo | ESP32-S3 Dev Module, USB CDC habilitado, Minimal SPIFFS con OTA |
 | Arduino-ESP32 | 3.0.7 |
 | ADS1X15 / BusIO | 2.5.0 / 1.16.2 |
-| Tamaño de programa | 1.615.813 bytes, 82 % de 1.966.080 bytes de partición |
-| Datos globales estáticos | 71.116 bytes, 21 % de 327.680 bytes |
-| Pruebas de regresión en host | 97 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED + 65 de identidad + 30 de diagnóstico STATUS |
+| Tamaño de programa | 1.617.017 bytes, 82 % de 1.966.080 bytes de partición |
+| Datos globales estáticos | 71.636 bytes, 21 % de 327.680 bytes |
+| Pruebas de regresión en host | 107 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED + 65 de identidad + 30 de diagnóstico STATUS + 79.297 de altura/transporte + 10 casos de compilación OTA y 40 comprobaciones OTA |
 
 La memoria libre indicada por el compilador no mide el consumo dinámico de BLE/WiFi, colas y tareas durante el funcionamiento. Debe medirse en placa en una prueba prolongada.
 
@@ -22,7 +22,7 @@ Las pruebas del LED ejecutan las funciones reales con reloj y salidas simulados:
 Las pruebas en host extraen las funciones del INO entregado y las ejecutan con reloj, UART, transporte, GPIO y acceso RTC simulados. No se limitan a buscar textos ni a reproducir la implementación en Python. Cubren:
 
 - Autorización que permanece tras dos días simulados, revocación explícita, PIN incorrecto, bloqueo temporal, revocación durante bloqueo y rechazo del canal TCP para controlar la sesión BLE.
-- PIN compilado que prevalece sobre NVS, conservación de la clave OTA, detección de cambio, solicitud de retirada de vínculos y reintento si falla. Se ejecutan las funciones reales con NVS y BLE simulados.
+- PIN compilado que prevalece sobre NVS, prioridad de la clave OTA compilada sobre NVS, detección de cambio, solicitud de retirada de vínculos y reintento si falla. Se ejecutan las funciones reales con NVS y BLE simulados.
 - Validación del PIN: seis cifras y ceros iniciales admitidos; longitud incorrecta o letras rechazadas al compilar.
 - Enteros con desbordamiento, signos, texto y límites.
 - Configuración NET inválida sin aplicación parcial; puertos, claves enmascaradas, subred y máscara.
@@ -46,7 +46,7 @@ ni la memoria física. Ejecutar `python3 firmware/tests/test_identity.py`.
 
 | Prueba | Criterio de aceptación |
 |---|---|
-| ID configurable | Guardar matrícula, volver a buscar, comprobar nombre exacto, trama BLE/TCP, reinicio y persistencia, PIN/vínculo conservados y mismo SSID OTA; aceptar con palet cargado o vacío; rechazar con lectura o eventos pendientes |
+| ID configurable | Guardar matrícula, volver a buscar, comprobar nombre exacto, trama BLE/TCP, reinicio y persistencia, PIN/vínculo conservados y SSID OTA con el nuevo ID al siguiente OTA=START; aceptar con palet cargado o vacío; rechazar con lectura o eventos pendientes |
 | Arranque y USB/UART0 | La consola USB no se mezcla con PON; lector a 9600, RX44/TX43 |
 | LED y prioridades | Verificar fijo, lento, doble/triple destello, rápido y OTA; batería oculta conexión/OTA, fallo oculta batería, cambio de batería recupera patrón tras confirmación |
 | Expansor de salidas | LED O0 y relé O1 coinciden con el cableado y la polaridad del adjunto |
@@ -108,3 +108,15 @@ de respuesta dentro de 512 bytes. Comprueba también reconocimiento en BLE/TCP.
 Pendiente en placa: comparar el parpadeo físico con STATUS, retirar cada batería,
 comprobar lecturas reales e histéresis, desconectar periféricos y validar BLE/TCP
 y recepción fragmentada en el Android del técnico. No cambia la protección eléctrica.
+
+
+## Contraseña y nombre OTA (3.0.8-rc1)
+
+Contraseña compilada PLC_OTA_WIFI_PASSWORD, validada con static_assert de 8…63
+bytes. Se han compilado diez configuraciones (límites, vacía, símbolos, escapes y caracteres no imprimibles), además de ejecutar las funciones reales runtimeLoad/otaUpdateApSsid
+con dos contraseñas compiladas diferentes: 20 aserciones por variante.
+Se comprueba que NVS antiguo, inválido o ausente no impone la clave activa ni
+se genera una nueva clave; el SSID usa el ID actual, admite espacios y cabe
+en 32 bytes. La compilación completa se realiza con core 3.0.7.
+Se mantienen las pruebas de PIN, LED, identidad, STATUS y altura/transporte.
+Sin asociación WiFi ni actualización OTA probada en equipo físico.

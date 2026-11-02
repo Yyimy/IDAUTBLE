@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.6
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.13-plc3** (versionCode 17).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.14-plc3** (versionCode 18).
 
 ## Abrir y compilar
 
@@ -103,7 +103,7 @@ La app reconoce también una autorización temporal de firmware anterior y lo in
    falta olvidar el vínculo Bluetooth ni introducir un PIN nuevo. El nombre de
    los ajustes de Android puede estar en caché; la app prioriza el anuncio y ID?.
 
-El ID queda en el PLC y se utiliza en sus tramas. HWID y SSID OTA no cambian.
+El ID queda en el PLC y se utiliza en sus tramas. HWID no cambia; desde firmware 3.0.8 el siguiente inicio OTA usa PLC_OTA_<ID configurado>.
 Asigna IDs distintos a cada equipo y adapta cualquier receptor externo que
 espere 12 HEX: ahora el ID se lee hasta el primer ESC y puede tener 1–20
 caracteres. La app de mantenimiento no convierte ni confirma eventos del SGA.
@@ -376,3 +376,15 @@ También se centran los botones Get Status / Enable-Disable de HEIGHT MEASUREMEN
 En BARCODE ID / RTC se centra el conjunto de botones/campos y se limita a 560 dp
 cuando sobra anchura, manteniendo las columnas y la alineación de Pallet/Spot/RTC.
 En espacios menores sigue adaptándose al ancho disponible.
+
+
+## Red OTA con ID personalizado (app 1.3.14 / firmware 3.0.8)
+
+El AP OTA se llama PLC_OTA_<ID configurado>, por ejemplo PLC_OTA_FORK 7.
+El nombre completo se extrae hasta el delimitador IP=, conservando los espacios.
+Los mensajes incompletos, ajenos o con un SSID inválido no sustituyen el nombre
+conocido. Los firmwares anteriores con sufijo HWID siguen siendo compatibles.
+La contraseña se configura en PLC_OTA_WIFI_PASSWORD al principio del INO;
+valor de ejemplo 12345678, 8…63 bytes. Tras cargar el firmware, activar OTA y
+seleccionar esa red con la clave compilada. Actualizar/olvidar credenciales WiFi
+antiguas si Android sigue usando la contraseña previa.
