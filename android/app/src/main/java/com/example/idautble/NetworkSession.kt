@@ -107,6 +107,7 @@ data class NetworkPending(
     val okSeen: Boolean = false,
     val readback: NetConfig? = null,
     val statusReadback: NetStatus? = null,
+    val automatic: Boolean = false,
 )
 
 data class NetworkUiState(
@@ -128,6 +129,11 @@ data class NetworkUiState(
 
     val busy
         get() = pending != null
+
+    val controlsBusy
+        get() =
+            pending != null &&
+                !(pending.operation == NetworkOperation.READ_STATUS && pending.automatic)
 
     val dirty
         get() = config?.let { draft != NetworkDraft.from(it) } ?: false
@@ -204,7 +210,7 @@ class NetworkSession(private val now: () -> Long, private val send: (String, Lon
     }
 
     fun discardEdits() {
-        if (state.busy) return
+        if (state.controlsBusy) return
         state.config?.let {
             state =
                 state.copy(
@@ -217,25 +223,38 @@ class NetworkSession(private val now: () -> Long, private val send: (String, Lon
         }
     }
 
+    // A user action supersedes a background snapshot. Invalidating its ID also
+    // removes any unsent poll from MainActivity's queue; in-flight replies remain snapshots.
+    private fun prepareUserOperation(): Boolean {
+        if (!state.available || state.controlsBusy) return false
+        if (state.busy) state = state.copy(pending = null)
+        return true
+    }
+
     fun readConfiguration() {
-        if (!state.available || state.busy) return
+        if (!prepareUserOperation()) return
         state = state.copy(error = null, notice = "Reading PLC configuration...")
         issue(NetworkOperation.READ_CONFIG, "NET?")
     }
 
     fun refreshStatus(automatic: Boolean = false) {
-        if (!state.available || state.busy) return
-        if (!automatic) state = state.copy(error = null)
-        issue(NetworkOperation.READ_STATUS, "NETSTAT?")
+        if (automatic) {
+            if (!state.available || state.busy) return
+        } else {
+            if (!prepareUserOperation()) return
+            state = state.copy(error = null)
+        }
+        issue(NetworkOperation.READ_STATUS, "NETSTAT?", automatic = automatic)
     }
 
     fun save() {
-        if (!state.available || state.busy || !state.dirty || state.config == null) return
+        if (!state.available || state.controlsBusy || !state.dirty || state.config == null) return
         val errors = networkDraftErrors(state.draft)
         if (errors.isNotEmpty()) {
             state = state.copy(error = errors.first())
             return
         }
+        if (!prepareUserOperation()) return
         state =
             state.copy(
                 error = null,
@@ -246,12 +265,14 @@ class NetworkSession(private val now: () -> Long, private val send: (String, Lon
     }
 
     fun toggleWifi() {
-        if (!state.available || state.busy || state.config == null || state.status == null) return
+        if (!state.available || state.controlsBusy || state.config == null || state.status == null)
+            return
         val enable = !state.status!!.wifiEnabled
         if (enable && state.config!!.ssid.isEmpty()) {
             state = state.copy(error = "Set and save a WiFi network name before enabling WiFi.")
             return
         }
+        if (!prepareUserOperation()) return
         state =
             state.copy(error = null, notice = "Waiting for authorisation and PLC confirmation...")
         issue(
@@ -260,9 +281,24 @@ class NetworkSession(private val now: () -> Long, private val send: (String, Lon
         )
     }
 
-    private fun issue(op: NetworkOperation, command: String, expected: NetConfig? = null) {
+    private fun issue(
+        op: NetworkOperation,
+        command: String,
+        expected: NetConfig? = null,
+        automatic: Boolean = false,
+    ) {
         val id = ++sequence
-        state = state.copy(pending = NetworkPending(id, op, now() + 60_000, expected = expected))
+        state =
+            state.copy(
+                pending =
+                    NetworkPending(
+                        id,
+                        op,
+                        now() + 60_000,
+                        expected = expected,
+                        automatic = automatic,
+                    )
+            )
         if (op == NetworkOperation.READ_STATUS) lastPoll = now()
         send(command, id)
     }

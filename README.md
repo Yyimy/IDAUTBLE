@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.18-plc3, versionCode 22 |
+| App Android | [android/](android/) | 1.3.19-plc3, versionCode 23 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.11-rc1 |
 
 ## Trabajar sin ZIP
@@ -453,3 +453,15 @@ volver sin perder el borrador, guardar con PIN y confirmar lectura devuelta, hab
 WiFi y comprobar IP DHCP/TCP reales. Probar también contraseña incorrecta, servidor
 parado, cancelar PIN y desconectar/cambiar de PLC. La compilación y pruebas JVM no
 sustituyen esta validación física.
+
+## NETWORK en dos columnas (app 1.3.19)
+
+En horizontal y con al menos 700 dp disponibles, LIVE CONNECTION ocupa el 40 % y
+PLC CONFIGURATION el 60 %, con tarjetas alineadas y desplazamiento independiente.
+En pantallas estrechas o en vertical se apilan. Los estados de conexión incorporan
+pequeños indicadores de color y los campos conservan el estilo compacto.
+
+Los refrescos automáticos dejan estables los botones y su texto. Refresh manual
+sigue mostrando su progreso; guardar, consultar o activar WiFi puede adelantarse a
+una consulta automática pendiente. No cambia la frecuencia de refresco ni se repiten
+escrituras. Pendiente comprobar la distribución y el teclado en el teléfono/tablet real.

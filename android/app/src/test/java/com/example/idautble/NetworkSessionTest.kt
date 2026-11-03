@@ -421,6 +421,83 @@ class NetworkSessionTest {
     }
 
     @Test
+    fun backgroundPollKeepsControlsStableBeforeAndAfterReply() {
+        val r = loaded()
+        assertFalse(r.session.state.controlsBusy)
+        r.advance(5_000)
+        assertTrue(r.session.state.busy)
+        assertTrue(r.session.state.pending!!.automatic)
+        assertFalse(r.session.state.controlsBusy)
+        r.sent()
+        r.ack(off)
+        assertFalse(r.session.state.controlsBusy)
+    }
+
+    @Test
+    fun wifiActionSupersedesBackgroundPollWithoutLosingClick() {
+        val r = loaded()
+        r.session.refreshStatus(automatic = true)
+        val pollId = r.commands.last().second
+        r.session.toggleWifi()
+        assertEquals("WIFI=1", r.commands.last().first)
+        assertFalse(r.session.isCurrent(pollId))
+        assertTrue(r.session.state.controlsBusy)
+        // A snapshot from the superseded query must not confirm the unsent change.
+        r.ack(off)
+        assertEquals(NetworkOperation.WIFI_ON, r.session.state.pending!!.operation)
+        r.sent()
+        r.ack("OK")
+        r.ack(linking)
+        assertFalse(r.session.state.controlsBusy)
+    }
+
+    @Test
+    fun manualRefreshShowsUserOperationEvenWhenBackgroundReadWasPending() {
+        val r = loaded()
+        r.session.refreshStatus(automatic = true)
+        val pollId = r.commands.last().second
+        r.session.refreshStatus()
+        assertFalse(r.session.isCurrent(pollId))
+        assertFalse(r.session.state.pending!!.automatic)
+        assertTrue(r.session.state.controlsBusy)
+        r.sent()
+        r.ack(off)
+        assertFalse(r.session.state.controlsBusy)
+    }
+
+    @Test
+    fun saveAndReloadCanSupersedePollingWithoutReplayingItsQueueEntry() {
+        for (save in listOf(true, false)) {
+            val r = loaded()
+            r.session.edit { it.copy(port = "9001") }
+            r.session.refreshStatus(automatic = true)
+            val oldId = r.commands.last().second
+            if (save) r.session.save() else r.session.readConfiguration()
+            assertFalse(r.session.isCurrent(oldId))
+            assertEquals(
+                if (save) NetworkOperation.SAVE else NetworkOperation.READ_CONFIG,
+                r.session.state.pending!!.operation,
+            )
+            r.session.commandSent(oldId)
+            assertNull(r.session.state.pending!!.sentAt)
+            r.ack(off)
+            assertTrue(r.session.state.controlsBusy)
+        }
+    }
+
+    @Test
+    fun discardEditsRemainsAvailableWhilePolling() {
+        val r = loaded()
+        r.session.edit { it.copy(port = "9001") }
+        r.session.refreshStatus(automatic = true)
+        val pending = r.session.state.pending
+        r.session.discardEdits()
+        assertFalse(r.session.state.dirty)
+        assertEquals(pending, r.session.state.pending)
+        assertFalse(r.session.state.controlsBusy)
+    }
+
+    @Test
     fun parserRejectsMissingDuplicateInvalidAndPrefixedRecords() {
         assertNull(parseNetConfigLine("NET=MODE=DHCP"))
         assertNull(parseNetConfigLine(configLine() + ";SSID=duplicate"))
