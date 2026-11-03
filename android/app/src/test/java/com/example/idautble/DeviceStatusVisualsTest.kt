@@ -35,6 +35,41 @@ class DeviceStatusVisualsTest {
     }
 
     @Test
+    fun readyPulseMatchesFirmwareCadenceAndUsesOneHundredMsPerCycle() {
+        val firmware = "3.0.12-rc1"
+        var onMs = 0
+        for (t in 0L until 9000L) {
+            val on = ledPreviewOn("READY", t, true, firmware)
+            assertEquals("READY at $t ms", t % 3000 < 100, on)
+            if (on) onMs++
+        }
+        assertEquals(300, onMs)
+        assertTrue(ledPreviewOn("READY", 99, true, firmware))
+        assertFalse(ledPreviewOn("READY", 100, true, firmware))
+        assertFalse(ledPreviewOn("READY", 2999, true, firmware))
+        assertTrue(ledPreviewOn("READY", 3000, true, firmware))
+        assertEquals(
+            Long.MAX_VALUE % 3000 < 100,
+            ledPreviewOn("READY", Long.MAX_VALUE, true, firmware),
+        )
+        assertFalse(ledPreviewOn("READY", 0, false, firmware))
+        assertTrue(ledDescription("READY", firmware).contains("1 short flash / 3 s"))
+    }
+
+    @Test
+    fun previewAndLabelKeepSteadyReadyForOlderOrUnknownFirmware() {
+        for (firmware in listOf(null, "", "custom", "3.0", "3.0.11-rc1", "3.0.8-OTA-B")) {
+            assertFalse(firmwareUsesReadyPulse(firmware))
+            assertTrue(ledPreviewOn("READY", 1000, true, firmware))
+            assertTrue(ledDescription("READY", firmware).contains("steady light"))
+        }
+        for (firmware in
+            listOf("3.0.12-rc1", "3.0.12-OTA-A", "3.0.12+test", "3.0.13", "3.1.0", "4.0.0")) {
+            assertTrue(firmwareUsesReadyPulse(firmware))
+        }
+    }
+
+    @Test
     fun staleSnapshotsAndUnknownModesNeverFlash() {
         for (mode in listOf("READY", "DISCONNECTED", "BAT_LOW", "BAT_CRITICAL", "ERROR", "OTA")) {
             for (t in listOf(0L, 199L, 400L, 1000L)) assertFalse(ledPreviewOn(mode, t, false))

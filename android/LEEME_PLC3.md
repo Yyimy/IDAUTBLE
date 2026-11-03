@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.6
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.20-plc3** (versionCode 24).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.21-plc3** (versionCode 25).
 
 Desde 1.3.20, TERMINAL, NETWORK y OTA comparten tarjetas de borde fino,
 fondo suave y esquinas de 8 dp. Las pestañas tienen iconos y selección segmentada;
@@ -496,3 +496,11 @@ por cada trama ni posponer indefinidamente con tráfico continuo. Se mantienen
 las pausas de OTA, transporte ocupado y segundo plano, y la limpieza al desconectar.
 
 Solo cambia la app. El firmware 3.0.11-rc1 que ofrece COUNTERS? sigue siendo válido.
+
+## Destello READY (firmware 3.0.12 / app 1.3.21)
+
+El LED preparado emite un destello de 100 ms cada 3 segundos (2900 ms apagado).
+Se conservan el significado de READY y las prioridades de batería, errores y OTA.
+Actualizar el firmware para cambiar el LED físico y la app para que su vista previa y
+etiqueta coincidan. La app mantiene la luz fija al conectar a firmware anterior a 3.0.12.
+La fase de la animación es ilustrativa; no está sincronizada con el LED físico.

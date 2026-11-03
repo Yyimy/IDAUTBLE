@@ -1,4 +1,4 @@
-# PLC Scanner 3.0.11-rc1 — código completo corregido
+# PLC Scanner 3.0.12-rc1 — código completo corregido
 
 Versión candidata para validación en banco. Derivada del archivo adjunto del 29/10/2026. Conserva los comandos binarios de cuatro bytes y la trama V2, con las diferencias de integración indicadas abajo. No se ha probado físicamente en la placa.
 
@@ -134,12 +134,13 @@ Para aprovecharlo hay que actualizar tanto este firmware como la app 1.2-plc3. C
 
 ## LED de estado (version 3.0.3)
 
-Un solo LED, conectado a O0 del expansor activo bajo. No requiere cambios
-Android ni cambia comandos, UUID, trama V2, calibración o política de corte.
+Un solo LED, conectado a O0 del expansor activo bajo. READY cambia a destello
+corto desde 3.0.12; la app 1.3.21 adapta su vista previa según la versión del PLC.
+No cambian comandos, UUID, trama V2, calibración ni política de corte.
 
 | Estado | Patrón | Acción |
 |---|---|---|
-| Preparado | Encendido fijo | Listo, con la comunicación requerida disponible. |
+| Preparado | Un destello de 100 ms cada 3 s | Listo, con la comunicación requerida disponible. |
 | Sin conexión requerida | 500 ms ON / 500 ms OFF | Revisar BLE o TCP según el modo de trabajo. |
 | Batería baja (<=20%, por encima de la banda muy baja) | Dos destellos cada 4 s | Preparar una batería cargada. |
 | Batería muy baja (<=10%) | Tres destellos cada 2 s | Cambiar la batería cuanto antes. |
@@ -492,3 +493,13 @@ counters reset conservan su funcionamiento anterior. No se añade un reset remot
 La app 1.3.16 consulta COUNTERS? tras un STATUS válido que anuncie la capacidad,
 con su propia antigüedad y timeout. Un firmware anterior sigue sirviendo STATUS
 sin recibir comandos desconocidos. No cambia V2 ni el saludo TCP.
+
+## READY de bajo consumo (3.0.12-rc1)
+
+READY usa 100 ms encendido y 2900 ms apagado (periodo de 3 s). Conserva el
+significado del estado: WiFi habilitado requiere TCP conectado; WiFi deshabilitado
+requiere BLE listo para notificaciones. El resto de patrones y sus prioridades no cambia.
+La cadencia es no bloqueante y mantiene la aritmética de millis() ante desbordamiento.
+El ciclo de trabajo del LED es 3,33 %; esto reduce el tiempo encendido del LED, no implica
+esa misma mejora de autonomía del conjunto. La app 1.3.21 muestra el nuevo patrón
+para firmware 3.0.12 o posterior y mantiene la luz fija para las versiones anteriores.

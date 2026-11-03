@@ -4,8 +4,8 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.20-plc3, versionCode 24 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.11-rc1 |
+| App Android | [android/](android/) | 1.3.21-plc3, versionCode 25 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.12-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -478,3 +478,11 @@ OTA agrupa archivo/servidor y progreso en tarjetas; los pasos de actualización
 mantienen sus controles y condiciones. La distribución de TERMINAL, sus secciones
 plegables y el funcionamiento de BLE, red y OTA se conservan.
 Pendiente revisar el resultado visual en el dispositivo real.
+
+## Destello READY (firmware 3.0.12 / app 1.3.21)
+
+El LED preparado emite un destello de 100 ms cada 3 segundos (2900 ms apagado).
+Se conservan el significado de READY y las prioridades de batería, errores y OTA.
+Actualizar el firmware para cambiar el LED físico y la app para que su vista previa y
+etiqueta coincidan. La app mantiene la luz fija al conectar a firmware anterior a 3.0.12.
+La fase de la animación es ilustrativa; no está sincronizada con el LED físico.
