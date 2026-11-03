@@ -1,6 +1,6 @@
-# Validación — PLC Scanner 3.0.8-rc1
+# Validación — PLC Scanner 3.0.9-rc1
 
-Fecha: 2 de noviembre de 2026.
+Fecha: 3 de noviembre de 2026.
 
 ## Comprobado en este entorno
 
@@ -11,9 +11,9 @@ Fecha: 2 de noviembre de 2026.
 | Objetivo | ESP32-S3 Dev Module, USB CDC habilitado, Minimal SPIFFS con OTA |
 | Arduino-ESP32 | 3.0.7 |
 | ADS1X15 / BusIO | 2.5.0 / 1.16.2 |
-| Tamaño de programa | 1.617.017 bytes, 82 % de 1.966.080 bytes de partición |
+| Tamaño de programa | 1.617.037 bytes, 82 % de 1.966.080 bytes de partición |
 | Datos globales estáticos | 71.636 bytes, 21 % de 327.680 bytes |
-| Pruebas de regresión en host | 107 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED + 65 de identidad + 30 de diagnóstico STATUS + 79.297 de altura/transporte + 10 casos de compilación OTA y 40 comprobaciones OTA |
+| Pruebas de regresión en host | 107 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED + 65 de identidad + 30 de diagnóstico STATUS + 79.297 de altura/transporte + 10 casos de compilación OTA y 40 comprobaciones OTA + 24 de arranque WiFi/DHCP |
 
 La memoria libre indicada por el compilador no mide el consumo dinámico de BLE/WiFi, colas y tareas durante el funcionamiento. Debe medirse en placa en una prueba prolongada.
 
@@ -120,3 +120,24 @@ se genera una nueva clave; el SSID usa el ID actual, admite espacios y cabe
 en 32 bytes. La compilación completa se realiza con core 3.0.7.
 Se mantienen las pruebas de PIN, LED, identidad, STATUS y altura/transporte.
 Sin asociación WiFi ni actualización OTA probada en equipo físico.
+
+
+## DHCP y cambio de modo (3.0.9-rc1)
+
+24 aserciones ejecutan wifiStartFromConfig extraída del INO con mocks que reproducen
+el contrato del core 3.0.7: DHCP solo para local_ip == 0. Cubren dirección cero,
+credenciales, orden de arranque, reinicio de flags/TCP, dirección/gateway/máscara
+estática conservadas, STATIC → DHCP, fallo de configuración que impide WiFi.begin,
+WiFi deshabilitado y SSID vacío. El mismo test contra la función anterior falla en
+WiFi.dhcp. No simula radio, concesión DHCP real, DNS ni conexión TCP al servidor.
+
+Pendiente en placa: confirmar IP válida con NETSTAT?, dirección del router por DHCP,
+STATIC → DHCP, WiFi OFF/ON, reinicio, restauración de red tras OTA y TCP=UP contra
+un servidor que acepte conexiones. La app y el protocolo permanecen iguales.
+
+
+Compilación final 03/11/2026: Arduino-ESP32 3.0.7, ESP32-S3 CDCOnBoot=cdc,
+USBMode=hwcdc y min_spiffs, --warnings all. Sketch 1.617.037 / 1.966.080 bytes (82%);
+globales 71.636 / 327.680 bytes (21%). Sin avisos del sketch en esta compilación.
+Regresiones lógica/PIN/STATUS/LED/identidad/altura/OTA y 24 comprobaciones WiFi
+superadas. git diff --check correcto. Sin validación física del arreglo DHCP.

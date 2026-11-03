@@ -5,7 +5,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 | Componente | Carpeta | Versión |
 |---|---|---|
 | App Android | [android/](android/) | 1.3.15-plc3, versionCode 19 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.8-rc1 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.9-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -369,3 +369,15 @@ Tras reiniciar y reconectar, se muestra la versión del firmware en ejecución j
 a la anterior. El resultado permanece disponible al volver a OTA y se puede repetir
 la prueba con otro BIN. Mantener la app abierta: no se garantiza continuidad si
 Android destruye la Activity o finaliza el proceso. No requiere cambiar el firmware.
+
+
+## DHCP en Arduino-ESP32 3.0.7 (firmware 3.0.9)
+
+Corregida la activación DHCP: el core requiere local_ip 0.0.0.0; INADDR_NONE
+configuraba 255.255.255.255 como dirección estática. El PLC podía asociarse al AP
+(LINK=UP y RSSI válido) sin disponer de una IP utilizable ni conexión TCP.
+Ahora solicita dirección al router y no inicia WiFi si falla la configuración IP.
+No requiere actualizar la app ni cambiar la configuración guardada.
+Tras cargarlo, comprobar NETSTAT?: IP válida de la red y, si el servidor escucha,
+TCP=UP. NET? conserva los campos IP/GW/MASK del modo STATIC; en DHCP la dirección
+real se consulta con NETSTAT?, no se presupone la IP estática guardada.
