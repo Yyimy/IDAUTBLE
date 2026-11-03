@@ -22,12 +22,25 @@ fun ledStatusTone(mode: String, fresh: Boolean): StatusTone =
             else -> StatusTone.NEUTRAL
         }
 
+/** Older PLCs keep a steady READY light; this firmware release introduces its pulse. */
+fun firmwareUsesReadyPulse(firmware: String?): Boolean {
+    val parts = firmware?.substringBefore('-')?.substringBefore('+')?.split('.') ?: return false
+    if (parts.size != 3) return false
+    val numbers =
+        parts.map { part ->
+            if (part.isEmpty() || part.any { it !in '0'..'9' }) return false
+            part.toIntOrNull() ?: return false
+        }
+    return numbers[0] > 3 ||
+        numbers[0] == 3 && (numbers[1] > 0 || numbers[1] == 0 && numbers[2] >= 12)
+}
+
 /** Cadence from firmware ledPatternOn. Phase is a preview, not a hardware timestamp. */
-fun ledPreviewOn(mode: String, elapsedMs: Long, fresh: Boolean): Boolean {
+fun ledPreviewOn(mode: String, elapsedMs: Long, fresh: Boolean, firmware: String? = null): Boolean {
     if (!fresh) return false
     val elapsed = elapsedMs.coerceAtLeast(0L)
     return when (mode) {
-        "READY" -> true
+        "READY" -> !firmwareUsesReadyPulse(firmware) || elapsed % 3000 < 100
         "DISCONNECTED" -> elapsed % 1000 < 500
         "BAT_LOW" -> (elapsed % 4000).let { it < 200 || it in 400..599 }
         "BAT_CRITICAL" -> (elapsed % 2000).let { it < 200 || it in 400..599 || it in 800..999 }

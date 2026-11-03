@@ -117,7 +117,7 @@ int main() {
   tick(1999); CHECK(gLedMode == LED_BAT_CRITICAL);
   // Every millisecond across complete cycles: pulse count, width, dark intervals.
   for (uint32_t t = 0; t < 8000; ++t) {
-    CHECK(ledPatternOn(LED_READY,t));
+    CHECK(ledPatternOn(LED_READY,t) == (t % 3000 < 100));
     CHECK(ledPatternOn(LED_DISCONNECTED,t) == ((t/500)%2 == 0));
     CHECK(ledPatternOn(LED_ERROR,t) == ((t/200)%2 == 0));
     CHECK(ledPatternOn(LED_OTA,t) == (t%1000 < 800));
@@ -129,6 +129,17 @@ int main() {
   nowMs = 99; ledEstadoBlinkTick(); CHECK(!output);
   nowMs = 299; ledEstadoBlinkTick(); CHECK(output);
   gLedMode = LED_READY; ledEstadoBlinkTick(); CHECK(output);
+  nowMs += 99; ledEstadoBlinkTick(); CHECK(output);
+  nowMs += 1; ledEstadoBlinkTick(); CHECK(!output);
+  nowMs += 2899; ledEstadoBlinkTick(); CHECK(!output);
+  nowMs += 1; ledEstadoBlinkTick(); CHECK(output);
+  // Reset phase on entry and preserve the cadence across millis() rollover.
+  gLedMode = LED_ERROR; ledEstadoBlinkTick();
+  gLedMode = LED_READY; nowMs = UINT32_MAX - 50; ledEstadoBlinkTick(); CHECK(output);
+  nowMs = 48; ledEstadoBlinkTick(); CHECK(output);
+  nowMs = 49; ledEstadoBlinkTick(); CHECK(!output);
+  nowMs = 2948; ledEstadoBlinkTick(); CHECK(!output);
+  nowMs = 2949; ledEstadoBlinkTick(); CHECK(output);
   gLedMode = LED_OTA; ledEstadoBlinkTick(); CHECK(output);
   nowMs += 800; ledEstadoBlinkTick(); CHECK(!output);
   printf("PASS: %d LED assertions against production functions\n",checks);

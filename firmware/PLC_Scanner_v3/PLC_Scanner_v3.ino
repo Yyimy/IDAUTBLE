@@ -493,7 +493,7 @@ static std::atomic<bool> gBleSecure{false};
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.11-rc1"
+#define FIRMWARE_VERSION "3.0.12-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static BLE2902 *gCccd = nullptr;
@@ -2636,7 +2636,7 @@ static inline void updateLedMode() {
 static bool ledPatternOn(LedMode mode, uint32_t dt) {
   switch (mode) {
     case LED_READY:
-      return true;
+      return dt % 3000 < 100;  // READY: 100 ms ON, 2900 ms OFF.
     case LED_DISCONNECTED:
       return dt % 1000 < 500;
     case LED_BAT_LOW: {

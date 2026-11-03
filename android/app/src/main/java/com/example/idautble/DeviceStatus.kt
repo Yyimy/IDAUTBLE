@@ -108,9 +108,11 @@ fun parseDeviceStatus(text: String): DeviceStatus? {
 fun deviceStatusAge(receivedMs: Long?, nowMs: Long): Long? =
     receivedMs?.let { ((nowMs - it).coerceAtLeast(0)) / 1000 }
 
-fun ledDescription(mode: String): String =
+fun ledDescription(mode: String, firmware: String? = null): String =
     when (mode) {
-        "READY" -> "Ready — steady light"
+        "READY" ->
+            if (firmwareUsesReadyPulse(firmware)) "Ready — 1 short flash / 3 s"
+            else "Ready — steady light"
         "DISCONNECTED" -> "Required link missing — slow flashing"
         "BAT_LOW" -> "Low battery — 2 flashes every 4 s"
         "BAT_CRITICAL" -> "Critical battery — 3 flashes every 2 s"

@@ -65,7 +65,8 @@ fun DeviceStatusSection(
         when {
             status == null -> if (busy) "Querying the PLC..." else "Status not available"
             !fresh -> "Out of date — ${age ?: 0}s ago"
-            else -> "${ledDescription(status.led).substringBefore(" — ")} • ${age}s ago"
+            else ->
+                "${ledDescription(status.led, status.firmware).substringBefore(" — ")} • ${age}s ago"
         }
     CollapsibleSettingsSection(
         title = "DEVICE STATUS",
@@ -179,10 +180,10 @@ fun DeviceStatusSection(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            LedPatternPreview(s.led, receivedMs, fresh && expanded)
+                            LedPatternPreview(s.led, receivedMs, fresh && expanded, s.firmware)
                             Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                                 Text(
-                                    "PLC LED • ${ledDescription(s.led)}",
+                                    "PLC LED • ${ledDescription(s.led, s.firmware)}",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = statusColour(ledStatusTone(s.led, fresh)),
@@ -347,12 +348,14 @@ private fun StatusPanel(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun LedPatternPreview(mode: String, receivedMs: Long?, fresh: Boolean) {
-    var on by remember(mode, receivedMs, fresh) { mutableStateOf(ledPreviewOn(mode, 0, fresh)) }
-    LaunchedEffect(mode, receivedMs, fresh) {
-        if (fresh && mode != "READY" && receivedMs != null) {
+private fun LedPatternPreview(mode: String, receivedMs: Long?, fresh: Boolean, firmware: String) {
+    val phaseStart = remember(mode, fresh, firmware) { SystemClock.elapsedRealtime() }
+    var on by
+        remember(mode, fresh, firmware) { mutableStateOf(ledPreviewOn(mode, 0, fresh, firmware)) }
+    LaunchedEffect(mode, fresh, firmware) {
+        if (fresh && (mode != "READY" || firmwareUsesReadyPulse(firmware)) && receivedMs != null) {
             while (isActive) {
-                on = ledPreviewOn(mode, SystemClock.elapsedRealtime() - receivedMs, true)
+                on = ledPreviewOn(mode, SystemClock.elapsedRealtime() - phaseStart, true, firmware)
                 delay(25)
             }
         }
@@ -363,7 +366,7 @@ private fun LedPatternPreview(mode: String, receivedMs: Long?, fresh: Boolean) {
         Modifier.size(22.dp).semantics {
             // Stable across individual flashes: TalkBack should not announce every pulse.
             contentDescription =
-                "LED pattern preview. ${ledDescription(mode)}. ${if (fresh) "Snapshot available" else "Paused, out of date"}."
+                "LED pattern preview. ${ledDescription(mode, firmware)}. ${if (fresh) "Snapshot available" else "Paused, out of date"}."
         }
     ) {
         drawCircle(if (on) colour.copy(alpha = 0.12f) else off.copy(alpha = 0.35f))
