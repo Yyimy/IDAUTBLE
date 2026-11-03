@@ -33,7 +33,13 @@ class NetParsingTest {
 
     @Test
     fun passwordWithEqualsSignsIsParsedWithoutTruncation() {
-        assertEquals("x=y", parseNetConfigLine("NET=MODE=DHCP;PWD=x=y;PORT=9000")!!.pwd)
+        assertEquals(
+            "x=y",
+            parseNetConfigLine(
+                    "NET=MODE=DHCP;SSID=Test;PWD=x=y;IP=192.168.1.10;GW=192.168.1.1;MASK=255.255.255.0;HOST=192.168.1.2;PORT=9000"
+                )!!
+                .pwd,
+        )
     }
 
     @Test
@@ -49,7 +55,9 @@ class NetParsingTest {
     fun configSurvivesStatusInSameBurst() {
         val state =
             NetworkSnapshot()
-                .receive("NET=MODE=DHCP;SSID=Test;PWD=***;PORT=9000")
+                .receive(
+                    "NET=MODE=DHCP;SSID=Test;PWD=***;IP=192.168.1.10;GW=192.168.1.1;MASK=255.255.255.0;HOST=192.168.1.2;PORT=9000"
+                )
                 .receive("NETSTAT=WIFI=1;LINK=UP;TCP=DOWN")
         assertEquals("Test", state.config!!.ssid)
         assertTrue(state.status!!.linkUp)
@@ -59,7 +67,8 @@ class NetParsingTest {
 
     @Test
     fun identicalReadStillHasNewRevisionToRefreshEditedFields() {
-        val line = "NET=MODE=DHCP;SSID=Test;PWD=***;PORT=9000"
+        val line =
+            "NET=MODE=DHCP;SSID=Test;PWD=***;IP=192.168.1.10;GW=192.168.1.1;MASK=255.255.255.0;HOST=192.168.1.2;PORT=9000"
         val first = NetworkSnapshot().receive(line)
         val second = first.receive(line)
         assertEquals(first.config, second.config)

@@ -1,5 +1,6 @@
 package com.example.idautble
 
+import android.os.SystemClock
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -14,24 +15,24 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
 // --- Compact UI constants ---
 private val COMPACT_FIELD_HEIGHT = 34.dp
 private val FIELD_BORDER = 1.dp
-private val V_SPACING = 4.dp
 private val H_SPACING = 6.dp
 
 @Composable
@@ -43,6 +44,7 @@ private fun CompactField(
     keyboardType: KeyboardType = KeyboardType.Text,
     imeAction: ImeAction = ImeAction.Done,
     onImeAction: (() -> Unit)? = null,
+    enabled: Boolean = true,
 ) {
     Box(
         modifier =
@@ -64,6 +66,7 @@ private fun CompactField(
             value = value,
             onValueChange = onValueChange,
             singleLine = true,
+            enabled = enabled,
             textStyle =
                 MaterialTheme.typography.bodySmall.copy(
                     fontSize = 12.sp,
@@ -95,6 +98,7 @@ private fun CompactPasswordField(
     modifier: Modifier = Modifier,
     imeAction: ImeAction = ImeAction.Done,
     onImeAction: (() -> Unit)? = null,
+    enabled: Boolean = true,
 ) {
     Box(
         modifier =
@@ -118,6 +122,7 @@ private fun CompactPasswordField(
                     value = value,
                     onValueChange = onValueChange,
                     singleLine = true,
+                    enabled = enabled,
                     textStyle =
                         MaterialTheme.typography.bodySmall.copy(
                             fontSize = 12.sp,
@@ -148,470 +153,376 @@ private fun CompactPasswordField(
                 )
             }
 
-            IconButton(onClick = onToggleShow, modifier = Modifier.size(32.dp)) {
+            IconButton(onClick = onToggleShow, enabled = enabled, modifier = Modifier.size(32.dp)) {
                 Icon(
                     imageVector = if (show) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                    contentDescription = null,
+                    contentDescription = if (show) "Hide password" else "Show password",
                 )
             }
         }
     }
-}
-
-enum class WifiState {
-    OFF,
-    TURNING_ON,
-    ON,
-    TURNING_OFF,
-}
-
-enum class SaveState {
-    IDLE, // Sin cambios
-    DIRTY, // Hay cambios pendientes
-    SAVING, // Enviando al PLC
-}
-
-enum class ReadState {
-    IDLE,
-    READING_CONFIG,
-    READING_STATUS,
 }
 
 @Composable
-fun NetworkScreen(
-    networkSnapshot: NetworkSnapshot,
-    lastRxLine: String,
-    onSendText: (String) -> Unit,
-    mode: String,
-    onModeChange: (String) -> Unit,
-    ssid: String,
-    onSsidChange: (String) -> Unit,
-    pwd: String,
-    onPwdChange: (String) -> Unit,
-    showPwd: Boolean,
-    onShowPwdChange: (Boolean) -> Unit,
-    ip: String,
-    onIpChange: (String) -> Unit,
-    gw: String,
-    onGwChange: (String) -> Unit,
-    mask: String,
-    onMaskChange: (String) -> Unit,
-    host: String,
-    onHostChange: (String) -> Unit,
-    port: String,
-    onPortChange: (String) -> Unit,
+private fun NetworkValue(
+    label: String,
+    value: String,
+    color: Color = MaterialTheme.colorScheme.onSurface,
 ) {
-
-    var statusText by rememberSaveable { mutableStateOf("—") }
-    var wifiState by rememberSaveable { mutableStateOf(WifiState.OFF) }
-    var linkUp by rememberSaveable { mutableStateOf(false) }
-    var tcpUp by rememberSaveable { mutableStateOf(false) }
-    var ipAddress by rememberSaveable { mutableStateOf("-") }
-    var rssi by rememberSaveable { mutableStateOf<Int?>(null) }
-
-    var saveState by rememberSaveable { mutableStateOf(SaveState.IDLE) }
-    var originalConfig by remember { mutableStateOf<NetConfig?>(null) }
-
-    var waitingNetStatAfterNet by rememberSaveable { mutableStateOf(false) }
-    var readState by rememberSaveable { mutableStateOf(ReadState.IDLE) }
-
-    var errorText by rememberSaveable { mutableStateOf<String?>(null) }
-
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    val isStatic = mode.equals("STATIC", true)
-
-    fun isValidIp(ipStr: String): Boolean {
-        val r =
-            Regex("""^((25[0-5]|2[0-4]\d|1\d\d|\d\d|\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|\d\d|\d)$""")
-        return r.matches(ipStr.trim())
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            value,
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            color = color,
+            modifier = Modifier.weight(1f).padding(start = 8.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        )
     }
+}
 
-    fun parsePort(p: String): Int? {
-        val v = p.trim().toIntOrNull() ?: return null
-        return if (v in 1..65535) v else null
+@Composable
+private fun NetworkHeading(text: String) {
+    Text(text, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+}
+
+@Composable
+private fun NetworkInput(
+    label: String,
+    value: String,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    keyboard: KeyboardType = KeyboardType.Text,
+    onChange: (String) -> Unit,
+) {
+    val focus = LocalFocusManager.current
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        CompactField(
+            value,
+            onChange,
+            label,
+            Modifier.fillMaxWidth(),
+            keyboardType = keyboard,
+            enabled = enabled,
+            onImeAction = { focus.clearFocus() },
+        )
     }
+}
 
-    val portInt = parsePort(port)
-
-    val errors =
-        remember(mode, ssid, pwd, ip, gw, mask, host, port) {
-            mutableListOf<String>().apply {
-                if (isStatic) {
-                    if (!isValidIp(ip)) add("Invalid IP address")
-                    if (!isValidIp(gw)) add("Invalid gateway address")
-                    if (!isValidIp(mask)) add("Invalid subnet mask")
-                }
-                if (
-                    listOf(ssid, pwd, host, ip, gw, mask).any { field ->
-                        field.any { it == ';' || it == '\r' || it == '\n' }
-                    }
-                )
-                    add("Fields cannot contain semicolons or line breaks")
-                if (ssid.toByteArray(Charsets.UTF_8).size > 32)
-                    add("SSID is too long (maximum 32 bytes)")
-                if (pwd.toByteArray(Charsets.UTF_8).size > 64)
-                    add("Password is too long (maximum 64 bytes)")
-                if (host.isBlank()) add("Host is required")
-                if (portInt == null) add("Invalid port number")
-            }
-        }
-
-    val canSave = errors.isEmpty()
-
-    LaunchedEffect(networkSnapshot.configRevision) {
-        networkSnapshot.config?.let {
-            onModeChange(it.mode)
-            onSsidChange(it.ssid)
-            onPwdChange(it.pwd)
-            onIpChange(it.ip)
-            onGwChange(it.gw)
-            onMaskChange(it.mask)
-            onHostChange(it.host)
-            onPortChange(it.port.toString())
-            originalConfig = it
-            saveState = SaveState.IDLE
-            if (readState == ReadState.READING_CONFIG) {
-                readState = ReadState.READING_STATUS
-                onSendText("NETSTAT?")
-            }
+@Composable
+fun NetworkScreen(session: NetworkSession) {
+    val state = session.state
+    val draft = state.draft
+    val status = state.status
+    val errors = remember(draft) { networkDraftErrors(draft) }
+    var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    DisposableEffect(session) {
+        session.setVisible(true)
+        onDispose { session.setVisible(false) }
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = SystemClock.elapsedRealtime()
+            delay(1000)
         }
     }
-    LaunchedEffect(networkSnapshot.statusRevision) {
-        networkSnapshot.status?.let {
-            wifiState = if (it.wifiEnabled) WifiState.ON else WifiState.OFF
-            linkUp = it.linkUp
-            tcpUp = it.tcpUp
-            ipAddress = it.ip ?: "-"
-            rssi = it.rssi
-            statusText =
-                "WiFi:${if(it.wifiEnabled)"ON" else "OFF"} | LINK:${if(linkUp)"UP" else "DOWN"} | TCP:${if(tcpUp)"UP" else "DOWN"}"
-            if (readState == ReadState.READING_STATUS) readState = ReadState.IDLE
-        }
-    }
-
-    val scroll = rememberScrollState()
-
-    LaunchedEffect(mode, ssid, pwd, ip, gw, mask, host, port) {
-        val current = originalConfig ?: return@LaunchedEffect
-
-        val changed =
-            current.mode != mode ||
-                current.ssid != ssid ||
-                current.pwd != pwd ||
-                current.ip != ip ||
-                current.gw != gw ||
-                current.mask != mask ||
-                current.host != host ||
-                current.port.toString() != port
-
-        if (saveState != SaveState.SAVING) {
-            saveState = if (changed) SaveState.DIRTY else SaveState.IDLE
-        }
-    }
-
-    val focusManager = LocalFocusManager.current
-
-    Scaffold(
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-    ) { padding ->
-        Column(
-            modifier =
-                Modifier.fillMaxSize()
-                    .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }
-                    .verticalScroll(scroll)
-                    .padding(start = 6.dp, end = 6.dp, bottom = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+    val focus = LocalFocusManager.current
+    val good = Color(0xFF2E7D32)
+    val warning = Color(0xFFB66A00)
+    val age = state.statusReceivedAt?.let { ((now - it).coerceAtLeast(0) / 1000) }
+    val stale = !state.available || age == null || age > 15
+    val controls = state.available && !state.busy
+    Column(
+        Modifier.fillMaxSize()
+            .pointerInput(Unit) { detectTapGestures { focus.clearFocus() } }
+            .verticalScroll(rememberScrollState())
+            .padding(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (!state.ready || state.paused)
+            Text(
+                if (state.paused) "Network controls are paused during OTA."
+                else "Connect Bluetooth and wait for the PLC to be ready.",
+                fontSize = 12.sp,
+                color = warning,
+            )
+        Card(
+            shape = RoundedCornerShape(8.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(H_SPACING),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                NetworkHeading("LIVE CONNECTION")
+                NetworkValue(
+                    "WiFi",
+                    when (status?.wifiEnabled) {
+                        true -> "Enabled"
+                        false -> "Disabled"
+                        null -> "Unknown"
+                    },
+                )
+                NetworkValue(
+                    "WiFi link",
+                    when (status?.linkUp) {
+                        true -> "Connected"
+                        false -> "Down"
+                        null -> "Unknown"
+                    },
+                    if (status?.linkUp == true && !stale) good
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                NetworkValue(
+                    "PLC IP (actual)",
+                    when {
+                        status == null -> "Unknown"
+                        !status.wifiEnabled || !status.linkUp -> "Not assigned"
+                        usableNetworkIp(status.ip) -> status.ip!!
+                        else -> "Not assigned"
+                    },
+                )
+                NetworkValue(
+                    "TCP server",
+                    when (status?.tcpUp) {
+                        true -> "Connected"
+                        false -> "Down"
+                        null -> "Unknown"
+                    },
+                    if (status?.tcpUp == true && !stale) good
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                NetworkValue(
+                    "Saved server",
+                    state.config?.let { "${it.host}:${it.port}" } ?: "Not read",
+                )
+                NetworkValue("RSSI", status?.rssi?.let { "$it dBm" } ?: "—")
                 Text(
-                    text = "STATUS:",
-                    style = MaterialTheme.typography.labelMedium,
+                    if (age == null) "No status received"
+                    else "Snapshot · ${age}s ago${if (stale) " · stale" else ""}",
+                    fontSize = 10.sp,
+                    color = if (stale) warning else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement =
+                        Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Button(
+                        onClick = session::toggleWifi,
+                        enabled = controls && state.config != null && status != null,
+                        shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(10.dp, 4.dp),
+                        colors =
+                            ButtonDefaults.buttonColors(
+                                containerColor =
+                                    if (status?.wifiEnabled == true) Color(0xFFC62828) else good
+                            ),
+                    ) {
+                        Text(
+                            when (state.pending?.operation) {
+                                NetworkOperation.WIFI_ON -> "Enabling…"
+                                NetworkOperation.WIFI_OFF -> "Disabling…"
+                                else ->
+                                    if (status?.wifiEnabled == true) "Disable WiFi"
+                                    else "Enable WiFi"
+                            },
+                            fontSize = 11.sp,
+                        )
+                    }
+                    Button(
+                        onClick = { session.refreshStatus() },
+                        enabled = controls,
+                        shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(10.dp, 4.dp),
+                    ) {
+                        Text(
+                            if (state.pending?.operation == NetworkOperation.READ_STATUS)
+                                "Refreshing…"
+                            else "Refresh status",
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+            }
+        }
+        Card(
+            shape = RoundedCornerShape(8.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                NetworkHeading("PLC CONFIGURATION")
+                Text(
+                    when {
+                        state.config == null ->
+                            "Reading saved settings over Bluetooth works with WiFi disabled."
+                        state.dirty ->
+                            "Unsaved edits · connection indicators still show the PLC state."
+                        state.saved -> "Saved and confirmed by PLC."
+                        else -> "Saved settings loaded from PLC."
+                    },
+                    fontSize = 11.sp,
+                    color = if (state.dirty) warning else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                ) {
+                    for (mode in listOf("DHCP", "STATIC")) {
+                        FilterChip(
+                            selected = draft.mode == mode,
+                            onClick = { session.edit { it.copy(mode = mode) } },
+                            enabled = state.canEdit && state.config != null,
+                            label = {
+                                Text(mode, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                            },
+                        )
+                    }
+                }
+                val editable = state.canEdit && state.config != null
+                NetworkInput("WiFi network (SSID)", draft.ssid, editable) { value ->
+                    session.edit { it.copy(ssid = value) }
+                }
+                Text(
+                    "WiFi password",
+                    fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-
-                // --- WIFI ---
-                AssistChip(
-                    enabled = wifiState == WifiState.ON || wifiState == WifiState.OFF,
-                    onClick = {
-                        when (wifiState) {
-                            WifiState.OFF -> {
-                                wifiState = WifiState.TURNING_ON
-                                onSendText("WIFI=1")
-                            }
-                            WifiState.ON -> {
-                                wifiState = WifiState.TURNING_OFF
-                                onSendText("WIFI=0")
-                            }
-                            else -> {}
-                        }
-                    },
-                    label = {
-                        Text(
-                            when (wifiState) {
-                                WifiState.ON -> "WiFi ON"
-                                WifiState.OFF -> "WiFi OFF"
-                                WifiState.TURNING_ON -> "Activating…"
-                                WifiState.TURNING_OFF -> "Deactivating…"
-                            },
-                            color =
-                                when (wifiState) {
-                                    WifiState.ON -> Color(0xFF2E7D32)
-                                    WifiState.OFF -> Color(0xFFC62828)
-                                    else -> Color(0xFFF57C00)
-                                },
-                        )
-                    },
-                    colors =
-                        AssistChipDefaults.assistChipColors(
-                            containerColor =
-                                when (wifiState) {
-                                    WifiState.ON -> Color(0xFFE8F5E9)
-                                    WifiState.OFF -> Color(0xFFFFEBEE)
-                                    else -> Color(0xFFFFF3E0)
-                                }
-                        ),
+                CompactPasswordField(
+                    draft.pwd,
+                    { value -> session.edit { it.copy(pwd = value) } },
+                    "Password",
+                    state.showPassword,
+                    { session.showPassword(!state.showPassword) },
+                    Modifier.fillMaxWidth(),
+                    enabled = editable,
                 )
-
-                // --- LINK (SOLO INFORMATIVO) ---
-                AssistChip(
-                    onClick = {},
-                    label = {
-                        Text(
-                            if (linkUp) "LINK UP" else "LINK DOWN",
-                            color = if (linkUp) Color(0xFF2E7D32) else Color(0xFFC62828),
-                        )
-                    },
-                    colors =
-                        AssistChipDefaults.assistChipColors(
-                            containerColor = if (linkUp) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
-                        ),
-                )
-                AssistChip(
-                    onClick = {},
-                    label = {
-                        Text(
-                            if (tcpUp) "TCP UP" else "TCP DOWN",
-                            color =
-                                when {
-                                    tcpUp -> Color(0xFF2E7D32)
-                                    linkUp -> Color(0xFFF57C00) // WiFi ok pero servidor no
-                                    else -> Color(0xFFC62828)
-                                },
-                        )
-                    },
-                    colors =
-                        AssistChipDefaults.assistChipColors(
-                            containerColor =
-                                when {
-                                    tcpUp -> Color(0xFFE8F5E9)
-                                    linkUp -> Color(0xFFFFF3E0)
-                                    else -> Color(0xFFFFEBEE)
-                                }
-                        ),
-                )
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(H_SPACING)) {
-
-                // DHCP
-                Button(
-                    shape = RoundedCornerShape(6.dp),
-                    onClick = { onModeChange("DHCP") },
-                    contentPadding = PaddingValues(12.dp, 4.dp),
-                    colors =
-                        ButtonDefaults.buttonColors(
-                            containerColor =
-                                if (mode == "DHCP") MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.surfaceVariant,
-                            contentColor =
-                                if (mode == "DHCP") Color.White
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
-                ) {
-                    Text("DHCP", style = MaterialTheme.typography.labelMedium)
-                }
-
-                // STATIC
-                Button(
-                    shape = RoundedCornerShape(6.dp),
-                    onClick = { onModeChange("STATIC") },
-                    contentPadding = PaddingValues(12.dp, 4.dp),
-                    colors =
-                        ButtonDefaults.buttonColors(
-                            containerColor =
-                                if (mode == "STATIC") MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.surfaceVariant,
-                            contentColor =
-                                if (mode == "STATIC") Color.White
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
-                ) {
-                    Text("STATIC", style = MaterialTheme.typography.labelMedium)
-                }
-            }
-
-            // --- Fields (compact) ---
-            CompactField(
-                value = ssid,
-                onValueChange = { onSsidChange(it) },
-                placeholder = "SSID",
-                modifier = Modifier.fillMaxWidth(),
-                imeAction = ImeAction.Done,
-                onImeAction = { focusManager.clearFocus() },
-            )
-
-            CompactPasswordField(
-                value = pwd,
-                onValueChange = { onPwdChange(it) },
-                placeholder = "Password",
-                show = showPwd,
-                onToggleShow = { onShowPwdChange(!showPwd) },
-                modifier = Modifier.fillMaxWidth(),
-                imeAction = ImeAction.Done,
-                onImeAction = { focusManager.clearFocus() },
-            )
-
-            if (pwd == "***")
                 Text(
-                    "The stored password will be kept when you apply the configuration. Enter a new one to replace it.",
-                    style = MaterialTheme.typography.bodySmall,
+                    if (draft.pwd == "***")
+                        "Stored password is hidden and will be kept. Type a new value to replace it."
+                    else if (draft.pwd.isEmpty()) "An empty password will be saved as empty."
+                    else "New password · not saved yet",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            if (isStatic) {
-                CompactField(
-                    value = ip,
-                    onValueChange = { onIpChange(it) },
-                    placeholder = "PLC IP",
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardType = KeyboardType.Decimal,
-                    imeAction = ImeAction.Done,
-                    onImeAction = { focusManager.clearFocus() },
-                )
-
-                Row(horizontalArrangement = Arrangement.spacedBy(H_SPACING)) {
-                    CompactField(
-                        value = gw,
-                        onValueChange = { onGwChange(it) },
-                        placeholder = "Gateway",
-                        modifier = Modifier.weight(1f),
-                        keyboardType = KeyboardType.Decimal,
-                        imeAction = ImeAction.Done,
-                        onImeAction = { focusManager.clearFocus() },
+                if (draft.mode == "STATIC") {
+                    NetworkInput(
+                        "Static PLC IP",
+                        draft.ip,
+                        editable,
+                        keyboard = KeyboardType.Decimal,
+                    ) { value ->
+                        session.edit { it.copy(ip = value) }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        NetworkInput(
+                            "Gateway",
+                            draft.gw,
+                            editable,
+                            Modifier.weight(1f),
+                            KeyboardType.Decimal,
+                        ) { value ->
+                            session.edit { it.copy(gw = value) }
+                        }
+                        NetworkInput(
+                            "Subnet mask",
+                            draft.mask,
+                            editable,
+                            Modifier.weight(1f),
+                            KeyboardType.Decimal,
+                        ) { value ->
+                            session.edit { it.copy(mask = value) }
+                        }
+                    }
+                } else
+                    Text(
+                        "DHCP assigns the actual PLC IP shown above.",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    CompactField(
-                        value = mask,
-                        onValueChange = { onMaskChange(it) },
-                        placeholder = "Mask",
-                        modifier = Modifier.weight(1f),
-                        keyboardType = KeyboardType.Decimal,
-                        imeAction = ImeAction.Done,
-                        onImeAction = { focusManager.clearFocus() },
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    NetworkInput(
+                        "Server IP / hostname",
+                        draft.host,
+                        editable,
+                        Modifier.weight(1f),
+                    ) { value ->
+                        session.edit { it.copy(host = value) }
+                    }
+                    NetworkInput(
+                        "Port",
+                        draft.port,
+                        editable,
+                        Modifier.width(80.dp),
+                        KeyboardType.Number,
+                    ) { value ->
+                        session.edit { it.copy(port = value) }
+                    }
                 }
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(H_SPACING)) {
-                CompactField(
-                    value = host,
-                    onValueChange = { onHostChange(it) },
-                    placeholder = "Host",
-                    modifier = Modifier.weight(1f),
-                    imeAction = ImeAction.Done,
-                    onImeAction = { focusManager.clearFocus() },
-                )
-                CompactField(
-                    value = port,
-                    onValueChange = { onPortChange(it.filter(Char::isDigit)) },
-                    placeholder = "Port",
-                    modifier = Modifier.width(90.dp),
-                    keyboardType = KeyboardType.Decimal,
-                    imeAction = ImeAction.Done,
-                    onImeAction = { focusManager.clearFocus() },
-                )
-            }
-
-            // --- Actions ---
-            Row(horizontalArrangement = Arrangement.spacedBy(H_SPACING)) {
+                if (state.dirty)
+                    errors.forEach {
+                        Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                    }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                ) {
+                    Button(
+                        onClick = session::readConfiguration,
+                        enabled = controls,
+                        shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(10.dp, 4.dp),
+                        colors =
+                            ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFFFC107),
+                                contentColor = Color(0xFF212121),
+                            ),
+                    ) {
+                        Text(
+                            if (state.pending?.operation == NetworkOperation.READ_CONFIG) "Reading…"
+                            else "Read configuration",
+                            fontSize = 11.sp,
+                        )
+                    }
+                    if (state.dirty)
+                        OutlinedButton(
+                            onClick = session::discardEdits,
+                            enabled = controls,
+                            shape = RoundedCornerShape(6.dp),
+                            contentPadding = PaddingValues(10.dp, 4.dp),
+                        ) {
+                            Text("Discard edits", fontSize = 11.sp)
+                        }
+                }
                 Button(
-                    shape = RoundedCornerShape(6.dp),
                     onClick = {
-                        readState = ReadState.READING_CONFIG
-                        onSendText("NET?")
+                        focus.clearFocus()
+                        session.save()
                     },
-                    contentPadding = PaddingValues(12.dp, 4.dp),
+                    enabled = controls && state.dirty && errors.isEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(6.dp),
                     colors =
                         ButtonDefaults.buttonColors(
-                            containerColor =
-                                when (readState) {
-                                    ReadState.IDLE -> Color(0xFFFFC107) // Amarillo profesional
-                                    else -> Color(0xFFFFA000) // Amarillo más intenso mientras lee
-                                },
-                            contentColor = Color(0xFF212121), // Gris muy oscuro (mejor que blanco)
+                            containerColor = if (state.dirty) Color(0xFFF57C00) else good
                         ),
                 ) {
                     Text(
-                        when (readState) {
-                            ReadState.IDLE -> "Read PLC Configuration"
-                            else -> "Reading PLC configuration..."
-                        },
-                        style = MaterialTheme.typography.labelMedium,
+                        if (state.pending?.operation == NetworkOperation.SAVE)
+                            "Waiting for confirmation…"
+                        else "Save configuration",
+                        fontSize = 12.sp,
                     )
                 }
-
-                Button(
-                    shape = RoundedCornerShape(6.dp),
-                    onClick = { onSendText("NETSTAT?") },
-                    contentPadding = PaddingValues(12.dp, 4.dp),
-                ) {
-                    Text("Refresh Status", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    state.notice,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                state.error?.let {
+                    Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                 }
             }
-
-            Button(
-                shape = RoundedCornerShape(6.dp),
-                enabled = saveState == SaveState.DIRTY && canSave,
-                onClick = {
-                    saveState = SaveState.SAVING
-
-                    val cfg = NetConfig(mode, ssid, pwd, ip, gw, mask, host, portInt ?: 0)
-
-                    onSendText(buildNetSetCommand(cfg))
-                },
-                colors =
-                    ButtonDefaults.buttonColors(
-                        containerColor =
-                            when (saveState) {
-                                SaveState.DIRTY -> Color(0xFFF57C00) // naranja
-                                SaveState.SAVING -> Color(0xFF1565C0) // azul
-                                SaveState.IDLE -> MaterialTheme.colorScheme.primary
-                            }
-                    ),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    when (saveState) {
-                        SaveState.DIRTY -> "Save New Configuration."
-                        SaveState.SAVING -> "Updating Configuration..."
-                        SaveState.IDLE -> "Configuration Saved"
-                    }
-                )
-            }
-
-            HorizontalDivider()
-
-            errorText?.let {
-                Text(
-                    text = it,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
-            Text("RX: $lastRxLine", style = MaterialTheme.typography.labelSmall)
         }
     }
 }

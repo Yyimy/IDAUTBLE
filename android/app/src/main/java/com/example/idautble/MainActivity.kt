@@ -352,6 +352,7 @@ class MainActivity : ComponentActivity() {
         object : Runnable {
             override fun run() {
                 if (!appInForeground) return
+                networkSession.tick()
                 requestDeviceStatus(automatic = true)
                 mainHandler.postDelayed(this, 1000)
             }
@@ -371,6 +372,7 @@ class MainActivity : ComponentActivity() {
         val data: ByteArray,
         val tag: String,
         val authAttempt: Long = 0L,
+        val networkId: Long? = null,
     )
 
     // ============================
@@ -382,7 +384,12 @@ class MainActivity : ComponentActivity() {
     private val uiStatusLine = mutableStateOf("Disconnected")
     private val uiLogs = mutableStateListOf<LogEntry>()
     private val uiLastRxLine = mutableStateOf("")
-    private val uiNetworkSnapshot = mutableStateOf(NetworkSnapshot())
+    private val networkSession by lazy {
+        NetworkSession({ SystemClock.elapsedRealtime() }) { command, id ->
+            // Network fields are literal UTF-8, not terminal escape/token notation.
+            sendBytes((command + "\r\n").toByteArray(Charsets.UTF_8), "NETWORK", id)
+        }
+    }
     private val uiAltState = mutableStateOf<Boolean?>(null)
     private val uiAltKnown = mutableStateOf(false)
     private val uiScanning = mutableStateOf(false)
@@ -870,7 +877,7 @@ class MainActivity : ComponentActivity() {
         negotiatedMtu = 23
         cccdAttempts = 0
         streamDecoder.clear()
-        uiNetworkSnapshot.value = NetworkSnapshot()
+        networkSession.reset()
         uiIdentityDialog.value = false
         uiIdentity.value = null
         uiEquipmentId.value = null
@@ -905,6 +912,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun lockMaintenance() {
+        networkSession.authorisationCancelled(
+            "Maintenance access locked. Pending change cancelled."
+        )
         blockedByUser = true
         maintenanceSession.reset()
         authInFlight = false
@@ -950,6 +960,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun authorizationFailed(reason: String, incorrectPin: Boolean = false) {
+        networkSession.authorisationCancelled(reason)
         authInFlight = false
         maintenanceSession.reset()
         pendingProtected.clear()
@@ -961,19 +972,27 @@ class MainActivity : ComponentActivity() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun sendBytes(data: ByteArray, tag: String) {
-        if (!ensureConnectPermissionOrRequest()) return
+    private fun sendBytes(data: ByteArray, tag: String, networkId: Long? = null) {
+        if (!ensureConnectPermissionOrRequest()) {
+            networkId?.let { networkSession.sendFailed(it, "Bluetooth permission is required.") }
+            return
+        }
         if (!deviceConnected || gatt == null || txChar == null) {
             log(LogLevel.WARN, "Not connected")
+            networkId?.let { networkSession.sendFailed(it, "Bluetooth is disconnected.") }
             return
         }
         val ready = data.contentEquals(byteArrayOf(ESC, 'C'.code.toByte(), CR, LF))
         if (!bleChannelReady && !ready) {
             log(LogLevel.WARN, "Wait for pairing and the BLE channel to be ready")
+            networkId?.let { networkSession.sendFailed(it, "Wait for Bluetooth to be ready.") }
             return
         }
         if (data.isEmpty() || data.size >= 384) {
             log(LogLevel.WARN, "The firmware accepts commands of up to 383 bytes")
+            networkId?.let {
+                networkSession.sendFailed(it, "Network command exceeds the PLC limit.")
+            }
             return
         }
         val text = data.toString(Charsets.UTF_8).trim()
@@ -985,10 +1004,16 @@ class MainActivity : ComponentActivity() {
             startAuthorization(text.substringAfter("AUTH="), false)
             return
         }
-        val packet = PendingWrite(data.copyOf(), tag)
+        val packet = PendingWrite(data.copyOf(), tag, networkId = networkId)
         if (requiresMaintenanceAuthorization(data) && !maintenanceSession.isAuthorized()) {
+            pendingProtected.removeAll {
+                it.networkId?.let { id -> !networkSession.isCurrent(id) } == true
+            }
             if (pendingProtected.size >= 8) {
                 log(LogLevel.WARN, "Too many changes are waiting for authorisation")
+                networkId?.let {
+                    networkSession.sendFailed(it, "Too many changes are waiting for authorisation.")
+                }
                 return
             }
             pendingProtected.addLast(packet)
@@ -1007,8 +1032,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enqueueWrite(packet: PendingWrite): Boolean {
+        if (packet.networkId?.let { !networkSession.isCurrent(it) } == true) return false
         if (writeQueue.size >= 24) {
             log(LogLevel.ERR, "Send queue is full: command not sent")
+            packet.networkId?.let {
+                networkSession.sendFailed(it, "Send queue is full. Network command was not sent.")
+            }
             if (packet.tag == "AUTH")
                 authorizationFailed("Could not queue the authorisation request")
             return false
@@ -1027,6 +1056,10 @@ class MainActivity : ComponentActivity() {
         }
         val g = gatt ?: return
         val ch = txChar ?: return
+        while (writeQueue.firstOrNull()?.networkId?.let { !networkSession.isCurrent(it) } == true) {
+            writeQueue.removeFirst()
+        }
+        if (writeQueue.isEmpty()) return
         val packet = writeQueue.removeFirst()
         activeWrite = packet
         activeReliableWrite = packet.data.size > negotiatedMtu - 3
@@ -1059,6 +1092,7 @@ class MainActivity : ComponentActivity() {
                 failWrite("Android rejected the send request; try again")
                 return
             }
+            packet.networkId?.let { networkSession.commandSent(it) }
             if (isReadingCommand(packet.data)) {
                 statusRefresh.readSent(SystemClock.elapsedRealtime())
             }
@@ -1069,6 +1103,7 @@ class MainActivity : ComponentActivity() {
                     otaReconnectDeadline = 0L
                 }
                 statusRefresh.otaStarted()
+                networkSession.setPaused(true)
                 uiOtaPct.value = null
                 uiOtaErr.value = null
                 uiOtaDone.value = false
@@ -1094,6 +1129,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun failWrite(reason: String) {
+        networkSession.transportError(reason)
         statusRefresh.cancelReading()
         if (activeReliableWrite && hasConnectPermission())
             try {
@@ -1195,6 +1231,7 @@ class MainActivity : ComponentActivity() {
     private fun handleProtocolControl(message: PlcMessage) {
         val text = message.text
         statusRefresh.otaMessage(text)
+        networkSession.setPaused(statusRefresh.otaActive)
         if (message.acknowledged && text.startsWith("COUNTERS=")) {
             countersRequest++
             uiCounters.value = uiCounters.value.receive(text, SystemClock.elapsedRealtime())
@@ -1285,6 +1322,7 @@ class MainActivity : ComponentActivity() {
             readyOk = true
             bleChannelReady = true
             uiDeviceStatusReady.value = true
+            networkSession.setReady(true)
             log(LogLevel.INFO, "BLE ready. Queries are available.")
             if (otaSession.ready(lastConnectedAddress)) {
                 val attempt = otaSession.attempt
@@ -1496,7 +1534,7 @@ class MainActivity : ComponentActivity() {
             }
             val first = message.bytes.firstOrNull()
             val payloadText = message.text
-            uiNetworkSnapshot.value = uiNetworkSnapshot.value.receive(payloadText)
+            networkSession.receive(message)
             handleProtocolControl(message)
             // ============================
             // CFG parsing (PLC -> Android)
@@ -1914,7 +1952,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             IDAUTBLETheme {
                 PlcBleTesterLandscape(
-                    networkSnapshot = uiNetworkSnapshot.value,
+                    networkSession = networkSession,
                     maintenanceStatus = uiMaintenanceStatus.value,
                     maintenanceAuthorised = maintenanceSession.isAuthorized(),
                     deviceStatus = uiDeviceStatus.value,
@@ -2024,6 +2062,9 @@ class MainActivity : ComponentActivity() {
                         onCancel = {
                             uiPinDialog.value = false
                             pendingProtected.clear()
+                            networkSession.authorisationCancelled(
+                                "Authorisation cancelled. Network change was not sent."
+                            )
                             uiMaintenanceStatus.value = "Authorisation cancelled"
                         },
                     )
@@ -2034,12 +2075,14 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         appInForeground = true
+        networkSession.setForeground(true)
         mainHandler.removeCallbacks(statusRefreshTick)
         mainHandler.post(statusRefreshTick)
     }
 
     override fun onStop() {
         appInForeground = false
+        networkSession.setForeground(false)
         mainHandler.removeCallbacks(statusRefreshTick)
         super.onStop()
     }
@@ -2060,7 +2103,7 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlcBleTesterLandscape(
-    networkSnapshot: NetworkSnapshot,
+    networkSession: NetworkSession,
     maintenanceStatus: String,
     maintenanceAuthorised: Boolean,
     deviceStatus: DeviceStatus?,
@@ -2144,22 +2187,6 @@ private fun PlcBleTesterLandscape(
             showDevices = false
         }
     }
-
-    // ---------------------------
-    // NETWORK UI STATE (hoisted)
-    // ---------------------------
-    var netMode by rememberSaveable { mutableStateOf("DHCP") }
-
-    var netSsid by rememberSaveable { mutableStateOf("") }
-    var netPwd by rememberSaveable { mutableStateOf("") }
-    var netShowPwd by rememberSaveable { mutableStateOf(false) }
-
-    var netIp by rememberSaveable { mutableStateOf("") }
-    var netGw by rememberSaveable { mutableStateOf("") }
-    var netMask by rememberSaveable { mutableStateOf("") }
-
-    var netHost by rememberSaveable { mutableStateOf("") }
-    var netPort by rememberSaveable { mutableStateOf("9000") }
 
     var selectedTab by remember { mutableStateOf(0) }
     var showPrefixDialogFor by remember { mutableStateOf<String?>(null) }
@@ -3094,31 +3121,7 @@ private fun PlcBleTesterLandscape(
                 }
             } else if (selectedTab == 1) {
 
-                key("NETWORK") {
-                    NetworkScreen(
-                        networkSnapshot = networkSnapshot,
-                        lastRxLine = lastRxLine,
-                        onSendText = onSendText,
-                        mode = netMode,
-                        onModeChange = { netMode = it },
-                        ssid = netSsid,
-                        onSsidChange = { netSsid = it },
-                        pwd = netPwd,
-                        onPwdChange = { netPwd = it },
-                        showPwd = netShowPwd,
-                        onShowPwdChange = { netShowPwd = it },
-                        ip = netIp,
-                        onIpChange = { netIp = it },
-                        gw = netGw,
-                        onGwChange = { netGw = it },
-                        mask = netMask,
-                        onMaskChange = { netMask = it },
-                        host = netHost,
-                        onHostChange = { netHost = it },
-                        port = netPort,
-                        onPortChange = { netPort = it },
-                    )
-                }
+                key("NETWORK") { NetworkScreen(session = networkSession) }
             } else {
                 OtaScreen(
                     onSendOta = onSendOta,
