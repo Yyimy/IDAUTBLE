@@ -123,7 +123,7 @@ fun DeviceStatusSection(
                                 )
                                 StatusRefreshToggle(
                                     "After reads",
-                                    "Refresh device status after read commands",
+                                    "Refresh status and counters after manual or sensor readings",
                                     refreshAfterReads,
                                     onRefreshAfterReadsChange,
                                 )
@@ -150,7 +150,7 @@ fun DeviceStatusSection(
                                 )
                                 StatusRefreshToggle(
                                     "After reads",
-                                    "Refresh device status after read commands",
+                                    "Refresh status and counters after manual or sensor readings",
                                     refreshAfterReads,
                                     onRefreshAfterReadsChange,
                                     Modifier.weight(1f),

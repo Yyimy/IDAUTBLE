@@ -1488,7 +1488,8 @@ class MainActivity : ComponentActivity() {
             if (message.isFrame) {
                 val now = SystemClock.elapsedRealtime()
                 uiReadings.value = uiReadings.value.receive(message, now)
-                if (!uiReadings.value.invalidFrame && statusRefresh.readReceived(now)) {
+                // Sensor events and manual reads both update status/counters when enabled.
+                if (!uiReadings.value.invalidFrame && statusRefresh.readReceived()) {
                     mainHandler.postDelayed({ requestDeviceStatus(automatic = true) }, 150)
                 }
                 continue

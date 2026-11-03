@@ -3,11 +3,11 @@
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lintDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 20. VersionName: `1.3.16-plc3`.
+- VersionCode: 21. VersionName: `1.3.17-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
-- 104 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
+- 110 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
 
 ## Pruebas ejecutadas
 
@@ -20,7 +20,7 @@ Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lin
 | DeviceCountersTest | 13 | 0 |
 | DeviceStatusVisualsTest | 5 | 0 |
 | PlcReadingsTest | 8 | 0 |
-| StatusRefreshPolicyTest | 18 | 0 |
+| StatusRefreshPolicyTest | 24 | 0 |
 | OtaProtocolTest | 6 | 0 |
 | OtaSessionTest | 17 | 0 |
 | ExampleUnitTest (original) | 1 | 0 |
@@ -451,3 +451,32 @@ Validación final 03/11/2026: testDebugUnitTest, assembleDebug y lintDebug corre
 Lint: 0 errores, 0 MissingPermission, 32 advertencias y 3 avisos informativos;
 ningún aviso en DeviceCounters. git diff --check correcto. Sin prueba instrumentada
 de la tabla ni validación física de BLE/TCP para esta revisión.
+
+
+## After reads y eventos automáticos (1.3.17)
+
+La política anterior solo atendía una respuesta mientras esperaba una lectura
+solicitada y descartaba el refresco si STATUS tenía menos de 5 s. Ahora cualquier
+V2 válida recibida marca un refresco pendiente si After reads está activo y no hay
+OTA; la recepción también resuelve la espera de lectura manual. requested consume
+el trabajo pendiente; shouldRefresh lo conserva mientras dure el intervalo mínimo
+de 5 s desde último intento/respuesta STATUS. Auto-refresh de 30 s sigue separado.
+
+StatusRefreshPolicyTest suma 24 pruebas. Los seis casos nuevos cubren las cuatro
+combinaciones de toggles para sensores, evento posterior a una petición STATUS,
+tráfico continuo sin inanición, peticiones fallidas sin tormenta de reintentos,
+pausa OTA/reset y recepción real por decoder/readings de diagnóstico, trama inválida
+y fotocélula fragmentada. Se actualizan las expectativas de las pruebas previas:
+una respuesta reciente aplaza el trabajo y una lectura espontánea válida lo activa.
+
+Pendiente en teléfono/PLC: Auto-refresh OFF y After reads ON, generar carga/descarga
+y comprobar STATUS/COUNTERS y tabla; repetir muy cerca de un Refresh reciente,
+ráfagas, ambos interruptores OFF, OTA y desconexión. No hay cambios del firmware,
+V2, ACKMODE ni ACK automático de eventos.
+
+
+Validación final 03/11/2026: testDebugUnitTest, assembleDebug y lintDebug correctos.
+110 pruebas JVM, 0 fallos, 0 errores y 0 omitidas. APK 1.3.17-plc3 (versionCode 21).
+Lint: 0 errores y 0 MissingPermission, 32 advertencias y 3 avisos informativos;
+ningún aviso en StatusRefreshPolicy. git diff --check correcto. Sin validación
+física de esta corrección; el firmware 3.0.11 permanece sin cambios.
