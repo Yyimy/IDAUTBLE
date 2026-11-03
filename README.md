@@ -486,3 +486,17 @@ Se conservan el significado de READY y las prioridades de batería, errores y OT
 Actualizar el firmware para cambiar el LED físico y la app para que su vista previa y
 etiqueta coincidan. La app mantiene la luz fija al conectar a firmware anterior a 3.0.12.
 La fase de la animación es ilustrativa; no está sincronizada con el LED físico.
+
+## Prototipo de coexistencia HID y mantenimiento
+
+La primera fase de teclado HID está en
+[firmware/HID_Coexistence_Probe](firmware/HID_Coexistence_Probe/README.md).
+Es un sketch **experimental de banco**, separado de PLC_Scanner_v3: dos conexiones
+BLE con roles distintos, texto sintético solicitado explícitamente, mantenimiento
+por FFE0/FFE1 con PIN y prueba opcional de WiFi/TCP. Incluye pruebas host y una
+matriz de comprobación Windows/Android pendiente en dispositivos reales.
+
+El firmware operativo y la app conservan sus versiones y funcionamiento. La
+integración del selector APP/HID y de las lecturas reales se hará tras validar
+la prueba de coexistencia. Este sketch de banco no controla la carretilla ni
+supervisa sus baterías; revisar las instrucciones antes de cargarlo.
