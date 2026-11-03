@@ -37,6 +37,8 @@ struct WifiMock{bool linked=true;int status(){return linked?WL_CONNECTED:0;}IpMo
 std::atomic<uint8_t> gOtaPct{0};bool gOtaParamsReady=false;
 bool gCutConfirmed=false,gOutboxDirty=false;uint32_t gEventLastAttempt=0,gEventOverflow=0;
 char gCutReason[40]="";
+uint32_t gBootCount=12,gPonTotal=1540,gPalCargado=320,gPalDescargado=319,gLecturasFallidas=8;
+int countersMux=0,locks=0;void portENTER_CRITICAL(int*){++locks;}void portEXIT_CRITICAL(int*){--locks;}
 void rtcUpdateCacheIfNeeded(){}
 void netSave(){}void wifiStartFromConfig(){}
 void otaTask(void*){}
@@ -46,7 +48,7 @@ static void replyLine(bool,const String&);
 void sendDeviceStatus(){replyLine(true,"STATUS=1;FW=TEST;ID=TRUCK-1");}
 void handleIdentityCommand(const String&,uint8_t){replyLine(true,"ID=TRUCK-1;HWID=AABBCCDDEEFF;NAME=TRUCK-1");}
 '''
-names = ['replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','tcpTextCommandType','cfgSendOk','cfgSendErr','cfgSendCurrent','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','eventTick']
+names = ['sendCounters','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','tcpTextCommandType','cfgSendOk','cfgSendErr','cfgSendCurrent','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','eventTick']
 body += extra+'\n'+'\n'.join(base['function'](n).split('{',1)[0]+';' for n in names)+'\n'
 body += '\n'.join(base['function'](n) for n in names)
 body += r'''
@@ -56,7 +58,7 @@ void fresh(){drain();commands.clear();txQueue.clear();characteristic.notificatio
  gTcpClient.sent.clear();gTcpClient.rx.clear();gTcpClient.up=gTcpConnected=true;gTcpClient.limit=1000;gTcpClient.blockedCalls=0;
  deviceConnected=gBleSecure=true;gCccd->enabled=true;gBleSession=10;gTcpSession=20;gOtaBleSession=10;
  gOtaTaskHandle=nullptr;gOtaState=OTA_IDLE;gMaintenanceAuthorized=false;gMaintenancePin=PLC_MAINTENANCE_PIN;gAuthFails=0;gAuthBlockedUntil=0;gReplyContext={TX_BOTH,0};
- gWifiEnabled=gWifiConnected=true;gAckMode=false;gHeartbeatEnabled=false;gOutbox={};gOutboxDirty=false;gEventInFlight=false;gEventLastAttempt=0;
+ gWifiEnabled=gWifiConnected=true;gAckMode=false;gHeartbeatEnabled=false;gOutbox={};gOutbox.nextId=1;gOutboxDirty=false;gEventInFlight=false;gEventLastAttempt=0;
  resetScanner();gFotoLista=true;PaletCargado=false;gRtcIso="2026-11-03T10:43:38";gId="TRUCK-1";gNivelBat4="4647";nowMs+=1000;
 }
 BleCmd cmd(BleCmdType type,uint8_t origin,const char*text=""){BleCmd c={};c.type=type;c.source=origin;c.session=origin?gTcpSession.load():gBleSession.load();c.receivedMs=nowMs;strlcpy(c.payload,text,sizeof(c.payload));return c;}
@@ -64,7 +66,7 @@ void run(BleCmd c){commands.push_back(c);bleProcessPendingOnce();}
 int main(){
  // Both links are live: queries, handshakes and configuration ACKs stay with their requester.
  for(uint8_t origin:{0,1}){
-  for(const char*q:{"INFO?","STATUS?","DIAG?","ID?"}){
+  for(const char*q:{"INFO?","STATUS?","COUNTERS?","DIAG?","ID?"}){
    fresh();run(cmd(BLECMD_TEXT,origin,q));drain();
    CHECK(origin?bleBytes().empty():gTcpClient.sent.empty());
    CHECK(origin?!gTcpClient.sent.empty():!bleBytes().empty());
@@ -80,6 +82,20 @@ int main(){
  fresh();run(cmd(BLECMD_NET_SET,1,"NET=PORT=9000"));drain();CHECK(bleBytes().empty());CHECK(gTcpClient.sent.find("ERR=AUTH_REQUIRED")!=std::string::npos);
  // Automatic NETSTAT remains useful to BLE but does not add traffic to the server.
  fresh();netSendStatus(true);drain();CHECK(gTcpClient.sent.empty());CHECK(bleBytes().find("NETSTAT=")!=std::string::npos);
+ // Counter snapshots are read-only, bounded and unsigned, including a full outbox.
+ fresh();auto settings=storedSettings;gBootCount=UINT32_MAX;gPonTotal=UINT32_MAX;
+ gPalCargado=UINT32_MAX;gPalDescargado=UINT32_MAX;gLecturasFallidas=UINT32_MAX;
+ gOutbox.nextId=UINT32_MAX;gOutbox.count=8;
+ for(unsigned i=0;i<8;++i)gOutbox.items[i].id=UINT32_MAX-8+i;
+ auto before=gOutbox;run(cmd(BLECMD_TEXT,0,"COUNTERS?"));drain();
+ CHECK(gTcpClient.sent.empty());CHECK(bleBytes().size()<240);CHECK(bleBytes().find("BOOT=4294967295")!=std::string::npos);
+ CHECK(bleBytes().find("EVT_PENDING=8;EVT_OLDEST=4294967287;ACKMODE=0")!=std::string::npos);
+ CHECK(!memcmp(&before,&gOutbox,sizeof(before)));CHECK(locks==0);CHECK(storedSettings==settings);
+ fresh();gBootCount=gPonTotal=gPalCargado=gPalDescargado=gLecturasFallidas=0;run(cmd(BLECMD_TEXT,1,"COUNTERS?"));drain();
+ CHECK(bleBytes().empty());CHECK(gTcpClient.sent.find("EVT_NEXT=1;EVT_PENDING=0;EVT_OLDEST=-;ACKMODE=0")!=std::string::npos);
+ CHECK(gTcpClient.sent.find("BOOT=0;PON=0;PAL_C=0;PAL_D=0;FAIL=0")!=std::string::npos);
+ fresh();gAckMode=true;run(cmd(BLECMD_TEXT,0,"COUNTERS?"));drain();CHECK(bleBytes().find("ACKMODE=1")!=std::string::npos);
+ CHECK(tcpTextCommandType("COUNTERS?")==BLECMD_TEXT);
  // A queued reply may never be delivered to a replacement connection.
  fresh();run(cmd(BLECMD_TEXT,0,"INFO?"));++gBleSession;drain();CHECK(bleBytes().empty()&&gTcpClient.sent.empty());
  fresh();run(cmd(BLECMD_TEXT,1,"INFO?"));++gTcpSession;drain();CHECK(bleBytes().empty()&&gTcpClient.sent.empty());

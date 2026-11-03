@@ -17,6 +17,7 @@ data class DeviceStatus(
     val outputs: String,
     val cut: String,
     val cutReason: String,
+    val countersSupported: Boolean = false,
 )
 
 /** Strict, versioned snapshot. A partial or malformed response never replaces good data. */
@@ -95,6 +96,12 @@ fun parseDeviceStatus(text: String): DeviceStatus? {
         outputs,
         cut,
         f["REASON"] ?: return null,
+        when (f["COUNTERS"]) {
+            null,
+            "0" -> false
+            "1" -> true
+            else -> return null
+        },
     )
 }
 

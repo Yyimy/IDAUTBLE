@@ -1,4 +1,4 @@
-// PLC Scanner v3.0.5-rc1 - 2026-10-29
+// PLC Scanner - consultar FIRMWARE_VERSION para la version actual.
 // Complete source derived from the supplied firmware. See LEEME.md before
 // flashing. Target: ESP32-S3, Arduino-ESP32 3.0.7, USB CDC enabled, OTA
 // partition required. Existing V2 binary commands preserved. New optional
@@ -493,7 +493,7 @@ static std::atomic<bool> gBleSecure{false};
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.10-rc1"
+#define FIRMWARE_VERSION "3.0.11-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static BLE2902 *gCccd = nullptr;
@@ -2110,7 +2110,7 @@ class MyCallbacks : public BLECharacteristicCallbacks {
     } else if (rxTrim.startsWith("AUTH=") || rxTrim.startsWith("ACK=") ||
                rxTrim.startsWith("ACKMODE=") ||
                rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" ||
-               rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "ID?" ||
+               rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
                rxTrim.startsWith("ID=")) {
       cmd.type = BLECMD_TEXT;
       strlcpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload));
@@ -3213,7 +3213,7 @@ static BleCmdType tcpTextCommandType(const String &s) {
   if (s == "WIFI?") return BLECMD_WIFI_GET;
   if (s == "ALT?") return BLECMD_ALT_GET;
   if (s == "OTA?") return BLECMD_OTA_STATUS;
-  if (s == "INFO?" || s == "STATUS?" || s == "DIAG?" || s == "ID?" || s.startsWith("ACK="))
+  if (s == "INFO?" || s == "STATUS?" || s == "COUNTERS?" || s == "DIAG?" || s == "ID?" || s.startsWith("ACK="))
     return BLECMD_TEXT;
   return BLECMD_NONE;
 }
@@ -3311,7 +3311,32 @@ static void sendDeviceStatus() {
   d += ";CUT=" +
        String(gCutConfirmed ? "CONFIRMED" : (gCutRequested ? "PENDING" : "NO"));
   d += ";REASON=" + String(gCutReason);
+  d += ";COUNTERS=1";  // Capability only; counters use a separate bounded reply.
   replyLine(true, d);
+}
+
+static void sendCounters() {
+  uint32_t boot, pon, palC, palD, fail;
+  portENTER_CRITICAL(&countersMux);
+  boot = gBootCount;
+  pon = gPonTotal;
+  palC = gPalCargado;
+  palD = gPalDescargado;
+  fail = gLecturasFallidas;
+  portEXIT_CRITICAL(&countersMux);
+  // Outbox is owned by this loop. Reading it does not ACK or mutate events/NVS.
+  char oldest[11] = "-";
+  if (gOutbox.count)
+    snprintf(oldest, sizeof(oldest), "%lu", (unsigned long)gOutbox.items[0].id);
+  char line[240];
+  int n = snprintf(line, sizeof(line),
+      "COUNTERS=1;BOOT=%lu;PON=%lu;PAL_C=%lu;PAL_D=%lu;FAIL=%lu;"
+      "EVT_NEXT=%lu;EVT_PENDING=%u;EVT_OLDEST=%s;ACKMODE=%u",
+      (unsigned long)boot, (unsigned long)pon, (unsigned long)palC,
+      (unsigned long)palD, (unsigned long)fail, (unsigned long)gOutbox.nextId,
+      (unsigned)gOutbox.count, oldest, gAckMode ? 1U : 0U);
+  if (n > 0 && (size_t)n < sizeof(line)) replyLine(true, String(line));
+  else replyLine(false, "ERR=COUNTERS_TOO_LONG");
 }
 
 static void handleTextCommand(const BleCmd &cmd) {
@@ -3338,6 +3363,10 @@ static void handleTextCommand(const BleCmd &cmd) {
   }
   if (s == "STATUS?") {
     sendDeviceStatus();
+    return;
+  }
+  if (s == "COUNTERS?") {
+    sendCounters();
     return;
   }
   if (s == "DIAG?") {

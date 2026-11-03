@@ -1,4 +1,4 @@
-# PLC Scanner 3.0.10-rc1 — código completo corregido
+# PLC Scanner 3.0.11-rc1 — código completo corregido
 
 Versión candidata para validación en banco. Derivada del archivo adjunto del 29/10/2026. Conserva los comandos binarios de cuatro bytes y la trama V2, con las diferencias de integración indicadas abajo. No se ha probado físicamente en la placa.
 
@@ -457,3 +457,38 @@ Actualizar la carpeta completa PLC_Scanner_v3, incluido Types.h. No requiere
 cambiar la app Android. Prueba en banco: conectar BLE/TCP a la vez, confirmar un
 solo saludo, consultar diagnóstico desde cada canal y pedir lecturas por BLE;
 el servidor debe recibir las tramas de lectura, sin las consultas de la app.
+
+
+## Consulta COUNTERS? (3.0.11-rc1)
+
+Consulta de solo lectura por BLE o TCP, sin AUTH; mantiene el enrutado al canal de
+origen. No modifica ni borra contadores, no confirma eventos y no escribe NVS.
+La cabecera del INO remite a FIRMWARE_VERSION para evitar fechas/versiones duplicadas.
+STATUS=1 añade el campo opcional COUNTERS=1 para anunciar esta capacidad. Los datos
+viajan en una respuesta separada para conservar el tamaño acotado de cada mensaje.
+
+```text
+<ACK>COUNTERS=1;BOOT=12;PON=1540;PAL_C=320;PAL_D=319;FAIL=8;EVT_NEXT=640;EVT_PENDING=2;EVT_OLDEST=638;ACKMODE=1<CR><LF>
+```
+
+| Campo | Significado |
+|---|---|
+| COUNTERS | Versión del formato, actualmente 1 |
+| BOOT | Arranques acumulados |
+| PON | Activaciones del lector |
+| PAL_C / PAL_D | Detecciones de palet cargado / descargado |
+| FAIL | Lecturas fallidas |
+| EVT_NEXT | Próximo identificador de evento, no cantidad pendiente |
+| EVT_PENDING | Eventos actualmente en la cola persistente, 0…8 |
+| EVT_OLDEST | ID del pendiente más antiguo; guion si la cola está vacía |
+| ACKMODE | 0 sin ACK requerido; 1 requiere confirmación de evento |
+
+Los cinco contadores se copian bajo countersMux y la cola se consulta desde el
+loop propietario. Los valores uint32_t se envían en decimal sin signo (hasta
+4294967295). EVT_NEXT=4294967295 anuncia el límite existente: el firmware no asigna
+ese ID ni vuelve automáticamente a 1. Los registros de eventos, la numeración y
+counters reset conservan su funcionamiento anterior. No se añade un reset remoto.
+
+La app 1.3.16 consulta COUNTERS? tras un STATUS válido que anuncie la capacidad,
+con su propia antigüedad y timeout. Un firmware anterior sigue sirviendo STATUS
+sin recibir comandos desconocidos. No cambia V2 ni el saludo TCP.

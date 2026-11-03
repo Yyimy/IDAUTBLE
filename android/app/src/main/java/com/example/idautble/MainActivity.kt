@@ -328,6 +328,8 @@ class MainActivity : ComponentActivity() {
     private val uiDeviceStatusMessage = mutableStateOf("")
     private val uiDeviceStatusReady = mutableStateOf(false)
     private var deviceStatusRequest = 0L
+    private var countersRequest = 0L
+    private val uiCounters = mutableStateOf(CountersSnapshot())
     private val statusRefresh = StatusRefreshPolicy()
     private val uiRefreshAfterReads = mutableStateOf(true)
     private val uiAutoRefreshEnabled = mutableStateOf(true)
@@ -841,6 +843,8 @@ class MainActivity : ComponentActivity() {
         maintenanceSession.reset()
         connectionHandshake.reset()
         deviceStatusRequest++
+        countersRequest++
+        uiCounters.value = CountersSnapshot()
         statusRefresh.reset()
         uiDeviceStatus.value = null
         uiDeviceStatusReceived.value = null
@@ -1140,7 +1144,8 @@ class MainActivity : ComponentActivity() {
                 !deviceConnected ||
                 !hasConnectPermission() ||
                 statusRefresh.otaActive ||
-                uiDeviceStatusBusy.value
+                uiDeviceStatusBusy.value ||
+                uiCounters.value.busy
         )
             return
         val now = SystemClock.elapsedRealtime()
@@ -1170,9 +1175,31 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun requestDeviceCounters() {
+        if (
+            !appInForeground || !bleChannelReady || statusRefresh.otaActive || uiCounters.value.busy
+        )
+            return
+        val request = ++countersRequest
+        uiCounters.value = uiCounters.value.querying()
+        sendText("COUNTERS?", true)
+        mainHandler.postDelayed(
+            {
+                if (request == countersRequest && uiCounters.value.busy)
+                    uiCounters.value = uiCounters.value.timedOut()
+            },
+            6000,
+        )
+    }
+
     private fun handleProtocolControl(message: PlcMessage) {
         val text = message.text
         statusRefresh.otaMessage(text)
+        if (message.acknowledged && text.startsWith("COUNTERS=")) {
+            countersRequest++
+            uiCounters.value = uiCounters.value.receive(text, SystemClock.elapsedRealtime())
+            return
+        }
         if (message.acknowledged && text.startsWith("STATUS=")) {
             val status = parseDeviceStatus(text)
             uiDeviceStatusBusy.value = false
@@ -1188,6 +1215,15 @@ class MainActivity : ComponentActivity() {
                 uiDeviceStatusReceived.value = SystemClock.elapsedRealtime()
                 statusRefresh.received(SystemClock.elapsedRealtime())
                 uiDeviceStatusMessage.value = ""
+                if (status.countersSupported) requestDeviceCounters()
+                else {
+                    countersRequest++
+                    uiCounters.value =
+                        CountersSnapshot(
+                            message =
+                                "Counters require firmware with COUNTERS? support (3.0.11 or later)."
+                        )
+                }
             } else {
                 uiDeviceStatusMessage.value =
                     if (uiDeviceStatus.value == null) "Invalid or unsupported status response."
@@ -1883,7 +1919,8 @@ class MainActivity : ComponentActivity() {
                     deviceStatus = uiDeviceStatus.value,
                     deviceStatusReceived = uiDeviceStatusReceived.value,
                     deviceStatusReady = uiDeviceStatusReady.value,
-                    deviceStatusBusy = uiDeviceStatusBusy.value,
+                    deviceStatusBusy = uiDeviceStatusBusy.value || uiCounters.value.busy,
+                    deviceCounters = uiCounters.value,
                     deviceStatusMessage = uiDeviceStatusMessage.value,
                     onStatusRefresh = { requestDeviceStatus() },
                     refreshAfterReads = uiRefreshAfterReads.value,
@@ -2029,6 +2066,7 @@ private fun PlcBleTesterLandscape(
     deviceStatusReceived: Long?,
     deviceStatusReady: Boolean,
     deviceStatusBusy: Boolean,
+    deviceCounters: CountersSnapshot,
     deviceStatusMessage: String,
     onStatusRefresh: () -> Unit,
     refreshAfterReads: Boolean,
@@ -2441,6 +2479,7 @@ private fun PlcBleTesterLandscape(
 
                                 DeviceStatusSection(
                                     status = deviceStatus,
+                                    counters = deviceCounters,
                                     receivedMs = deviceStatusReceived,
                                     ready = deviceStatusReady,
                                     busy = deviceStatusBusy,
