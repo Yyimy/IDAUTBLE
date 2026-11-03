@@ -1,13 +1,13 @@
-# Validación de la adaptación Android — 02/11/2026
+# Validación de la adaptación Android — 03/11/2026
 
 Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lintDebug`.
 
 - Aplicación: `com.example.idautble` (identificador conservado).
-- VersionCode: 19. VersionName: `1.3.15-plc3`.
+- VersionCode: 20. VersionName: `1.3.16-plc3`.
 - Gradle 8.13, Android Gradle Plugin 8.13.2, Kotlin 2.0.21, JDK 17.
 - Compile SDK 36, target SDK 36, min SDK 26. Se conservan las versiones del proyecto original.
 - APK de depuración generado correctamente como comprobación de compilación. Este paquete entrega el proyecto fuente: compilarlo en tu Android Studio mantiene tus claves locales de firma.
-- 88 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
+- 104 pruebas unitarias, 0 errores, 0 fallos, 0 omitidas.
 
 ## Pruebas ejecutadas
 
@@ -16,7 +16,8 @@ Resultado: **BUILD SUCCESSFUL** al ejecutar `testDebugUnitTest assembleDebug lin
 | PlcProtocolTest | 12 | 0 |
 | NetParsingTest | 6 | 0 |
 | EquipmentIdentityTest | 7 | 0 |
-| DeviceStatusTest | 8 | 0 |
+| DeviceStatusTest | 11 | 0 |
+| DeviceCountersTest | 13 | 0 |
 | DeviceStatusVisualsTest | 5 | 0 |
 | PlcReadingsTest | 8 | 0 |
 | StatusRefreshPolicyTest | 18 | 0 |
@@ -423,3 +424,30 @@ Lint: 0 errores, 0 MissingPermission, 32 advertencias y 3 avisos informativos;
 ningún aviso en OtaSession, OtaFileLoader, OtaHttpServer u OtaScreen.
 `git diff --check` correcto. Firmware y protocolo V2 sin cambios.
 Sin prueba instrumentada de navegación, BLE físico ni flasheo OTA en esta revisión.
+
+
+## Tabla de contadores y eventos (1.3.16)
+
+13 pruebas DeviceCountersTest cubren significado de campos, cola vacía, valores
+cero, uint32_t completo, entrada inválida/desbordamientos/signos/Unicode, versión,
+duplicados y campos faltantes, estado de cola, modo ACK, todos los puntos de corte
+BLE, retención y antigüedad de instantánea ante error/timeout y sustitución completa
+tras lectura válida. Se comprueba que COUNTERS? no pide autorización y no es un ACK.
+Tres casos adicionales de DeviceStatusTest prueban capacidad ausente, explícita y
+malformada, incluido FW con nombre OTA personalizado.
+
+La app consulta contadores solo después de STATUS que anuncie soporte. Se usa la
+cola existente y se inhiben peticiones solapadas; generaciones y snapshot se borran
+al resetear transporte. Se mantienen las opciones de refresco y la pausa OTA.
+
+Pendiente en teléfono: abrir/plegar tabla, legibilidad en pantalla estrecha/fuente
+grande, actualización manual y las cuatro combinaciones de toggles, firmware sin
+capacidad, timeout/instantánea antigua, cambiar de PLC y navegación durante OTA.
+Verificar contra consola y consultar COUNTERS? desde TCP sin tráfico cruzado.
+
+
+Validación final 03/11/2026: testDebugUnitTest, assembleDebug y lintDebug correctos.
+104 pruebas JVM, 0 errores, 0 fallos y 0 omitidas. APK 1.3.16-plc3 (versionCode 20).
+Lint: 0 errores, 0 MissingPermission, 32 advertencias y 3 avisos informativos;
+ningún aviso en DeviceCounters. git diff --check correcto. Sin prueba instrumentada
+de la tabla ni validación física de BLE/TCP para esta revisión.

@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.6
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.15-plc3** (versionCode 19).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.16-plc3** (versionCode 20).
 
 ## Abrir y compilar
 
@@ -67,7 +67,7 @@ La detección de IP comprueba las redes WiFi disponibles, priorizando la subred 
 
 ## Validación
 
-El proyecto ha compilado y generado el APK de depuración como comprobación. Las **88 pruebas unitarias han pasado**. Consulta `VALIDACION_ANDROID.md` para conocer el alcance y la matriz de pruebas físicas pendientes.
+El proyecto ha compilado y generado el APK de depuración como comprobación. Las **104 pruebas unitarias han pasado**. Consulta `VALIDACION_ANDROID.md` para conocer el alcance y la matriz de pruebas físicas pendientes.
 
 Esta revisión no se ha probado en un teléfono/PLC real. La navegación durante OTA, el emparejamiento y la persistencia real de Android Keystore requieren comprobación en banco.
 
@@ -418,3 +418,27 @@ Esta persistencia cubre cambios de pestaña y la ida/vuelta normal a Ajustes WiF
 no garantiza continuidad si Android destruye la Activity o mata el proceso. Al
 cerrar/destruir la Activity se libera el servidor. Mantener la app abierta durante
 la transferencia. No se añade servicio en primer plano ni actualización en segundo plano.
+
+
+## COUNTERS & EVENTS (1.3.16)
+
+Dentro de DEVICE STATUS, antes de Diagnostic details, se añade una tabla compacta
+plegable, inicialmente cerrada. Contiene Boots, Reader triggers (PON), Pallets
+loaded/unloaded, Failed reads, Next event ID, Pending events (sobre 8), Oldest
+pending event ID y ACK mode. Con cola vacía se muestra None; no se confunde la
+secuencia EVT con la cantidad en cola. Valores sin signo de 32 bits usan Long en
+Android para no desbordar Int. El límite de ID se indica explícitamente.
+
+Refresh consulta STATUS? y, si la respuesta anuncia COUNTERS=1, pide COUNTERS?.
+La misma secuencia se aplica al conectar y en los refrescos automáticos habilitados.
+After reads desactivado sigue permitiendo enviar solo la lectura sin estas consultas.
+Auto-refresh y la pausa durante OTA/segundo plano mantienen sus reglas. Los
+contadores se actualizan aunque su tabla esté plegada y tienen edad independiente
+(estado antiguo a partir de 60 s). Un timeout de 6 s o respuesta inválida conserva
+la instantánea previa y su fecha; nunca la presenta como una actualización válida.
+Los datos y solicitudes pendientes se limpian al cambiar de conexión BLE.
+
+Si el firmware no anuncia capacidad, se muestra un aviso de compatibilidad y no
+se envía COUNTERS?. No se adivina soporte por el texto de FW: se admiten etiquetas
+personalizadas OTA-A/B. Para ver la tabla completa se necesita firmware 3.0.11 o
+posterior compatible. No hay controles de borrado ni ACK automático de eventos.

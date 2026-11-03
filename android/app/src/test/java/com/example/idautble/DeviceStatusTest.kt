@@ -106,4 +106,21 @@ class DeviceStatusTest {
     fun statusIsReadOnlyAndDoesNotNeedMaintenancePin() {
         assertFalse(requiresMaintenanceAuthorization("STATUS?\r\n".toByteArray()))
     }
+
+    @Test
+    fun oldFirmwareDoesNotTriggerAnUnsupportedCountersQuery() {
+        assertFalse(parseDeviceStatus(sample)!!.countersSupported)
+        assertFalse(parseDeviceStatus(sample + ";COUNTERS=0")!!.countersSupported)
+    }
+
+    @Test
+    fun countersCapabilityDoesNotDependOnCustomFirmwareVersionText() {
+        val status = sample.replace("3.0.6-rc1", "3.0.8-OTA-B") + ";COUNTERS=1"
+        assertTrue(parseDeviceStatus(status)!!.countersSupported)
+    }
+
+    @Test
+    fun malformedCountersCapabilityRejectsTheSnapshot() {
+        assertNull(parseDeviceStatus(sample + ";COUNTERS=2"))
+    }
 }

@@ -27,6 +27,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -38,6 +39,7 @@ import kotlinx.coroutines.isActive
 @Composable
 fun DeviceStatusSection(
     status: DeviceStatus?,
+    counters: CountersSnapshot,
     receivedMs: Long?,
     ready: Boolean,
     busy: Boolean,
@@ -265,6 +267,7 @@ fun DeviceStatusSection(
                             Text(s.cutReason, fontSize = 11.sp)
                         }
                     }
+                    CountersTable(counters, ready, now)
                     Row(
                         Modifier.fillMaxWidth()
                             .heightIn(min = 32.dp)
@@ -553,5 +556,112 @@ private fun StatusRefreshToggle(
             onCheckedChange = null,
             modifier = Modifier.requiredSize(40.dp, 32.dp).scale(0.65f),
         )
+    }
+}
+
+@Composable
+private fun CountersTable(snapshot: CountersSnapshot, ready: Boolean, nowMs: Long) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val age = deviceStatusAge(snapshot.receivedMs, nowMs)
+    val fresh = deviceStatusIsFresh(snapshot.receivedMs, nowMs, ready)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            Modifier.fillMaxWidth()
+                .heightIn(min = 32.dp)
+                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                .clickable(role = Role.Button, onClickLabel = "Toggle counters and events") {
+                    expanded = !expanded
+                },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(
+                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                "COUNTERS & EVENTS",
+                Modifier.weight(1f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                when {
+                    snapshot.busy -> "Querying..."
+                    snapshot.counters == null -> "Not available"
+                    !fresh -> "Out of date"
+                    else -> "${snapshot.counters.pendingEvents} pending"
+                },
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (expanded) {
+            StatusPanel {
+                if (snapshot.message.isNotBlank()) Text(snapshot.message, fontSize = 10.sp)
+                val c = snapshot.counters
+                if (c != null) {
+                    Text(
+                        if (fresh) "Snapshot • ${age}s" else "Out of date • ${age ?: 0}s",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    val rows =
+                        listOf(
+                            "Boots" to c.boots.toString(),
+                            "Reader triggers (PON)" to c.readerTriggers.toString(),
+                            "Pallets loaded" to c.palletsLoaded.toString(),
+                            "Pallets unloaded" to c.palletsUnloaded.toString(),
+                            "Failed reads" to c.failedReads.toString(),
+                            "Next event ID" to c.nextEventId.toString(),
+                            "Pending events" to "${c.pendingEvents} / 8",
+                            "Oldest pending event ID" to (c.oldestEventId?.toString() ?: "None"),
+                            "ACK mode" to if (c.ackMode) "Enabled" else "Disabled",
+                        )
+                    Row(Modifier.fillMaxWidth()) {
+                        Text(
+                            "COUNTER",
+                            Modifier.weight(1f),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text("VALUE", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                    rows.forEach { (label, value) ->
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+                        )
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 1.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(label, Modifier.weight(1f), fontSize = 11.sp)
+                            Text(
+                                value,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                color =
+                                    if (fresh) MaterialTheme.colorScheme.onSurface
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    if (c.nextEventId == 4294967295L)
+                        Text(
+                            "Event ID limit reached.",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                } else if (snapshot.message.isBlank()) {
+                    Text(
+                        if (snapshot.busy) "Querying counters..."
+                        else "Press Refresh to query the PLC.",
+                        fontSize = 10.sp,
+                    )
+                }
+            }
+        }
     }
 }

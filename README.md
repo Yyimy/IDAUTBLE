@@ -4,8 +4,8 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.15-plc3, versionCode 19 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.10-rc1 |
+| App Android | [android/](android/) | 1.3.16-plc3, versionCode 20 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.11-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -394,3 +394,18 @@ Las lecturas binarias L/B/A/P/D/I y los eventos de palet conservan las salidas
 BLE y TCP cuando están disponibles, también si la orden la envía el operario por BLE.
 No cambia la trama V2 ni el modo de confirmación/persistencia de eventos.
 Detalles y matriz de pruebas en firmware/LEEME.md y firmware/VALIDACION.md.
+
+
+## Contadores y eventos en Device Status (app 1.3.16 / firmware 3.0.11)
+
+DEVICE STATUS incluye una tabla plegable COUNTERS & EVENTS, inicialmente cerrada.
+Muestra arranques, activaciones PON, palets cargados/descargados, lecturas fallidas,
+próximo ID de evento, pendientes, ID pendiente más antiguo y modo ACK. Solo lectura;
+no hay botón de borrado ni se confirman eventos desde la app.
+
+La consulta COUNTERS? está disponible por BLE y TCP. Responde solo por el canal
+solicitante. STATUS anuncia COUNTERS=1 como capacidad; la app la consulta después
+de cada STATUS válido, con Refresh, Auto-refresh y After reads según sus opciones.
+Con firmware anterior se mantiene el diagnóstico habitual y se muestra que los
+contadores requieren firmware compatible. El número siguiente EVT no es el número
+de eventos pendientes ni un contador que se reinicie en cada encendido.
