@@ -2222,31 +2222,21 @@ private fun PlcBleTesterLandscape(
     }
 
     // TopBar eliminado + sin insets reservados
-    Scaffold(topBar = {}, contentWindowInsets = WindowInsets.safeDrawing) { inner ->
+    Scaffold(
+        topBar = {},
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets.safeDrawing,
+    ) { inner ->
         Column(modifier = Modifier.padding(inner).padding(6.dp).fillMaxSize()) {
 
             // =========================
             // TABS
             // =========================
-            TabRow(selectedTabIndex = selectedTab) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text("TERMINAL") },
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text("NETWORK") },
-                )
-                Tab(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    text = {
-                        Text(if (otaSession.busy && otaPct != null) "OTA · $otaPct%" else "OTA")
-                    },
-                )
-            }
+            MaintenanceTabs(
+                selectedIndex = selectedTab,
+                otaLabel = if (otaSession.busy && otaPct != null) "OTA · $otaPct%" else "OTA",
+                onSelect = { selectedTab = it },
+            )
 
             Spacer(Modifier.height(6.dp))
 
@@ -2401,14 +2391,7 @@ private fun PlcBleTesterLandscape(
                                     }
 
                                     if (showDevices) {
-                                        Card(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            colors =
-                                                CardDefaults.cardColors(
-                                                    containerColor =
-                                                        MaterialTheme.colorScheme.surface
-                                                ),
-                                        ) {
+                                        MaintenanceCard(Modifier.fillMaxWidth()) {
                                             Column(
                                                 Modifier.padding(6.dp),
                                                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -2963,7 +2946,7 @@ private fun PlcBleTesterLandscape(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Card(Modifier.weight(1f)) {
+                                    MaintenanceCard(Modifier.weight(1f)) {
                                         Text(
                                             text = "Status: $statusLine",
                                             modifier = Modifier.padding(6.dp),
@@ -2990,7 +2973,7 @@ private fun PlcBleTesterLandscape(
 
                                 Spacer(Modifier.height(6.dp))
 
-                                Card(Modifier.fillMaxSize()) {
+                                MaintenanceCard(Modifier.fillMaxSize()) {
                                     LazyColumn(modifier = Modifier.fillMaxSize().padding(6.dp)) {
                                         itemsIndexed(logs) { _, entry ->
                                             Spacer(Modifier.height(6.dp)) // espacio entre bloques
@@ -3027,12 +3010,9 @@ private fun PlcBleTesterLandscape(
                                                             LogColors.txBlue.copy(alpha = 0.06f)
                                                         else LogColors.rxGreen.copy(alpha = 0.06f)
 
-                                                    Card(
+                                                    MaintenanceCard(
                                                         modifier = Modifier.fillMaxWidth(),
-                                                        colors =
-                                                            CardDefaults.cardColors(
-                                                                containerColor = bgColor
-                                                            ),
+                                                        containerColor = bgColor,
                                                     ) {
                                                         Column(
                                                             modifier =

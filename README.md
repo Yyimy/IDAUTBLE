@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.19-plc3, versionCode 23 |
+| App Android | [android/](android/) | 1.3.20-plc3, versionCode 24 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.11-rc1 |
 
 ## Trabajar sin ZIP
@@ -465,3 +465,16 @@ Los refrescos automáticos dejan estables los botones y su texto. Refresh manual
 sigue mostrando su progreso; guardar, consultar o activar WiFi puede adelantarse a
 una consulta automática pendiente. No cambia la frecuencia de refresco ni se repiten
 escrituras. Pendiente comprobar la distribución y el teclado en el teléfono/tablet real.
+
+## Estilo común de mantenimiento (app 1.3.20)
+
+TERMINAL y OTA adoptan el aspecto de NETWORK: tarjetas con esquinas de 8 dp,
+fondo surfaceContainerLow y borde outlineVariant sobre el fondo común de pantalla.
+Las pestañas usan una barra segmentada con iconos, tipografía técnica y selección
+resaltada. Se conservan el progreso OTA en su pestaña y los colores de acciones,
+tráfico, batería y errores.
+
+OTA agrupa archivo/servidor y progreso en tarjetas; los pasos de actualización
+mantienen sus controles y condiciones. La distribución de TERMINAL, sus secciones
+plegables y el funcionamiento de BLE, red y OTA se conservan.
+Pendiente revisar el resultado visual en el dispositivo real.

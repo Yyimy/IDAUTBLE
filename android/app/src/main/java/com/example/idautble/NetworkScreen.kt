@@ -227,17 +227,7 @@ private fun NetworkPanel(
     scrollable: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Card(
-        modifier =
-            modifier.border(
-                1.dp,
-                MaterialTheme.colorScheme.outlineVariant,
-                RoundedCornerShape(8.dp),
-            ),
-        shape = RoundedCornerShape(8.dp),
-        colors =
-            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-    ) {
+    MaintenanceCard(modifier = modifier) {
         Column(
             Modifier.fillMaxWidth()
                 .then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier)
