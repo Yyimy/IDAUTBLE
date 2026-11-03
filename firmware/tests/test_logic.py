@@ -6,7 +6,7 @@ sketch=root/'PLC_Scanner_v3'
 if not sketch.exists():sketch=root/'deliverables/PLC_Scanner_v3'
 source=(sketch/'PLC_Scanner_v3.ino').read_text()
 def function(name):
- m=re.search(r'^(?:static\s+)?(?:inline\s+)?(?:bool|void|String|uint8_t|int) '+name+r'\([^;]*?\)\s*\{',source,re.M|re.S)
+ m=re.search(r'^(?:static\s+)?(?:inline\s+)?(?:bool|void|String|uint8_t|int|BleCmdType) '+name+r'\([^;]*?\)\s*\{',source,re.M|re.S)
  assert m,name
  i=m.end();depth=1
  while depth:
@@ -31,7 +31,7 @@ using byte=uint8_t;
 class String {
  std::string s;
  public:
- String(){} String(const char*p):s(p?p:""){} String(const std::string&v):s(v){} String(char c):s(1,c){}
+ String(){} String(int n):s(std::to_string(n)){} String(unsigned n):s(std::to_string(n)){} String(float n,int decimals){char b[48];snprintf(b,sizeof(b),"%.*f",decimals,n);s=b;} String(const char*p):s(p?p:""){} String(const std::string&v):s(v){} String(char c):s(1,c){}
  void reserve(size_t n){s.reserve(n);}
  size_t length()const{return s.size();}bool isEmpty()const{return s.empty();}const char*c_str()const{return s.c_str();}
  char operator[](size_t i)const{return s[i];}
@@ -43,6 +43,7 @@ class String {
  void toUpperCase(){for(char &c:s)c=std::toupper((unsigned char)c);}void toLowerCase(){for(char&c:s)c=std::tolower((unsigned char)c);}
  long toInt()const{return std::strtol(s.c_str(),nullptr,10);}
  String&operator+=(const String&o){s+=o.s;return *this;}String&operator+=(char c){s+=c;return *this;}
+ friend String operator+(const String&a,const String&b){return String(a.s+b.s);}
  friend bool operator==(const String&a,const String&b){return a.s==b.s;}friend bool operator!=(const String&a,const String&b){return !(a==b);}
 };
 bool isDigit(char c){return c>='0'&&c<='9';}
@@ -76,7 +77,7 @@ int digitalRead(int){return rawFoto;}void countersIncPalCargado(){++loaded;}void
 void powerCut(const char*){gCutRequested=true;}
 '''
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
-names=['handleAuthCommand','maintenanceAuthorized','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueFrame','sendFrame','bleCanNotify','txTick','parseU32','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
+names=['handleAuthCommand','maintenanceAuthorized','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
 #define V_BAT_ABSENT 2.0f
@@ -95,7 +96,7 @@ void actualizarNivelBateria(uint8_t,float,String&,const char*,bool){}void batter
 struct FakeCharacteristic {std::string staging;std::vector<std::string> notifications;void setValue(uint8_t*d,size_t n){staging.assign((char*)d,n);}void notify(){notifications.push_back(staging);}} characteristic;
 FakeCharacteristic *pCharacteristic=&characteristic;
 struct FakeCccd {bool enabled=false;bool getNotifications(){return enabled;}} cccd;
-FakeCccd *gCccd=&cccd;bool deviceConnected=false,gBleSecure=false;uint16_t gBleMtu=23;uint32_t gBleSession=1,gTxDropped=0;
+FakeCccd *gCccd=&cccd;bool deviceConnected=false,gBleSecure=false;uint16_t gBleMtu=23;std::atomic<uint32_t> gBleSession{1},gTcpSession{1},gOtaBleSession{1};uint32_t gTxDropped=0;ReplyContext gReplyContext{TX_BOTH,0};
 struct FakeTcp {bool up=false;size_t limit=1000;int blockedCalls=0;std::string sent;bool connected(){return up;}size_t write(uint8_t*p,size_t n){n=std::min(n,limit);sent.append((char*)p,n);return n;}void stop(){up=false;}} gTcpClient;
 static int tcpWriteAvailable(const uint8_t*p,size_t n){if(gTcpClient.blockedCalls>0){--gTcpClient.blockedCalls;return -2;}return (int)gTcpClient.write((uint8_t*)p,n);}
 bool gTcpConnected=false;OtaState gOtaState=OTA_IDLE;

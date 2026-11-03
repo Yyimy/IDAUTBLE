@@ -44,7 +44,7 @@ enum BleCmdType : uint8_t {
 struct BleCmd {
   BleCmdType type;
   uint8_t source;  // 0=BLE, 1=TCP
-  uint32_t session;
+  uint32_t session;  // Generation of the originating BLE or TCP connection.
   uint32_t receivedMs;  // Complete command received by the PLC, before queueing.
   char payload[384];  // para RTC=... o CFG=...
 };
@@ -97,9 +97,28 @@ struct HeightTiming {
   HeightReadResult result;
 };
 
+// Zero keeps existing value-initialized reading/event packets on both channels.
+enum TxTarget : uint8_t { TX_BOTH = 0, TX_BLE_ONLY, TX_TCP_ONLY };
+
+struct ReplyContext {
+  TxTarget target;
+  uint32_t session;
+};
+
+// Used only by the loop's command dispatcher, never by asynchronous producers.
+struct CommandReplyScope {
+  ReplyContext &current;
+  ReplyContext previous;
+  CommandReplyScope(ReplyContext &context, TxTarget target, uint32_t session)
+      : current(context), previous(context) { current = {target, session}; }
+  ~CommandReplyScope() { current = previous; }
+};
+
 struct TxPacket {
   uint16_t len;
   uint32_t session;
+  uint32_t tcpSession;
+  TxTarget target;
   uint32_t eventId;
   uint8_t data[512];
   HeightTiming heightTiming;

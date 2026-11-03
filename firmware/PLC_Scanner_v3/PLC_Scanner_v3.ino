@@ -136,13 +136,20 @@ const uint8_t CMD_O[4] = {0x1B, 0x4F, 0x0D, 0x0A};  // Apagar relé motor
 // BLE - EJECUCIÓN DIFERIDA (BUSY + 1 SLOT PENDING)
 // ============================================================================
 void sendFrame(const uint8_t *data, size_t len);
+static bool queueTargetFrame(const uint8_t *data, size_t len, const HeightTiming *timing,
+                             TxTarget target, uint32_t session);
+static void sendCommandReply(const uint8_t *data, size_t len);
+static void sendBleReply(const uint8_t *data, size_t len);
+static ReplyContext gReplyContext{TX_BOTH, 0};
+static std::atomic<uint32_t> gTcpSession{0};
+static std::atomic<uint32_t> gOtaBleSession{0};
 
 static void otaSendStatusLine(const String &line) {
   String s;
   s.reserve(120);
   s += (char)0x06;
   s += "OTA=" + line + "\r\n";
-  sendFrame((const uint8_t *)s.c_str(), s.length());
+  queueTargetFrame((const uint8_t *)s.c_str(), s.length(), nullptr, TX_BLE_ONLY, gOtaBleSession);
 }
 
 static void otaSendErr(const String &err) {
@@ -150,7 +157,7 @@ static void otaSendErr(const String &err) {
   s.reserve(160);
   s += (char)0x15;
   s += "OTA_ERR=" + err + "\r\n";
-  sendFrame((const uint8_t *)s.c_str(), s.length());
+  queueTargetFrame((const uint8_t *)s.c_str(), s.length(), nullptr, TX_BLE_ONLY, gOtaBleSession);
 }
 
 static QueueHandle_t gCommandQueue = nullptr;
@@ -159,14 +166,14 @@ static std::atomic<uint32_t> gBleSession{1};
 static inline void bleSendBusy() {
   // “busy” explícito. Android puede reintentar en 200-500ms.
   const uint8_t busyFrame[] = {0x15, 'B', 'U', 'S', 'Y', 0x0D, 0x0A};
-  sendFrame(busyFrame, sizeof(busyFrame));
+  sendBleReply(busyFrame, sizeof(busyFrame));
 }
 
 static inline void bleSendConnectedAck() {
   const uint8_t frame[] = {0x06, 'C', 'O', 'N', 'E',  'C',
                            'T',  'A', 'D', 'O', 0x0D, 0x0A};
 
-  sendFrame(frame, sizeof(frame));
+  sendCommandReply(frame, sizeof(frame));
 }
 
 static inline void bleSendOff() {
@@ -486,7 +493,7 @@ static std::atomic<bool> gBleSecure{false};
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.9-rc1"
+#define FIRMWARE_VERSION "3.0.10-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static BLE2902 *gCccd = nullptr;
@@ -1041,6 +1048,7 @@ static void tcpConnectTick() {
                                    TCP_CONNECT_TIMEOUT_MS);
 
       if (ok) {
+        ++gTcpSession;
         gTcpConnected = true;
         gTcpState = TCP_CONNECTED;
         gLastTcpActivity = millis();
@@ -1053,17 +1061,16 @@ static void tcpConnectTick() {
         // --- ENVIAR MENSAJE DE CONEXIÓN ---
         rtcUpdateCacheIfNeeded();  // aseguramos RTC fresco
 
-        String msg;
-        msg.reserve(128);
-        msg += "CONNECTED;";
-        msg += "RTC=" + gRtcIso + ";";
-        msg += "ID=" + gId + ";";
-        msg += "IP=" + WiFi.localIP().toString();
-        msg += "\r\n";
-
-        tcpWriteAvailable((const uint8_t *)msg.c_str(), msg.length());
-
-        logLine("Mensaje CONNECT enviado.");
+        String msg = buildTcpGreeting();
+        if (!queueTargetFrame((const uint8_t *)msg.c_str(), msg.length(), nullptr,
+                              TX_TCP_ONLY, gTcpSession)) {
+          gTcpClient.stop();
+          gTcpConnected = false;
+          gTcpState = TCP_WAIT_RETRY;
+          logLine("TCP greeting queue full; reconnecting before sending data");
+        } else {
+          logLine("TCP CONNECTED greeting queued");
+        }
       } else {
         gTcpConnected = false;
         gTcpState = TCP_WAIT_RETRY;
@@ -1094,7 +1101,11 @@ static void tcpPollRx() {
   static char line[384];
   static size_t used = 0;
   static bool overflow = false;
-  static uint32_t lastByte = 0;
+  static uint32_t lastByte = 0, parserSession = 0;
+  if (parserSession != gTcpSession) {
+    n = 0; used = 0; overflow = false;
+    parserSession = gTcpSession;
+  }
   if ((n || used || overflow) && millis() - lastByte > 2000) {
     n = 0;
     used = 0;
@@ -1121,10 +1132,11 @@ static void tcpPollRx() {
         cmd.type = cmdFromBinary4(binary);
         cmd.receivedMs = millis();
         cmd.source = 1;
+        cmd.session = gTcpSession;
         if (cmd.type != BLECMD_NONE && !xQueueSend(gCommandQueue, &cmd, 0)) {
           logHeightRejected(cmd, "COMMAND_QUEUE_FULL");
           const uint8_t busy[] = {0x15, 'B', 'U', 'S', 'Y', 13, 10};
-          tcpWriteAvailable(busy, sizeof(busy));
+          queueTargetFrame(busy, sizeof(busy), nullptr, TX_TCP_ONLY, cmd.session);
         }
       }
       continue;
@@ -1135,15 +1147,17 @@ static void tcpPollRx() {
         line[used] = 0;
         if (!strcmp(line, "PONG") || !strncmp(line, "PONG;", 5))
           gLastTcpRxMs = millis();
-        else if (!strncmp(line, "ACK=", 4) || !strcmp(line, "INFO?") ||
-                 !strcmp(line, "DIAG?") || !strcmp(line, "STATUS?") ||
-                 !strcmp(line, "ID?")) {
+        else {
           BleCmd cmd = {};
-          cmd.type = BLECMD_TEXT;
+          cmd.type = tcpTextCommandType(String(line));
           cmd.source = 1;
+          cmd.session = gTcpSession;
+          cmd.receivedMs = millis();
           strlcpy(cmd.payload, line, sizeof(cmd.payload));
-          if (!xQueueSend(gCommandQueue, &cmd, 0))
-            logLine("TCP command queue full");
+          if (cmd.type != BLECMD_NONE && !xQueueSend(gCommandQueue, &cmd, 0)) {
+            const uint8_t busy[] = {0x15, 'B', 'U', 'S', 'Y', 13, 10};
+            queueTargetFrame(busy, sizeof(busy), nullptr, TX_TCP_ONLY, cmd.session);
+          }
         }
       }
       used = 0;
@@ -1482,17 +1496,21 @@ static void logHeightRejected(const BleCmd &cmd, const char *reason) {
        (unsigned long)(millis() - cmd.receivedMs));
 }
 
-static bool queueFrame(const uint8_t *data, size_t len,
-                       const HeightTiming *heightTiming) {
+static bool queueTargetFrame(const uint8_t *data, size_t len,
+                             const HeightTiming *heightTiming, TxTarget target,
+                             uint32_t session) {
   if (!gTxQueue || !data || !len || len > MAX_FRAME_BYTES) return false;
   TxPacket p = {};
   p.len = len;
-  p.session = gBleSession;
+  p.target = target;
+  p.session = target == TX_BLE_ONLY ? session : gBleSession.load();
+  p.tcpSession = target == TX_TCP_ONLY ? session : gTcpSession.load();
   memcpy(p.data, data, len);
   if (heightTiming && heightTiming->active) {
     p.heightTiming = *heightTiming;
     p.heightTiming.queuedMs = millis();
     if (!heightTiming->source) p.session = heightTiming->session;
+    else p.tcpSession = heightTiming->session;
   }
   if (xQueueSend(gTxQueue, &p, 0) != pdTRUE) {
     ++gTxDropped;
@@ -1502,9 +1520,21 @@ static bool queueFrame(const uint8_t *data, size_t len,
   return true;
 }
 
+static bool queueFrame(const uint8_t *data, size_t len, const HeightTiming *timing) {
+  return queueTargetFrame(data, len, timing, TX_BOTH, 0);
+}
+
 void sendFrame(const uint8_t *data, size_t len) {
-  // Producers never access BLECharacteristic or TCP. The loop owns transmission.
+  // Reading frames and unsolicited business events keep both destinations.
   queueFrame(data, len, nullptr);
+}
+
+static void sendCommandReply(const uint8_t *data, size_t len) {
+  queueTargetFrame(data, len, nullptr, gReplyContext.target, gReplyContext.session);
+}
+
+static void sendBleReply(const uint8_t *data, size_t len) {
+  queueTargetFrame(data, len, nullptr, TX_BLE_ONLY, gBleSession);
 }
 
 // ============================================================================
@@ -1591,11 +1621,11 @@ static bool cfgParseSet(const String &s, String &outP, String &outU) {
 
 static void cfgSendOk() {
   uint8_t okFrame[] = {0x06, 'O', 'K', 0x0D, 0x0A};
-  sendFrame(okFrame, sizeof(okFrame));
+  sendCommandReply(okFrame, sizeof(okFrame));
 }
 static void cfgSendErr() {
   uint8_t errFrame[] = {0x15, 'E', 'R', 'R', 0x0D, 0x0A};
-  sendFrame(errFrame, sizeof(errFrame));
+  sendCommandReply(errFrame, sizeof(errFrame));
 }
 
 static void cfgSendCurrent() {
@@ -1603,7 +1633,7 @@ static void cfgSendCurrent() {
   s.reserve(64);
   s += (char)0x06;
   s += "PFXP=" + gPfxPalet + ";PFXU=" + gPfxUbic + "\r\n";
-  sendFrame((const uint8_t *)s.c_str(), s.length());
+  sendCommandReply((const uint8_t *)s.c_str(), s.length());
 }
 
 // ============================================================================
@@ -1626,10 +1656,10 @@ static void netSendCurrent() {
   s += ";PORT=" + String(gNetPort);
   s += "\r\n";
 
-  sendFrame((const uint8_t *)s.c_str(), s.length());
+  sendCommandReply((const uint8_t *)s.c_str(), s.length());
 }
 
-static void netSendStatus() {
+static void netSendStatus(bool unsolicited) {
   String s;
   s.reserve(160);
 
@@ -1650,7 +1680,8 @@ static void netSendStatus() {
 
   s += "\r\n";
 
-  sendFrame((const uint8_t *)s.c_str(), s.length());
+  if (unsolicited) sendBleReply((const uint8_t *)s.c_str(), s.length());
+  else sendCommandReply((const uint8_t *)s.c_str(), s.length());
 }
 
 static bool netParseSet(const String &s) {
@@ -2101,14 +2132,14 @@ class MyCallbacks : public BLECharacteristicCallbacks {
       // Si no parsea, NAK
       if (!ok) {
         uint8_t nakFrame[3] = {0x15, 0x0D, 0x0A};
-        sendFrame(nakFrame, sizeof(nakFrame));
+        sendBleReply(nakFrame, sizeof(nakFrame));
         return;
       }
 
       cmd.type = cmdFromBinary4(rx);
       if (cmd.type == BLECMD_NONE) {
         uint8_t nakFrame[3] = {0x15, 0x0D, 0x0A};
-        sendFrame(nakFrame, sizeof(nakFrame));
+        sendBleReply(nakFrame, sizeof(nakFrame));
         return;
       }
     }
@@ -2203,6 +2234,13 @@ static void bleProcessPendingOnce() {
     logHeightRejected(cmd, "SESSION_EXPIRED");
     return;
   }
+  if (cmd.source == 1 && (!gTcpConnected || !gTcpClient.connected() ||
+                          cmd.session != gTcpSession)) {
+    logHeightRejected(cmd, "SESSION_EXPIRED");
+    return;
+  }
+  CommandReplyScope replies(gReplyContext,
+      cmd.source == 0 ? TX_BLE_ONLY : TX_TCP_ONLY, cmd.session);
   if (cmd.type == BLECMD_TEXT) {
     handleTextCommand(cmd);
     return;
@@ -2252,11 +2290,11 @@ static void bleProcessPendingOnce() {
 
       if (okSet) {
         uint8_t okFrame[] = {0x06, 'O', 'K', 0x0D, 0x0A};
-        sendFrame(okFrame, sizeof(okFrame));
+        sendCommandReply(okFrame, sizeof(okFrame));
         logLine("RTC actualizado por BLE (worker).");
       } else {
         uint8_t errFrame[] = {0x15, 'E', 'R', 'R', 0x0D, 0x0A};
-        sendFrame(errFrame, sizeof(errFrame));
+        sendCommandReply(errFrame, sizeof(errFrame));
         logLine("RTC comando inválido (worker).");
       }
     } break;
@@ -2286,14 +2324,14 @@ static void bleProcessPendingOnce() {
       break;
 
     case BLECMD_NETSTAT_GET:
-      netSendStatus();
+      netSendStatus(false);
       break;
 
     case BLECMD_WIFI_GET: {
       String s;
       s += (char)0x06;
       s += "WIFI=" + String(gWifiEnabled ? "1" : "0") + "\r\n";
-      sendFrame((const uint8_t *)s.c_str(), s.length());
+      sendCommandReply((const uint8_t *)s.c_str(), s.length());
     } break;
 
     case BLECMD_WIFI_SET: {
@@ -2310,7 +2348,7 @@ static void bleProcessPendingOnce() {
         gWifiEnabled = false;
       } else {
         uint8_t errFrame[] = {0x15, 'E', 'R', 'R', 0x0D, 0x0A};
-        sendFrame(errFrame, sizeof(errFrame));
+        sendCommandReply(errFrame, sizeof(errFrame));
         break;
       }
 
@@ -2356,9 +2394,9 @@ static void bleProcessPendingOnce() {
       // Respuesta OK al BLE
       // ------------------------------
       uint8_t okFrame[] = {0x06, 'O', 'K', 0x0D, 0x0A};
-      sendFrame(okFrame, sizeof(okFrame));
+      sendCommandReply(okFrame, sizeof(okFrame));
 
-      netSendStatus();
+      netSendStatus(false);
 
     } break;
 
@@ -2367,7 +2405,7 @@ static void bleProcessPendingOnce() {
       s.reserve(16);
       s += (char)0x06;
       s += "ALT=" + String(gAlturaEnabled ? "1" : "0") + "\r\n";
-      sendFrame((const uint8_t *)s.c_str(), s.length());
+      sendCommandReply((const uint8_t *)s.c_str(), s.length());
     } break;
 
     case BLECMD_ALT_SET: {
@@ -2381,7 +2419,7 @@ static void bleProcessPendingOnce() {
         gAlturaEnabled = false;
       else {
         uint8_t errFrame[] = {0x15, 'E', 'R', 'R', 0x0D, 0x0A};
-        sendFrame(errFrame, sizeof(errFrame));
+        sendCommandReply(errFrame, sizeof(errFrame));
         break;
       }
 
@@ -2395,7 +2433,7 @@ static void bleProcessPendingOnce() {
       pref.end();
 
       uint8_t okFrame[] = {0x06, 'O', 'K', 0x0D, 0x0A};
-      sendFrame(okFrame, sizeof(okFrame));
+      sendCommandReply(okFrame, sizeof(okFrame));
     } break;
 
     case BLECMD_NET_SET: {
@@ -2407,7 +2445,7 @@ static void bleProcessPendingOnce() {
       wifiStartFromConfig();
       cfgSendOk();
       netSendCurrent();
-      netSendStatus();
+      netSendStatus(false);
     } break;
 
       // --------------------
@@ -2424,8 +2462,9 @@ static void bleProcessPendingOnce() {
 
     case BLECMD_C:
       if (cmd.source == 1) {
-        String msg = "CONNECTED;RTC=" + gRtcIso + ";ID=" + gId + "\r\n";
-        sendFrame((const uint8_t *)msg.c_str(), msg.length());
+        rtcUpdateCacheIfNeeded();
+        String msg = buildTcpGreeting();
+        sendCommandReply((const uint8_t *)msg.c_str(), msg.length());
       } else
         bleSendConnectedAck();
       break;
@@ -2440,12 +2479,12 @@ static void bleProcessPendingOnce() {
       st += ";PCT=" + String((uint8_t)gOtaPct.load());
       String err = otaGetLastErr();
       if (err.length()) st += ";ERR=" + err;
-      otaSendStatusLine(st);
+      otaReplyStatus(st);
     } break;
 
     case BLECMD_OTA_ABORT:
       gOtaAbort = true;
-      otaSendStatusLine("ABORT_REQ");
+      otaReplyStatus("ABORT_REQ");
       break;
 
     case BLECMD_OTA_START: {
@@ -2455,11 +2494,12 @@ static void bleProcessPendingOnce() {
       // 1) OTA=START  -> arranca AP y espera cliente + params
       if (rxTrim == "OTA=START") {
         if (gOtaTaskHandle != nullptr || gOtaState != OTA_IDLE) {
-          otaSendErr("BUSY");
+          otaReplyErr("BUSY");
           break;
         }
 
         // IMPORTANTE: NO tocar O_RELE_MOTOR aquí (si no, te apagas)
+        gOtaBleSession = cmd.session;
         gOtaParamsReady = false;
         gOtaUrl = "";
         gOtaSha256 = "";
@@ -2471,48 +2511,48 @@ static void bleProcessPendingOnce() {
 
         if (ok != pdPASS) {
           gOtaTaskHandle = nullptr;
-          otaSendErr("TASK_FAIL");
+          otaReplyErr("TASK_FAIL");
           break;
         }
 
         uint8_t okFrame[] = {0x06, 'O', 'K', 0x0D, 0x0A};
-        sendFrame(okFrame, sizeof(okFrame));
+        sendCommandReply(okFrame, sizeof(okFrame));
         break;
       }
 
       // 2) OTA=URL=...;SIZE=...;SHA256=... -> fase 2 (o modo antiguo si
       // quieres)
       if (!rxTrim.startsWith("OTA=")) {
-        otaSendErr("BAD_PARAMS");
+        otaReplyErr("BAD_PARAMS");
         break;
       }
 
       // Si hay task corriendo, esto es “fase 2”
       if (gOtaTaskHandle != nullptr && gOtaState == OTA_WAIT_PARAMS) {
         if (!otaParseStart(rxTrim)) {
-          otaSendErr("BAD_PARAMS");
+          otaReplyErr("BAD_PARAMS");
           break;
         }
 
         gOtaParamsReady = true;
 
         uint8_t okFrame[] = {0x06, 'O', 'K', 0x0D, 0x0A};
-        sendFrame(okFrame, sizeof(okFrame));
-        otaSendStatusLine("PARAMS_OK");
+        sendCommandReply(okFrame, sizeof(okFrame));
+        otaReplyStatus("PARAMS_OK");
         break;
       }
 
       // Si NO hay task: puedes decidir
       // - o rechazar (para forzar 2 fases)
       // - o permitir “modo 1 fase” (como tenías antes)
-      otaSendErr("USE_OTA_START");
+      otaReplyErr("USE_OTA_START");
       break;
 
     } break;
 
     default: {
       uint8_t nakFrame[3] = {0x15, 0x0D, 0x0A};
-      sendFrame(nakFrame, sizeof(nakFrame));
+      sendCommandReply(nakFrame, sizeof(nakFrame));
     } break;
   }
 }
@@ -3122,7 +3162,7 @@ void loop() {
       }
       if (before != gWifiConnected || gTcpConnected != gTcpConnectedPrev) {
         gTcpConnectedPrev = gTcpConnected;
-        netSendStatus();
+        netSendStatus(true);
       }
     }
     scanTick();
@@ -3150,8 +3190,34 @@ static bool parseU32(const String &s, uint32_t &value) {
 }
 static void replyLine(bool ok, const String &text) {
   String s = String((char)(ok ? 0x06 : 0x15)) + text + "\r\n";
-  sendFrame((const uint8_t *)s.c_str(), s.length());
+  sendCommandReply((const uint8_t *)s.c_str(), s.length());
 }
+
+static void otaReplyStatus(const String &line) { replyLine(true, "OTA=" + line); }
+static void otaReplyErr(const String &error) { replyLine(false, "OTA_ERR=" + error); }
+
+static String buildTcpGreeting() {
+  String msg;
+  msg.reserve(180);
+  msg = "CONNECTED;RTC=" + gRtcIso + ";ID=" + gId + ";IP=" + WiFi.localIP().toString();
+  msg += ";PROTO=V2;FW=" FIRMWARE_VERSION ";ACKMODE=";
+  msg += String(gAckMode ? 1 : 0);
+  msg += ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) + "\r\n";
+  return msg;
+}
+
+static BleCmdType tcpTextCommandType(const String &s) {
+  if (s == "NET?") return BLECMD_NET_GET;
+  if (s == "NETSTAT?") return BLECMD_NETSTAT_GET;
+  if (s == "CFG?") return BLECMD_CFG_GET;
+  if (s == "WIFI?") return BLECMD_WIFI_GET;
+  if (s == "ALT?") return BLECMD_ALT_GET;
+  if (s == "OTA?") return BLECMD_OTA_STATUS;
+  if (s == "INFO?" || s == "STATUS?" || s == "DIAG?" || s == "ID?" || s.startsWith("ACK="))
+    return BLECMD_TEXT;
+  return BLECMD_NONE;
+}
+
 static bool maintenanceAuthorized() {
 #if REQUIRE_MAINT_AUTH
   return gMaintenanceAuthorized.load();
@@ -3387,6 +3453,7 @@ static void eventTick() {
   if (gEventLastAttempt && millis() - gEventLastAttempt < 3000) return;
   TxPacket p = {};
   p.session = gBleSession;
+  p.tcpSession = gTcpSession;
   p.eventId = gOutbox.items[0].id;
   if (gAckMode) {
     int n = snprintf((char *)p.data, sizeof(p.data), "EVT=%lu\r\n",
@@ -3424,8 +3491,8 @@ static void txTick() {
     if (xQueueReceive(gTxQueue, &p, 0) != pdTRUE) return;
     active = true;
     heightTimingReported = false;
-    tcpDone = false;
-    bleDone = false;
+    tcpDone = p.target == TX_BLE_ONLY;
+    bleDone = p.target == TX_TCP_ONLY;
     accepted = false;
     offset = 0;
     tcpOffset = 0;
@@ -3433,7 +3500,7 @@ static void txTick() {
   }
   if (!tcpDone) {
     if (gOtaTaskHandle || gOtaState != OTA_IDLE || !gTcpConnected ||
-        !gTcpClient.connected())
+        !gTcpClient.connected() || p.tcpSession != gTcpSession)
       tcpDone = true;
     else {
       int n = tcpWriteAvailable(p.data + tcpOffset, p.len - tcpOffset);
