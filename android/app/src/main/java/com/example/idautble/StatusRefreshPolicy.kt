@@ -70,20 +70,26 @@ internal class StatusRefreshPolicy {
         return false
     }
 
-    // V2 has no transaction ID: the next valid frame after a requested read completes the wait.
-    fun readReceived(now: Long): Boolean {
-        if (!readPending(now)) return false
+    // Any valid V2 reading can change counters, including unsolicited photocell events.
+    // V2 has no request ID: it also completes any outstanding manual read wait.
+    fun readReceived(): Boolean {
         readingSince = null
-        afterReading = refreshAfterReads
-        return refreshAfterReads
+        if (otaActive || !refreshAfterReads) return false
+        afterReading = true
+        return true
     }
 
     fun shouldRefresh(now: Long): Boolean {
         if (otaActive || readPending(now)) return false
         if (afterReading) {
-            afterReading = false
-            if (lastSuccess?.let { now - it < 5_000L } == true) return false
-            return true
+            // Keep pending work during the cooldown; continuous sensor traffic must
+            // not postpone it forever or retry a failed query on every frame.
+            if (
+                lastRequest?.let { now - it < 5_000L } == true ||
+                    lastSuccess?.let { now - it < 5_000L } == true
+            )
+                return false
+            return true // requested() consumes the pending refresh, not this check.
         }
         // The initial query is independent of periodic refresh (including resume after pairing).
         return lastRequest?.let { autoRefreshEnabled && now - it >= 30_000L } ?: true

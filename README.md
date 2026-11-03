@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.16-plc3, versionCode 20 |
+| App Android | [android/](android/) | 1.3.17-plc3, versionCode 21 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.11-rc1 |
 
 ## Trabajar sin ZIP
@@ -228,11 +228,13 @@ El panel compacto y sus 60 s de frescura se conservan. Solo hay que actualizar l
 Orden en TERMINAL: BINARY COMMANDS → READINGS → DEVICE STATUS → PIN / ACCESS → DEVICE ID.
 Las secciones conservan su plegado. STATUS se actualiza también con el panel plegado.
 
-La app consulta STATUS? al conectar y cada 30 s desde el último intento, solo en
-primer plano, con BLE preparado y fuera de OTA. Tras enviar L/B/A/P/D/I, espera
-la siguiente trama V2 válida y solicita STATUS?; si recibió un STATUS válido hace
-menos de 5 s, omite esa consulta adicional. Las lecturas automáticas sin petición
-no disparan consultas extra y STATUS no reemplaza los códigos de READINGS.
+La app consulta STATUS? al conectar y, si Auto-refresh está activado, cada 30 s
+desde el último intento, solo en primer plano, con BLE preparado y fuera de OTA.
+Desde 1.3.17, After reads también atiende tramas V2 válidas de la fotocélula o del
+servidor, además de L/B/A/P/D/I solicitados en la app. Si hay una consulta reciente,
+conserva un refresco pendiente hasta completar el intervalo de 5 s; no lo descarta.
+STATUS no reemplaza los códigos de READINGS. Con firmware compatible se consulta
+COUNTERS? después de STATUS para actualizar también la tabla.
 
 Se evita duplicar solicitudes pendientes y se espera a que la cola BLE esté libre.
 Una lectura sin respuesta deja de bloquear el sondeo a los 8 s; una consulta STATUS
@@ -255,7 +257,7 @@ en la misma cabecera, sin una fila de explicación adicional. Empieza activado;
 la preferencia se guarda en la app y se conserva al cerrar, reconectar o cambiar
 de PLC. Se puede configurar también estando desconectado.
 
-Desactivarlo elimina la consulta STATUS? adicional tras L/B/A/P/D/I; mantiene
+Desactivarlo elimina la consulta STATUS? adicional tras lecturas manuales o del sensor; mantiene
 STATUS al conectar, cada 30 s y con Refresh. La consulta periódica puede coincidir
 con una lectura aunque After reads esté apagado. La app sigue esperando el fin
 de la lectura antes de enviar una consulta periódica, para no intercalarlas.
@@ -409,3 +411,23 @@ de cada STATUS válido, con Refresh, Auto-refresh y After reads según sus opcio
 Con firmware anterior se mantiene el diagnóstico habitual y se muestra que los
 contadores requieren firmware compatible. El número siguiente EVT no es el número
 de eventos pendientes ni un contador que se reinicie en cada encendido.
+
+
+## Refresco tras lecturas del sensor (app 1.3.17)
+
+After reads se aplica a cualquier trama de lectura V2 válida recibida: comandos
+manuales, resultados solicitados desde TCP y eventos automáticos de fotocélula.
+Funciona aunque Auto-refresh esté apagado. Con After reads apagado, recibir esas
+tramas no solicita diagnóstico adicional; Refresh y el sondeo periódico siguen
+sus reglas. No se envían ACK de eventos ni se altera la numeración EVT.
+
+Las tramas incompletas o inválidas y las líneas EVT/STATUS/COUNTERS no disparan
+el refresco. Lecturas seguidas y reintentos se agrupan en un único trabajo pendiente.
+Se respeta un mínimo de 5 s desde la última petición y respuesta STATUS válida;
+al terminar la espera se solicita STATUS y después COUNTERS si está soportado.
+Las comprobaciones del temporizador son cada segundo y la cola puede añadir espera.
+Esto evita perder el último cambio por un STATUS reciente sin generar consultas
+por cada trama ni posponer indefinidamente con tráfico continuo. Se mantienen
+las pausas de OTA, transporte ocupado y segundo plano, y la limpieza al desconectar.
+
+Solo cambia la app. El firmware 3.0.11-rc1 que ofrece COUNTERS? sigue siendo válido.
