@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.6
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.18-plc3** (versionCode 22).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.19-plc3** (versionCode 23).
 
 ## Abrir y compilar
 
@@ -34,6 +34,13 @@ Las consultas y lecturas siguen disponibles una vez emparejado. Red, reloj, pref
 Los comandos pendientes de autorización se cancelan al cerrar el diálogo o desconectar. Ante BUSY o un rechazo del PLC, revisa el mensaje y repite la operación cuando corresponda; no se repiten automáticamente acciones como apagado o inicio OTA.
 
 ## Red
+
+Desde la app 1.3.19, NETWORK muestra **LIVE CONNECTION** a la izquierda (40 %) y
+**PLC CONFIGURATION** a la derecha (60 %) en horizontal con al menos 700 dp de ancho.
+Las tarjetas tienen desplazamiento independiente; en vertical o con menos anchura se
+apilan. Los refrescos automáticos actualizan el estado sin parpadeos de los botones:
+no los deshabilitan ni muestran “Refreshing…”. Las acciones manuales siguen indicando
+su progreso y pueden adelantarse a una consulta automática pendiente.
 
 Al abrir **NETWORK**, la app consulta `NET?` por Bluetooth y después `NETSTAT?`.
 Funciona aunque el WiFi del PLC esté desactivado; consultar no lo activa y no requiere
