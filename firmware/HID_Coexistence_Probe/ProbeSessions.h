@@ -1,0 +1,143 @@
+#pragma once
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
+namespace probe {
+static constexpr uint16_t kNoConnection = 0xffff;
+enum class Role : uint8_t { Unassigned, Maintenance, Keyboard };
+struct Token {
+  uint16_t id = kNoConnection;
+  uint32_t generation = 0;
+  bool operator==(const Token &other) const {
+    return id == other.id && generation == other.generation;
+  }
+};
+struct Peer {
+  bool used = false;
+  Token token;
+  uint8_t address[6] = {};
+  Role role = Role::Unassigned;
+  bool secure = false;
+  bool uartNotify = false;
+  bool reportNotify = false;
+  bool bootNotify = false;
+  bool reportProtocol = true;
+  bool suspended = false;
+  bool congested = false;
+  bool capsLock = false;
+  bool authorized = false;
+  uint8_t authFailures = 0;
+  bool authLocked = false;
+  uint16_t mtu = 23;
+};
+
+// No BLE/global CCCD state: every capability belongs to a connection generation.
+// Callers serialize accesses; the sketch uses a portMUX around this small table.
+class Sessions {
+ public:
+  static constexpr size_t capacity = 2;
+  Peer peers[capacity];
+
+  Token connect(uint16_t id, const uint8_t *address) {
+    if (id == kNoConnection || byId(id)) return {};
+    for (const auto &p : peers) if (p.used && !std::memcmp(p.address, address, 6)) return {};
+    for (auto &p : peers) {
+      if (p.used) continue;
+      p = Peer{};
+      p.used = true;
+      p.token = {id, ++generation_};
+      if (!p.token.generation) p.token.generation = ++generation_;
+      std::memcpy(p.address, address, 6);
+      return p.token;
+    }
+    return {};
+  }
+  bool disconnect(uint16_t id) {
+    auto *p = byId(id);
+    if (!p) return false;
+    *p = Peer{};
+    return true;
+  }
+  size_t count() const {
+    size_t n = 0;
+    for (const auto &p : peers) n += p.used;
+    return n;
+  }
+  Peer *byId(uint16_t id) {
+    for (auto &p : peers) if (p.used && p.token.id == id) return &p;
+    return nullptr;
+  }
+  Peer *find(Token token) {
+    auto *p = byId(token.id);
+    return p && p->token == token ? p : nullptr;
+  }
+  const Peer *find(Token token) const {
+    for (const auto &p : peers) if (p.used && p.token == token) return &p;
+    return nullptr;
+  }
+  Token role(Role role) const {
+    for (const auto &p : peers) if (p.used && p.role == role) return p.token;
+    return {};
+  }
+  bool secureAddress(const uint8_t *address, bool secure) {
+    for (auto &p : peers) {
+      if (!p.used || std::memcmp(p.address, address, 6)) continue;
+      p.secure = secure;
+      if (!secure) p.authorized = false;
+      return true;
+    }
+    return false;
+  }
+  bool claimMaintenance(Token token) {
+    auto *p = find(token);
+    if (!p || !p->secure || !p->uartNotify || p->role == Role::Keyboard) return false;
+    auto existing = role(Role::Maintenance);
+    if (existing.id != kNoConnection && !(existing == token)) return false;
+    p->role = Role::Maintenance;
+    return true;
+  }
+  // Explicit admin action: a CCCD write by itself never becomes a keyboard role.
+  bool bindKeyboard(Token token) {
+    auto *p = find(token);
+    if (!p || !p->secure || p->role == Role::Maintenance || !subscription(*p)) return false;
+    auto existing = role(Role::Keyboard);
+    if (existing.id != kNoConnection && !(existing == token)) return false;
+    p->role = Role::Keyboard;
+    return true;
+  }
+  void unbindKeyboard() {
+    for (auto &p : peers) if (p.role == Role::Keyboard) p.role = Role::Unassigned;
+  }
+  bool authorize(Token token, bool correct) {
+    auto *p = find(token);
+    if (!p || p->role != Role::Maintenance || !p->secure || p->authLocked) return false;
+    if (correct) { p->authorized = true; p->authFailures = 0; return true; }
+    p->authorized = false;
+    if (++p->authFailures >= 3) p->authLocked = true;
+    return false;
+  }
+  void revoke(Token token) { if (auto *p = find(token)) p->authorized = false; }
+  bool authorized(Token token) const {
+    auto *p = find(token);
+    return p && p->role == Role::Maintenance && p->secure && p->authorized;
+  }
+  bool uartReady(Token token) const {
+    auto *p = find(token);
+    return p && p->role == Role::Maintenance && p->secure && p->uartNotify;
+  }
+  bool keyboardTarget(Token token) const {
+    auto *p = find(token);
+    return p && p->role == Role::Keyboard && p->secure && subscription(*p);
+  }
+  bool keyboardReady(Token token) const {
+    auto *p = find(token);
+    return keyboardTarget(token) && !p->suspended;
+  }
+ private:
+  uint32_t generation_ = 0;
+  static bool subscription(const Peer &p) {
+    return p.reportProtocol ? p.reportNotify : p.bootNotify;
+  }
+};
+}  // namespace probe
