@@ -1,4 +1,4 @@
-# Validación — PLC Scanner 3.0.9-rc1
+# Validación — PLC Scanner 3.0.10-rc1
 
 Fecha: 3 de noviembre de 2026.
 
@@ -11,9 +11,9 @@ Fecha: 3 de noviembre de 2026.
 | Objetivo | ESP32-S3 Dev Module, USB CDC habilitado, Minimal SPIFFS con OTA |
 | Arduino-ESP32 | 3.0.7 |
 | ADS1X15 / BusIO | 2.5.0 / 1.16.2 |
-| Tamaño de programa | 1.617.037 bytes, 82 % de 1.966.080 bytes de partición |
-| Datos globales estáticos | 71.636 bytes, 21 % de 327.680 bytes |
-| Pruebas de regresión en host | 107 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED + 65 de identidad + 30 de diagnóstico STATUS + 79.297 de altura/transporte + 10 casos de compilación OTA y 40 comprobaciones OTA + 24 de arranque WiFi/DHCP |
+| Tamaño de programa | 1.618.293 bytes, 82 % de 1.966.080 bytes de partición |
+| Datos globales estáticos | 71.668 bytes, 21 % de 327.680 bytes |
+| Pruebas de regresión en host | 107 aserciones de regresión + 5 comprobaciones de compilación del PIN + 48.041 comprobaciones del LED + 65 de identidad + 30 de diagnóstico STATUS + 79.297 de altura/transporte + 10 casos de compilación OTA y 40 comprobaciones OTA + 24 de arranque WiFi/DHCP + 143 de enrutado |
 
 La memoria libre indicada por el compilador no mide el consumo dinámico de BLE/WiFi, colas y tareas durante el funcionamiento. Debe medirse en placa en una prueba prolongada.
 
@@ -141,3 +141,32 @@ USBMode=hwcdc y min_spiffs, --warnings all. Sketch 1.617.037 / 1.966.080 bytes (
 globales 71.636 / 327.680 bytes (21%). Sin avisos del sketch en esta compilación.
 Regresiones lógica/PIN/STATUS/LED/identidad/altura/OTA y 24 comprobaciones WiFi
 superadas. git diff --check correcto. Sin validación física del arreglo DHCP.
+
+
+## Canal de origen, saludo y lecturas (3.0.10-rc1)
+
+143 aserciones nuevas ejecutan el despachador, parser TCP y transmisor reales con
+ambos enlaces simulados activos. Cubren consultas desde BLE/TCP, ACK/errores de
+configuración, NETSTAT automático solo BLE, contexto restablecido al terminar,
+respuestas de una conexión antigua, escrituras parciales antes de reconectar,
+progreso OTA sin heredar el destino de otro comando, las seis lecturas desde
+ambos orígenes con igualdad de bytes V2 en ambos canales, un canal ausente,
+eventos con ACKMODE=0/1, saludo inicial y cola llena, NETSTAT? por TCP, rechazo de
+comandos remotos de configuración y fragmentos de socket anterior descartados.
+Se usa el serializador STATUS real en test_status.py; el harness de enrutado usa
+un payload de STATUS reducido para comprobar su selección de canal.
+
+Regresiones: 107 de lógica, 5 compilaciones PIN, 24 WiFi/DHCP, 30 STATUS,
+48.041 LED, 65 identidad, 79.297 altura/transporte y pruebas de clave/SSID OTA
+(10 compilaciones + 40 aserciones) superadas. Los cambios del harness compartido
+solo añaden los tipos/generaciones y mocks necesarios para las funciones reales.
+
+Compilación completa core 3.0.7, ESP32-S3 CDCOnBoot=cdc, USBMode=hwcdc y min_spiffs,
+--warnings all: 1.618.293 / 1.966.080 bytes (82%); globales 71.668 / 327.680 (21%).
+No mide el uso dinámico de las colas; TxPacket aumenta su metadata en RAM. El
+formato de PersistentOutbox en NVS no se modifica. git diff --check correcto.
+
+Pendiente en equipo: un saludo TCP por conexión; app BLE sin duplicar diagnóstico
+en TCP; NETSTAT? desde servidor; L/B/A/P/D/I desde ambos canales; eventos y ACK;
+reconexiones durante transmisión parcial y OTA completa con progreso BLE. Las
+pruebas host no certifican entrega radio ni recepción/almacenamiento por el SGA.

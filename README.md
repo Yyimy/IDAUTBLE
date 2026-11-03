@@ -5,7 +5,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 | Componente | Carpeta | Versión |
 |---|---|---|
 | App Android | [android/](android/) | 1.3.15-plc3, versionCode 19 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.9-rc1 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.10-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -381,3 +381,16 @@ No requiere actualizar la app ni cambiar la configuración guardada.
 Tras cargarlo, comprobar NETSTAT?: IP válida de la red y, si el servidor escucha,
 TCP=UP. NET? conserva los campos IP/GW/MASK del modo STATIC; en DHCP la dirección
 real se consulta con NETSTAT?, no se presupone la IP estática guardada.
+
+
+## TCP y separación de respuestas (firmware 3.0.10)
+
+Al conectar TCP se envía una sola línea CONNECTED con RTC, ID e IP conservados
+al principio, seguida de PROTO, FW, ACKMODE y HEARTBEAT; termina en CRLF.
+Las consultas de configuración/diagnóstico responden solo por la conexión que
+las pidió. El mantenimiento BLE no añade CONECTADO, INFO o STATUS al servidor.
+NETSTAT de cambios de enlace se anuncia solo a BLE; TCP puede solicitar NETSTAT?.
+Las lecturas binarias L/B/A/P/D/I y los eventos de palet conservan las salidas
+BLE y TCP cuando están disponibles, también si la orden la envía el operario por BLE.
+No cambia la trama V2 ni el modo de confirmación/persistencia de eventos.
+Detalles y matriz de pruebas en firmware/LEEME.md y firmware/VALIDACION.md.

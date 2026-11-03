@@ -1,5 +1,5 @@
-Corrección DHCP — 03/11/2026
-Firmware: 3.0.9-rc1. Arduino-ESP32: 3.0.7.
+Enrutado de respuestas y saludo TCP — 03/11/2026
+Firmware: 3.0.10-rc1. Arduino-ESP32: 3.0.7.
 
 PASS: 107 assertions against extracted production functions
 PASS: 5 compilation checks for configurable PIN
@@ -7,14 +7,14 @@ PASS: 48041 LED assertions against production functions
 PASS: 65 identity assertions against production functions
 PASS: 30 STATUS assertions against production functions
 PASS: 24 WiFi/DHCP assertions against production startup
-PASS: original DHCP implementation fails the new DHCP regression as expected
+PASS: 143 reply/reading/event routing assertions
 PASS: 79297 height/transport assertions, including 19801 valid millimetre values
 PASS: 10 OTA password compilation cases
 PASS: 20 OTA password/SSID assertions for each of 2 compiled password variants
 
 Compilación Arduino CLI correcta:
 esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,PartitionScheme=min_spiffs
-Sketch: 1617037 / 1966080 bytes (82%). Globals: 71636 / 327680 bytes (21%).
+Sketch: 1618293 / 1966080 bytes (82%). Globals: 71668 / 327680 bytes (21%).
 Adafruit ADS1X15 2.5.0; Adafruit BusIO 1.16.2.
 git diff --check: correcto.
 

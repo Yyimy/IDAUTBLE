@@ -1,4 +1,4 @@
-# PLC Scanner 3.0.9-rc1 — código completo corregido
+# PLC Scanner 3.0.10-rc1 — código completo corregido
 
 Versión candidata para validación en banco. Derivada del archivo adjunto del 29/10/2026. Conserva los comandos binarios de cuatro bytes y la trama V2, con las diferencias de integración indicadas abajo. No se ha probado físicamente en la placa.
 
@@ -410,3 +410,50 @@ Pruebas en banco pendientes: DHCP desde arranque, cambio STATIC → DHCP, reinic
 WiFi OFF/ON, restauración tras abortar OTA y conexión al servidor con IP válida.
 El test host nuevo se ejecuta con python3 firmware/tests/test_network.py; el mismo
 test falla con la función original que usaba INADDR_NONE.
+
+
+## Saludo TCP y canal de respuesta (3.0.10-rc1)
+
+Al abrir cada conexión TCP se encola una única línea de saludo, sin ACK inicial:
+
+```text
+CONNECTED;RTC=2026-11-03T10:43:38;ID=TRUCK-1;IP=192.0.2.22;PROTO=V2;FW=3.0.10-rc1;ACKMODE=0;HEARTBEAT=0<CR><LF>
+```
+
+RTC, ID e IP conservan el orden anterior; los campos nuevos se añaden al final.
+El servidor debe interpretar claves por nombre e ignorar las desconocidas.
+PROTO identifica las tramas de lectura; FW es la versión ejecutada; ACKMODE y
+HEARTBEAT anuncian los modos existentes, sin activarlos. El saludo pasa por la
+cola de transmisión con reanudación de escrituras parciales. Si no cabe en la
+cola, se cierra esa conexión y se reintenta: no se inicia tráfico sin su saludo.
+Un comando C recibido por TCP devuelve el mismo saludo completo bajo petición.
+
+| Mensaje | Destino |
+|---|---|
+| C de BLE, INFO?, STATUS?, DIAG?, ID? y consultas/confirmaciones de configuración | Solo la conexión de origen |
+| NETSTAT automático por cambios de enlace | BLE; no se añade al saludo TCP |
+| Consultas TCP NET?, NETSTAT?, CFG?, WIFI?, ALT? y OTA? | Solo TCP, lectura sin habilitar mantenimiento remoto |
+| Lecturas binarias L/B/A/P/D/I | BLE y TCP disponibles, independientemente de quién las solicita |
+| Eventos de carga/descarga y avisos operativos existentes | Conservan ambos destinos |
+| Progreso/error OTA asíncrono | Solo la sesión BLE que inició esa OTA |
+
+NET? sigue ocultando PWD con ***. No se permite configurar el equipo ni autorizar
+mantenimiento por TCP. Los ACK de eventos y PING/PONG conservan su funcionamiento.
+Las consultas OTA tras reconectar responden a la nueva sesión que las solicita;
+no se reenvían a ella notificaciones pendientes de la sesión BLE anterior.
+
+La selección de destino viaja en TxPacket (RAM). Las respuestas dirigidas se
+vinculan a la generación de su conexión: no pasan a otro canal ni a una conexión
+nueva tras desconectar. El parser TCP también descarta fragmentos de un socket
+anterior. El contexto de respuesta solo existe durante el despacho de comandos
+en el loop; callbacks BLE y la tarea OTA usan destinos explícitos.
+
+Las lecturas conservan su trama V2 y el temporizador de altura A. Los registros
+EventRecord/PersistentOutbox y su formato NVS no cambian. Con ACKMODE=0 un evento
+sale de la cola cuando uno de los transportes acepta el envío, como antes; no se
+ha añadido confirmación de almacenamiento en el servidor a las lecturas manuales.
+
+Actualizar la carpeta completa PLC_Scanner_v3, incluido Types.h. No requiere
+cambiar la app Android. Prueba en banco: conectar BLE/TCP a la vez, confirmar un
+solo saludo, consultar diagnóstico desde cada canal y pedir lecturas por BLE;
+el servidor debe recibir las tramas de lectura, sin las consultas de la app.

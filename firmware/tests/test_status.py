@@ -31,7 +31,7 @@ shim = literal(root/'tests/test_led.py', 'shim').replace('using String = std::st
 globals_ = source[source.index('static LedMode gLedMode'):source.index('// BLE - GLOBALES')]
 types = re.search(r'enum LedMode[^}]+};', (root/'PLC_Scanner_v3/Types.h').read_text()).group()
 extra = r'''
-#define FIRMWARE_VERSION "3.0.9-rc1"
+#define FIRMWARE_VERSION "3.0.10-rc1"
 String gId="TRUCK-1";
 bool gFotoLista=true, gCutConfirmed=false;
 char gFotoEstado='1', gCutReason[40]="";
@@ -42,7 +42,7 @@ int count=0;
 #define CHECK(x) do {++count;if(!(x)){fprintf(stderr,"FAIL %d %s\n",__LINE__,#x);return 1;}}while(0)
 void fresh(){gBatValidMs[0]=gBatValidMs[1]=nowMs;}
 int main(){
-  fresh(); sendDeviceStatus(); CHECK(acknowledged); CHECK(contains("STATUS=1;FW=3.0.9-rc1;ID=TRUCK-1;LED=DISCONNECTED;WHY=BLE_REQUIRED"));
+  fresh(); sendDeviceStatus(); CHECK(acknowledged); CHECK(contains("STATUS=1;FW=3.0.10-rc1;ID=TRUCK-1;LED=DISCONNECTED;WHY=BLE_REQUIRED"));
   CHECK(contains(";B1=PRESENT;B1V=18.00;B1P=66;B1AGE=0")); CHECK(contains(";LOWEST=BOTH"));
   bleReady=true; sendDeviceStatus(); CHECK(contains(";LED=READY;WHY=LINK_READY"));
   // Both slots fitted: battery 2 at 15% must determine the low-battery alert.
@@ -77,5 +77,5 @@ with tempfile.TemporaryDirectory(prefix='plc_status_') as tmp:
     subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror',str(cpp),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)
 # Both transports must recognise the new read-only command.
-assert '!strcmp(line, "STATUS?")' in source
+# TCP STATUS? dispatch and origin routing are exercised by test_routing.py.
 assert 'rxTrim == "STATUS?"' in source
