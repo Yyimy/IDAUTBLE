@@ -486,7 +486,7 @@ static std::atomic<bool> gBleSecure{false};
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.8-rc1"
+#define FIRMWARE_VERSION "3.0.9-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static BLE2902 *gCccd = nullptr;
@@ -980,8 +980,13 @@ static void wifiStartFromConfig() {
       return;
     }
   } else {
-    if (!WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE))
+    // Arduino-ESP32 3.0.7 starts DHCP only when local_ip is 0.0.0.0.
+    // INADDR_NONE is 255.255.255.255 and is treated as a static address.
+    const IPAddress dhcp(0, 0, 0, 0);
+    if (!WiFi.config(dhcp, dhcp, dhcp)) {
       logLine("WiFi.config DHCP fallo");
+      return;
+    }
   }
   WiFi.setAutoReconnect(true);
   WiFi.begin(gNetSsid.c_str(), gNetPwd.c_str());

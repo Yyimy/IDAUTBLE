@@ -1,4 +1,4 @@
-# PLC Scanner 3.0.8-rc1 — código completo corregido
+# PLC Scanner 3.0.9-rc1 — código completo corregido
 
 Versión candidata para validación en banco. Derivada del archivo adjunto del 29/10/2026. Conserva los comandos binarios de cuatro bytes y la trama V2, con las diferencias de integración indicadas abajo. No se ha probado físicamente en la placa.
 
@@ -386,3 +386,27 @@ primer espacio. La red aparece al iniciar OTA desde la app, no permanentemente.
 Tras actualizar clave o nombre, seleccionar la red correcta en Android y
 actualizar sus credenciales guardadas si fuera necesario. El flujo OTA de dos
 fases, el hash, la trama V2 y las funciones de altura/baterías no se modifican.
+
+
+## Corrección DHCP (3.0.9-rc1)
+
+Con Arduino-ESP32 3.0.7, NetworkInterface::config considera estática cualquier IP
+local distinta de cero. El valor INADDR_NONE es 255.255.255.255: no activa DHCP.
+El síntoma era LINK=UP, señal WiFi disponible e IP=255.255.255.255, sin acceso TCP.
+Se sustituye por IPAddress(0,0,0,0) para los tres parámetros de la rama DHCP y se
+interrumpe el arranque si WiFi.config devuelve error. La rama STATIC y la llamada
+común de restauración de red tras OTA se mantienen.
+
+Referencia del core fijado: [NetworkInterface.cpp 3.0.7](https://github.com/espressif/arduino-esp32/blob/3.0.7/libraries/Network/src/NetworkInterface.cpp),
+condiciones local_ip != 0 e info.ip.addr == 0; la API WiFi.config delega en STA.config.
+
+No hay cambios de NVS, contraseña WiFi, servidor, app, UUIDs o trama V2. Tras cargar
+el firmware, habilitar WiFi, esperar la concesión DHCP y consultar NETSTAT?. La IP
+asignada la decide el router; NET? sigue mostrando la IP/GW/MASK estática guardada.
+Para ping o conexión se utiliza la IP de NETSTAT?, no necesariamente aquella.
+En modo DHCP, HOST sigue siendo la dirección del servidor y PORT su puerto TCP.
+
+Pruebas en banco pendientes: DHCP desde arranque, cambio STATIC → DHCP, reinicio,
+WiFi OFF/ON, restauración tras abortar OTA y conexión al servidor con IP válida.
+El test host nuevo se ejecuta con python3 firmware/tests/test_network.py; el mismo
+test falla con la función original que usaba INADDR_NONE.
