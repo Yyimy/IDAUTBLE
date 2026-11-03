@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.17-plc3, versionCode 21 |
+| App Android | [android/](android/) | 1.3.18-plc3, versionCode 22 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.11-rc1 |
 
 ## Trabajar sin ZIP
@@ -431,3 +431,25 @@ por cada trama ni posponer indefinidamente con tráfico continuo. Se mantienen
 las pausas de OTA, transporte ocupado y segundo plano, y la limpieza al desconectar.
 
 Solo cambia la app. El firmware 3.0.11-rc1 que ofrece COUNTERS? sigue siendo válido.
+
+## NETWORK: configuración y conexión (app 1.3.18)
+
+NETWORK lee automáticamente la configuración por BLE, incluso con WiFi desactivado,
+y muestra por separado ajustes guardados, asociación WiFi, IP real y conexión TCP.
+La contraseña permanece oculta; `***` conserva el valor existente al guardar.
+Los cambios sin guardar se mantienen al cambiar de pestaña y se borran al desconectar.
+
+El guardado requiere OK más una configuración coincidente; habilitar WiFi requiere
+OK más el estado recibido del PLC. Ninguna de esas confirmaciones asegura conexión
+con el servidor. El estado se refresca cada 5 s con la pestaña visible y la app en primer
+plano, temporalmente cada 2 s tras cambios. Se pausa durante OTA.
+Hay límites de espera y mensajes distintos para problemas de WiFi, DHCP/IP y TCP.
+Las escrituras no se reintentan automáticamente, y una orden pendiente de PIN que
+ha caducado no se envía más tarde. Detalle y pruebas de campo en
+[la guía Android](android/LEEME_PLC3.md#red).
+
+Prueba en teléfono/PLC: abrir NETWORK con WiFi OFF, editar y cambiar de pestaña,
+volver sin perder el borrador, guardar con PIN y confirmar lectura devuelta, habilitar
+WiFi y comprobar IP DHCP/TCP reales. Probar también contraseña incorrecta, servidor
+parado, cancelar PIN y desconectar/cambiar de PLC. La compilación y pruebas JVM no
+sustituyen esta validación física.

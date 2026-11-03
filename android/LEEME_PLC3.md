@@ -1,6 +1,6 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.6
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.17-plc3** (versionCode 21).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.18-plc3** (versionCode 22).
 
 ## Abrir y compilar
 
@@ -35,12 +35,32 @@ Los comandos pendientes de autorización se cancelan al cerrar el diálogo o des
 
 ## Red
 
-- `NET?` puede devolver `PWD=***`. La pantalla indica que es una contraseña guardada.
-- Al aplicar sin editar ese campo, la app **omite PWD**, conservando la clave existente en el PLC.
-- Para cambiarla, escribe la nueva. **Dejar el campo vacío envía una contraseña vacía**; no significa conservarla.
-- Los campos no admiten `;` ni saltos de línea, porque ese protocolo usa esos delimitadores.
-- Configuración NET e indicadores NETSTAT se almacenan por separado. Si llegan en la misma ráfaga, no se pierde la configuración. Leer de nuevo la misma configuración también refresca los campos editados.
-- Un OK significa que el PLC ha aceptado el comando; revisa WiFi, LINK y TCP para confirmar el estado de conexión.
+Al abrir **NETWORK**, la app consulta `NET?` por Bluetooth y después `NETSTAT?`.
+Funciona aunque el WiFi del PLC esté desactivado; consultar no lo activa y no requiere
+el PIN de mantenimiento. Los cambios de configuración y encendido de WiFi sí requieren
+la autorización habitual.
+
+- **PLC CONFIGURATION** muestra los ajustes guardados. **LIVE CONNECTION** muestra
+  por separado WiFi habilitado, asociación WiFi, IP real y conexión TCP.
+- En DHCP, la IP real puede ser distinta de la IP estática guardada. El servidor guardado
+  y su puerto tampoco son la IP del PLC.
+- `PWD=***` indica una contraseña oculta. Al guardar sin cambiarla se omite PWD para
+  conservar la clave. Escribir otra la sustituye; dejarla vacía envía una contraseña vacía.
+- Guardar se confirma con `OK` y una configuración devuelta que coincida con los campos
+  enviados. No implica que WiFi o TCP ya estén conectados. El contenido de la contraseña
+  no se puede contrastar porque el PLC siempre lo oculta.
+- El estado se consulta cada 5 s mientras NETWORK está visible y la app en primer plano,
+  cada 2 s durante los primeros 30 s tras habilitar WiFi o guardar. Durante OTA se pausa.
+  Este refresco es independiente de las opciones de DEVICE STATUS.
+- Los cambios sin guardar sobreviven al cambio de pestaña. Leer de nuevo conserva esos
+  cambios y actualiza la referencia del PLC; **Discard edits** recupera los últimos valores
+  recibidos sin enviar ninguna escritura. Desconectar o cambiar de PLC borra el formulario.
+- No se repiten automáticamente escrituras. La espera de autorización/envío caduca a los
+  60 s y la confirmación a los 8 s desde la petición de envío BLE. Los cambios caducados
+  pendientes de PIN se descartan. Una escritura ya enviada puede haberse aplicado aunque
+  no llegue su respuesta: vuelve a leer antes de reintentarlo.
+- Se validan delimitadores, tamaños UTF-8, servidor/puerto y subred estática antes de guardar.
+  Los errores diferencian falta de asociación WiFi, falta de IP y TCP sin conectar.
 
 ## OTA
 
