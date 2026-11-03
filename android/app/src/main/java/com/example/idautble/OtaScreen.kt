@@ -13,6 +13,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -23,6 +24,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -205,8 +207,8 @@ fun OtaScreen(
     val abortEnabled = canAbort && bleLinkState == BleLinkState.CONNECTED
 
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
 
         // ===== BLE LINK STATUS =====
@@ -218,15 +220,13 @@ fun OtaScreen(
                 BleLinkState.DISCONNECTED -> "BLE: DISCONNECTED" to Color(0xFFC62828)
             }
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = bleColor.copy(alpha = 0.10f)),
-        ) {
+        MaintenanceCard(modifier = Modifier.fillMaxWidth()) {
             Row(
-                modifier = Modifier.padding(10.dp),
+                modifier = Modifier.padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                Box(Modifier.size(6.dp).background(bleColor, CircleShape))
                 Text(
                     bleText,
                     color = bleColor,
@@ -255,95 +255,112 @@ fun OtaScreen(
             )
         }
 
-        // ===== FILA SUPERIOR =====
-
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Button(
-                shape = RoundedCornerShape(6.dp),
-                onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                enabled = !session.busy && !serverRunning && !calculating,
-                colors =
-                    ButtonDefaults.buttonColors(
-                        containerColor = SelectFirmwareColor,
-                        contentColor = Color.Black,
-                    ),
-            ) {
-                Text("Select Firmware")
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Text(
-                text = fileName ?: "No firmware selected",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-
-        Divider()
-
-        // ===== INFO TECNICA =====
-
-        if (calculating) {
-            PlcIndeterminateBar(modifier = Modifier.fillMaxWidth())
-            Text("Calculating SHA256...", style = MaterialTheme.typography.bodySmall)
-        }
-
-        Column {
-            Text(
-                text = "Size: ${fileSize ?: 0} bytes     SHA256: ${sha256 ?: "-"}",
-                style = MaterialTheme.typography.bodySmall,
-                lineHeight = 5.sp,
-                modifier = Modifier.padding(bottom = 1.dp),
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top, // <-- CAMBIO CLAVE
-            ) {
+        MaintenanceCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "IP: ${deviceIp ?: "-"}     URL: ${urlNow ?: "-"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    lineHeight = 5.sp,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    "FIRMWARE & HTTP SERVER",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
                 )
-            }
-        }
+                // ===== FILA SUPERIOR =====
 
-        // ===== BOTONES: SERVER + REFRESH IP (MISMA LINEA) =====
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Button(
+                        shape = RoundedCornerShape(6.dp),
+                        onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+                        enabled = !session.busy && !serverRunning && !calculating,
+                        colors =
+                            ButtonDefaults.buttonColors(
+                                containerColor = SelectFirmwareColor,
+                                contentColor = Color.Black,
+                            ),
+                    ) {
+                        Text("Select Firmware")
+                    }
 
-            // Botón principal (ocupa el espacio)
-            Button(
-                shape = RoundedCornerShape(6.dp),
-                onClick = {
-                    if (serverRunning) session.stopServer() else session.startServer()
-                    refreshIpNow()
-                },
-                modifier = Modifier.weight(1f),
-                enabled = !session.busy && (serverRunning || canStartServer),
-                colors =
-                    ButtonDefaults.buttonColors(
-                        containerColor = if (serverRunning) StopServerColor else StartServerColor,
-                        contentColor = Color.White,
-                    ),
-            ) {
-                Text(if (serverRunning) "Stop HTTP Server" else "Run HTTP Server", maxLines = 1)
-            }
+                    Spacer(modifier = Modifier.width(8.dp))
 
-            // Botón secundario (compacto)
-            OutlinedButton(
-                shape = RoundedCornerShape(6.dp),
-                onClick = { refreshIpNow() },
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            ) {
-                Text("Refresh IP", maxLines = 1)
+                    Text(
+                        text = fileName ?: "No firmware selected",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                // ===== INFO TECNICA =====
+
+                if (calculating) {
+                    PlcIndeterminateBar(modifier = Modifier.fillMaxWidth())
+                    Text("Calculating SHA256...", style = MaterialTheme.typography.bodySmall)
+                }
+
+                Column {
+                    Text(
+                        text = "Size: ${fileSize ?: 0} bytes     SHA256: ${sha256 ?: "-"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        lineHeight = 13.sp,
+                        modifier = Modifier.padding(bottom = 1.dp),
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top, // <-- CAMBIO CLAVE
+                    ) {
+                        Text(
+                            text = "IP: ${deviceIp ?: "-"}     URL: ${urlNow ?: "-"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            lineHeight = 13.sp,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                // ===== BOTONES: SERVER + REFRESH IP (MISMA LINEA) =====
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+
+                    // Botón principal (ocupa el espacio)
+                    Button(
+                        shape = RoundedCornerShape(6.dp),
+                        onClick = {
+                            if (serverRunning) session.stopServer() else session.startServer()
+                            refreshIpNow()
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = !session.busy && (serverRunning || canStartServer),
+                        colors =
+                            ButtonDefaults.buttonColors(
+                                containerColor =
+                                    if (serverRunning) StopServerColor else StartServerColor,
+                                contentColor = Color.White,
+                            ),
+                    ) {
+                        Text(
+                            if (serverRunning) "Stop HTTP Server" else "Run HTTP Server",
+                            maxLines = 1,
+                        )
+                    }
+
+                    // Botón secundario (compacto)
+                    OutlinedButton(
+                        shape = RoundedCornerShape(6.dp),
+                        onClick = { refreshIpNow() },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        Text("Refresh IP", maxLines = 1)
+                    }
+                }
             }
         }
 
@@ -355,16 +372,9 @@ fun OtaScreen(
         ) {
 
             // ===== STEP 1 CARD =====
-            Card(
-                modifier = Modifier.weight(1f),
-                colors =
-                    CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                shape = RoundedCornerShape(12.dp),
-            ) {
+            MaintenanceCard(modifier = Modifier.weight(1f)) {
                 Column(
-                    modifier = Modifier.padding(5.dp),
+                    modifier = Modifier.padding(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Row(
@@ -373,6 +383,7 @@ fun OtaScreen(
                     ) {
                         Text(
                             "STEP 1",
+                            fontFamily = FontFamily.Monospace,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.Bold,
@@ -436,16 +447,9 @@ fun OtaScreen(
             }
 
             // ===== STEP 2 CARD =====
-            Card(
-                modifier = Modifier.weight(1f),
-                colors =
-                    CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                shape = RoundedCornerShape(12.dp),
-            ) {
+            MaintenanceCard(modifier = Modifier.weight(1f)) {
                 Column(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Row(
@@ -454,6 +458,7 @@ fun OtaScreen(
                     ) {
                         Text(
                             "STEP 2",
+                            fontFamily = FontFamily.Monospace,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.Bold,
@@ -517,85 +522,97 @@ fun OtaScreen(
         }
 
         if (showOtaPanel) {
-            val statusText =
-                when {
-                    otaErr != null -> "OTA ERROR: $otaErr"
+            MaintenanceCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val statusText =
+                        when {
+                            otaErr != null -> "OTA ERROR: $otaErr"
 
-                    otaUiState == OtaUiState.MODE_STARTING -> "Starting OTA mode..."
+                            otaUiState == OtaUiState.MODE_STARTING -> "Starting OTA mode..."
 
-                    otaUiState == OtaUiState.WAITING_CLIENT -> "Waiting PLC WiFi client..."
+                            otaUiState == OtaUiState.WAITING_CLIENT -> "Waiting PLC WiFi client..."
 
-                    otaUiState == OtaUiState.WAITING_PARAMS -> "Waiting firmware parameters..."
+                            otaUiState == OtaUiState.WAITING_PARAMS ->
+                                "Waiting firmware parameters..."
 
-                    otaUiState == OtaUiState.DOWNLOADING -> "Downloading firmware..."
+                            otaUiState == OtaUiState.DOWNLOADING -> "Downloading firmware..."
 
-                    otaUiState == OtaUiState.FLASHING -> "Flashing firmware..."
+                            otaUiState == OtaUiState.FLASHING -> "Flashing firmware..."
 
-                    otaUiState == OtaUiState.ABORTING -> "Aborting OTA..."
+                            otaUiState == OtaUiState.ABORTING -> "Aborting OTA..."
 
-                    otaUiState == OtaUiState.DONE ->
-                        session.confirmationText ?: "Firmware accepted. Waiting for restart..."
+                            otaUiState == OtaUiState.DONE ->
+                                session.confirmationText
+                                    ?: "Firmware accepted. Waiting for restart..."
 
-                    session.busy -> "Waiting PLC response..."
+                            session.busy -> "Waiting PLC response..."
 
-                    else -> ""
-                }
-
-            Text(text = "OTA: $statusText", style = MaterialTheme.typography.bodySmall)
-
-            // Barra indeterminada si no hay porcentaje aún
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-
-                // ===== PROGRESS BAR =====
-                Box(modifier = Modifier.weight(1f)) {
-                    when (otaUiState) {
-                        OtaUiState.IDLE -> {
-                            // ✅ NO barra
-                            Spacer(Modifier.height(0.dp))
+                            else -> ""
                         }
 
-                        OtaUiState.ABORTING -> {
-                            // ✅ si quieres, tampoco barra al abortar
-                            Spacer(Modifier.height(0.dp))
-                        }
+                    Text(text = "OTA: $statusText", style = MaterialTheme.typography.bodySmall)
 
-                        OtaUiState.DOWNLOADING,
-                        OtaUiState.FLASHING -> {
-                            if (otaPct == null) {
-                                PlcIndeterminateBar(modifier = Modifier.fillMaxWidth())
-                            } else {
-                                val p = (otaPct.coerceIn(0, 100)) / 100f
-                                PlcProgressBar(progress = p, modifier = Modifier.fillMaxWidth())
+                    // Barra indeterminada si no hay porcentaje aún
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+
+                        // ===== PROGRESS BAR =====
+                        Box(modifier = Modifier.weight(1f)) {
+                            when (otaUiState) {
+                                OtaUiState.IDLE -> {
+                                    // ✅ NO barra
+                                    Spacer(Modifier.height(0.dp))
+                                }
+
+                                OtaUiState.ABORTING -> {
+                                    // ✅ si quieres, tampoco barra al abortar
+                                    Spacer(Modifier.height(0.dp))
+                                }
+
+                                OtaUiState.DOWNLOADING,
+                                OtaUiState.FLASHING -> {
+                                    if (otaPct == null) {
+                                        PlcIndeterminateBar(modifier = Modifier.fillMaxWidth())
+                                    } else {
+                                        val p = (otaPct.coerceIn(0, 100)) / 100f
+                                        PlcProgressBar(
+                                            progress = p,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                    }
+                                }
+                                OtaUiState.ERROR -> {
+                                    // ✅ En error no hay progreso: sin barra
+                                    Spacer(Modifier.height(0.dp))
+                                }
+
+                                else -> {
+                                    PlcIndeterminateBar(modifier = Modifier.fillMaxWidth())
+                                }
                             }
                         }
-                        OtaUiState.ERROR -> {
-                            // ✅ En error no hay progreso: sin barra
-                            Spacer(Modifier.height(0.dp))
-                        }
+                    }
 
-                        else -> {
-                            PlcIndeterminateBar(modifier = Modifier.fillMaxWidth())
+                    if (canAbort) {
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedButton(
+                            shape = RoundedCornerShape(6.dp),
+                            onClick = onAbortOta,
+                            enabled = abortEnabled,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors =
+                                ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color(0xFFC62828)
+                                ),
+                        ) {
+                            Text(if (abortEnabled) "Abort OTA" else "Reconnect BLE to Abort")
                         }
                     }
-                }
-            }
-
-            if (canAbort) {
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                OutlinedButton(
-                    shape = RoundedCornerShape(6.dp),
-                    onClick = onAbortOta,
-                    enabled = abortEnabled,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFC62828)),
-                ) {
-                    Text(if (abortEnabled) "Abort OTA" else "Reconnect BLE to Abort")
                 }
             }
         }

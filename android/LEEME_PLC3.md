@@ -1,6 +1,11 @@
 # IDAUT BLE — adaptación al firmware PLC 3.0.6
 
-Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.19-plc3** (versionCode 23).
+Proyecto Android Studio situado en la carpeta android/ del repositorio. Se conserva la interfaz de terminal, red y OTA, el identificador `com.example.idautble` y los UUID FFE0/FFE1. Versión de la app: **1.3.20-plc3** (versionCode 24).
+
+Desde 1.3.20, TERMINAL, NETWORK y OTA comparten tarjetas de borde fino,
+fondo suave y esquinas de 8 dp. Las pestañas tienen iconos y selección segmentada;
+la pestaña OTA sigue mostrando el porcentaje durante una actualización.
+Se conservan los colores de acciones, avisos, tráfico y errores.
 
 ## Abrir y compilar
 
