@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include "ProbeReceiver.h"
 
 namespace probe {
 static constexpr uint16_t kNoConnection = 0xffff;
@@ -19,6 +20,8 @@ struct Peer {
   uint8_t address[6] = {};
   Role role = Role::Unassigned;
   bool secure = false;
+  uint8_t addressType = 0xff;
+  ReceiverIdentity identity;
   bool uartNotify = false;
   bool reportNotify = false;
   bool bootNotify = false;
@@ -84,7 +87,7 @@ class Sessions {
     for (auto &p : peers) {
       if (!p.used || std::memcmp(p.address, address, 6)) continue;
       p.secure = secure;
-      if (!secure) p.authorized = false;
+      if (!secure) { p.authorized = false; p.identity = {}; }
       return true;
     }
     return false;

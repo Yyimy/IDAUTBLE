@@ -496,3 +496,16 @@ física de esta corrección; el firmware 3.0.11 permanece sin cambios.
   Solo el receptor debe recibir las teclas; la app conserva su log y conexión.
 - Esta comprobación necesita hardware; las pruebas unitarias y la compilación
   no validan la ausencia de recreación en el Zebra.
+
+
+### Receptor persistente del prototipo (app 1.3.23 / HID-PROBE-0.2.0)
+
+- La sección HID RECEIVER solo aparece con INFO compatible; firmware operativo y
+  probe 0.1.x no reciben consultas HIDRECEIVER? automáticas.
+- Refresh muestra la identidad, disponibilidad y ventana. Assign/Cancel/Forget/Test
+  requieren PIN / ACCESS y se bloquean durante la espera de confirmación.
+- Forget pide confirmación; conservar vínculos Bluetooth no conserva el rol receptor.
+- Sin respuesta o ante NAK, no inventar éxito ni volver a enviar teclas automáticamente.
+- Repetir reinicio, dos órdenes de conexión, pérdida/reconexión HID, identidad privada
+  y olvido según firmware/HID_Coexistence_Probe/README.md. Comprobar ausencia de teclas
+  en el terminal técnico y autorización de mantenimiento nueva tras cada conexión.

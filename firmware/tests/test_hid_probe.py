@@ -255,7 +255,7 @@ struct esp_ble_gatts_cb_param_t {
   struct {uint16_t conn_id; uint8_t remote_bda[6];} connect;
   struct {uint16_t conn_id; uint8_t reason;} disconnect;
 };
-struct esp_ble_auth_cmpl_t {bool success; uint8_t auth_mode, fail_reason; uint8_t bd_addr[6];};
+struct esp_ble_auth_cmpl_t {bool success; uint8_t auth_mode, fail_reason, addr_type; uint8_t bd_addr[6];};
 enum {ESP_LE_AUTH_REQ_MITM=4};
 enum esp_ble_sec_act_t {ESP_BLE_SEC_ENCRYPT=1, ESP_BLE_SEC_ENCRYPT_NO_MITM=2, ESP_BLE_SEC_ENCRYPT_MITM=3};
 int esp_ble_set_encryption(const uint8_t *, int) {++smpCalls; return 0;}
@@ -303,8 +303,9 @@ int main() {
   auto app=peers.byId(0)->token, hid=peers.byId(1)->token;
   peers.find(app)->uartNotify=true;peers.find(hid)->reportNotify=true;
   CHECK(!peers.claimMaintenance(app));CHECK(!peers.bindKeyboard(hid));
+  peers.find(app)->identity.valid=true;
   auth(secure,a,true,0x0d,0x51); // Garbage fail_reason on success must not be logged as failure.
-  CHECK(peers.find(app)->secure);CHECK(!peers.find(hid)->secure);CHECK(disconnects.empty());
+  CHECK(peers.find(app)->secure);CHECK(!peers.find(app)->identity.valid);CHECK(peers.find(app)->addressType==0);CHECK(!peers.find(hid)->secure);CHECK(disconnects.empty());
   CHECK(Serial.text.find("success=1 secure=1 matched=1 auth_mode=0x0d reason=0x00")!=std::string::npos);
   CHECK(peers.claimMaintenance(app));CHECK(peers.authorize(app,true));
   auth(secure,b,true,0x0d,0);CHECK(peers.bindKeyboard(hid));
