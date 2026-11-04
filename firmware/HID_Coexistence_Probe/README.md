@@ -1,4 +1,4 @@
-# HID + mantenimiento: prueba de coexistencia 0.1.0
+# HID + mantenimiento: prueba de coexistencia 0.1.1
 
 **Primer prototipo de banco, separado del firmware operativo PLC Scanner.**
 La finalidad es verificar un teclado HID en un PC Windows o terminal Android y la
@@ -41,6 +41,37 @@ Se usa la clase HID incluida en el core, sin instalar otra biblioteca ni actuali
 el core. Los envíos utilizan `esp_ble_gatts_send_indicate` con conexión explícita.
 Se evita [`BLECharacteristic::notify()` de 3.0.7](https://github.com/espressif/arduino-esp32/blob/3.0.7/libraries/BLE/src/BLECharacteristic.cpp),
 que recorre los clientes conectados y comparte el estado de su descriptor CCCD.
+
+## Corrección de emparejamiento (0.1.1)
+
+En 0.1.0 se solicitaba cifrado desde `BLEDevice` y otra vez desde el callback de
+conexión. Además, la app Android inicia su propio `createBond()`. El log
+`earlier enc was not done for same device` muestra que ya había una petición en
+curso. 0.1.1 deja el inicio del emparejamiento al terminal central (Android o host
+HID), mediante nivel `0` para el arranque automático y sin repetir la
+petición desde `onConnect`.
+
+Las características y descriptores de datos conservan permisos cifrados MITM.
+Las sesiones solo se habilitan tras autenticar con MITM; el PIN y la autorización
+por conexión siguen siendo necesarios. El nivel `0` aquí no habilita
+escrituras ni pulsaciones sin autenticar.
+
+Si ya se intentó conectar con 0.1.0:
+
+1. Cargar 0.1.1 por USB y reiniciar la placa.
+2. En el terminal de mantenimiento, olvidar **solo PLC_HID_TEST** en los ajustes
+   Bluetooth. Mantener el receptor HID desconectado durante este primer intento.
+3. Volver a buscar desde la app y pulsar Conectar. Introducir el PIN configurado
+   (123456 en el ejemplo) y esperar a `CONECTADO`.
+4. Autorizar después en PIN / ACCESS para enviar HIDPAIR/HIDTYPE, como se indica
+   abajo. El diálogo de Android y la autorización de mantenimiento son pasos distintos.
+
+El nuevo log incluye `success`, `secure`, `matched` y `auth_mode`; el motivo solo
+se muestra cuando hay un fallo. Una conexión válida debe mostrar `success=1`,
+`secure=1`, `matched=1` y después `CONECTADO` en la app. `fixed_pin_match=1`
+confirma que el PIN de la notificación coincide con el configurado sin imprimirlo.
+Si vuelve a fallar, registrar desde BLE CONNECT hasta BLE DISCONNECT, incluidos
+los nuevos campos. El código hexadecimal por sí solo no demuestra un PIN mal escrito.
 
 ## Prueba recomendada: app primero
 

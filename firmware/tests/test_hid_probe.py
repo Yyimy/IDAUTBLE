@@ -207,3 +207,135 @@ assert 'esp_ble_gatts_send_indicate' in sketch
 assert 'ESP_GATT_PERM_WRITE_ENC_MITM' in sketch
 assert 'ERR=PROBE_ONLY' in sketch
 print('PASS: directed-send/secure-write/probe-only source contracts')
+
+# Exercise the actual sketch callbacks, including the core 3.0.7 connect hook.
+# BLEDevice.cpp calls set_encryption for a non-zero m_securityLevel before
+# BLEServer invokes the sketch callback. Original 0.1.0 therefore requested twice.
+def extract_class(name):
+    start = sketch.index('class ' + name + ' :')
+    end = sketch.index('{', start) + 1
+    depth = 1
+    while depth:
+        depth += (sketch[end] == '{') - (sketch[end] == '}')
+        end += 1
+    return sketch[start:end] + ';'
+
+import re
+security_setup = re.search(r'BLEDevice::setEncryptionLevel\([^;]+;', sketch).group()
+callback_test = r'''
+#include "ProbeSessions.h"
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstdarg>
+#include <string>
+#include <vector>
+#include <array>
+using namespace probe;
+static int checks = 0, smpCalls = 0;
+#define CHECK(x) do { ++checks; if (!(x)) { fprintf(stderr,"FAIL callbacks line %d: %s\n",__LINE__,#x); exit(1); } } while(0)
+#define portENTER_CRITICAL(x) ((void)(x))
+#define portEXIT_CRITICAL(x) ((void)(x))
+static int peerMux;
+static Sessions peers;
+static const char PROBE_PIN[] = "123456";
+static std::atomic<bool> advertising{true}, advertisePending{true};
+static std::vector<std::array<uint8_t,6>> disconnects;
+static const uint8_t a[6]={1,2,3,4,5,6}, b[6]={2,3,4,5,6,7}, unknown[6]={9,9,9,9,9,9};
+struct {
+  std::string text;
+  void println(const char *s) { text+=s; text+='\n'; }
+  void printf(const char *format, ...) {
+    char line[512]; va_list args; va_start(args,format);
+    vsnprintf(line,sizeof(line),format,args); va_end(args); text+=line;
+  }
+} Serial;
+struct BLEServer {};
+struct esp_ble_gatts_cb_param_t {
+  struct {uint16_t conn_id; uint8_t remote_bda[6];} connect;
+  struct {uint16_t conn_id; uint8_t reason;} disconnect;
+};
+struct esp_ble_auth_cmpl_t {bool success; uint8_t auth_mode, fail_reason; uint8_t bd_addr[6];};
+enum {ESP_LE_AUTH_REQ_MITM=4};
+enum esp_ble_sec_act_t {ESP_BLE_SEC_ENCRYPT=1, ESP_BLE_SEC_ENCRYPT_NO_MITM=2, ESP_BLE_SEC_ENCRYPT_MITM=3};
+int esp_ble_set_encryption(const uint8_t *, int) {++smpCalls; return 0;}
+int esp_ble_gap_disconnect(const uint8_t *address) {
+  std::array<uint8_t,6> copy; std::memcpy(copy.data(),address,6); disconnects.push_back(copy); return 0;
+}
+struct BLEDevice {
+  static int level;
+  static void setEncryptionLevel(int value) {level=value;}
+};
+int BLEDevice::level=ESP_BLE_SEC_ENCRYPT_MITM;
+struct BLEServerCallbacks {
+  virtual void onConnect(BLEServer *,esp_ble_gatts_cb_param_t *) {}
+  virtual void onDisconnect(BLEServer *,esp_ble_gatts_cb_param_t *) {}
+  virtual ~BLEServerCallbacks()=default;
+};
+struct BLESecurityCallbacks {
+  virtual uint32_t onPassKeyRequest() {return 0;}
+  virtual void onPassKeyNotify(uint32_t) {}
+  virtual bool onSecurityRequest() {return false;}
+  virtual bool onConfirmPIN(uint32_t) {return false;}
+  virtual void onAuthenticationComplete(esp_ble_auth_cmpl_t) {}
+  virtual ~BLESecurityCallbacks()=default;
+};
+// CLASS_SERVER
+// CLASS_SECURITY
+static void connect(BLEServerCallbacks &callback,uint16_t id,const uint8_t *address) {
+  esp_ble_gatts_cb_param_t param{};param.connect.conn_id=id;
+  std::memcpy(param.connect.remote_bda,address,6);
+  // Model of the pinned 3.0.7 BLEDevice::gattServerEventHandler, not generic BLE.
+  if (BLEDevice::level) esp_ble_set_encryption(address,BLEDevice::level);
+  callback.onConnect(nullptr,&param);
+}
+static void auth(BLESecurityCallbacks &callback,const uint8_t *address,bool success,uint8_t mode,uint8_t reason) {
+  esp_ble_auth_cmpl_t result{};result.success=success;result.auth_mode=mode;result.fail_reason=reason;
+  std::memcpy(result.bd_addr,address,6);callback.onAuthenticationComplete(result);
+}
+int main() {
+  // SECURITY_SETUP
+  ServerCallbacks server;BLEServerCallbacks &callbacks=server;
+  SecurityCallbacks security;BLESecurityCallbacks &secure=security;
+  connect(callbacks,0,a);connect(callbacks,1,b);
+  CHECK(smpCalls==0); // Android/Windows owns initiation; zero peripheral requests.
+  CHECK(peers.count()==2);CHECK(!advertising && !advertisePending);
+  auto app=peers.byId(0)->token, hid=peers.byId(1)->token;
+  peers.find(app)->uartNotify=true;peers.find(hid)->reportNotify=true;
+  CHECK(!peers.claimMaintenance(app));CHECK(!peers.bindKeyboard(hid));
+  auth(secure,a,true,0x0d,0x51); // Garbage fail_reason on success must not be logged as failure.
+  CHECK(peers.find(app)->secure);CHECK(!peers.find(hid)->secure);CHECK(disconnects.empty());
+  CHECK(Serial.text.find("success=1 secure=1 matched=1 auth_mode=0x0d reason=0x00")!=std::string::npos);
+  CHECK(peers.claimMaintenance(app));CHECK(peers.authorize(app,true));
+  auth(secure,b,true,0x0d,0);CHECK(peers.bindKeyboard(hid));
+  CHECK(peers.keyboardReady(hid));CHECK(peers.authorized(app));
+  auth(secure,b,false,0x0d,0x51);
+  CHECK(!peers.keyboardReady(hid));CHECK(peers.authorized(app));CHECK(disconnects.size()==1);
+  CHECK(std::memcmp(disconnects.back().data(),b,6)==0);
+  CHECK(Serial.text.find("success=0 secure=0 matched=1 auth_mode=0x0d reason=0x51")!=std::string::npos);
+  auth(secure,unknown,true,0x0d,0);
+  CHECK(disconnects.size()==1);CHECK(peers.authorized(app));
+  CHECK(Serial.text.find("matched=0")!=std::string::npos);
+  auth(secure,a,true,0x09,0x51); // Success without MITM still fails closed.
+  CHECK(!peers.find(app)->secure);CHECK(!peers.authorized(app));CHECK(disconnects.size()==2);
+  CHECK(!peers.uartReady(app));CHECK(Serial.text.find("success=1 secure=0")!=std::string::npos);
+  CHECK(secure.onSecurityRequest());CHECK(secure.onPassKeyRequest()==123456);
+  secure.onPassKeyNotify(123456);secure.onPassKeyNotify(654321);
+  CHECK(Serial.text.find("fixed_pin_match=1")!=std::string::npos);
+  CHECK(Serial.text.find("fixed_pin_match=0")!=std::string::npos);
+  CHECK(Serial.text.find("123456")==std::string::npos);CHECK(Serial.text.find("654321")==std::string::npos);
+  esp_ble_gatts_cb_param_t down{};down.disconnect.conn_id=1;down.disconnect.reason=0x16;
+  callbacks.onDisconnect(nullptr,&down);CHECK(peers.count()==1);CHECK(peers.find(app));
+  CHECK(smpCalls==0);
+  printf("PASS: %d security callback/core-connect regression assertions\n",checks);
+}
+'''
+callback_test = callback_test.replace('// CLASS_SERVER', extract_class('ServerCallbacks'))
+callback_test = callback_test.replace('// CLASS_SECURITY', extract_class('SecurityCallbacks'))
+callback_test = callback_test.replace('// SECURITY_SETUP', security_setup)
+with tempfile.TemporaryDirectory(prefix='hid_pairing_test_') as tmp:
+    cpp=Path(tmp)/'callbacks.cpp';binary=Path(tmp)/'callbacks'
+    cpp.write_text(callback_test)
+    subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+                    '-fno-omit-frame-pointer','-I',str(root),str(cpp),'-o',str(binary)],check=True)
+    subprocess.run([str(binary)],check=True,env=env)
