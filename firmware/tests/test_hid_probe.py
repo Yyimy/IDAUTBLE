@@ -324,6 +324,8 @@ int main() {
   CHECK(Serial.text.find("fixed_pin_match=1")!=std::string::npos);
   CHECK(Serial.text.find("fixed_pin_match=0")!=std::string::npos);
   CHECK(Serial.text.find("123456")==std::string::npos);CHECK(Serial.text.find("654321")==std::string::npos);
+  CHECK(secure.onConfirmPIN(123456));CHECK(!secure.onConfirmPIN(654321));
+  CHECK(Serial.text.find("BLE NUMERIC_CONFIRM fixed_pin_match=0 accepted=0")!=std::string::npos);
   esp_ble_gatts_cb_param_t down{};down.disconnect.conn_id=1;down.disconnect.reason=0x16;
   callbacks.onDisconnect(nullptr,&down);CHECK(peers.count()==1);CHECK(peers.find(app));
   CHECK(smpCalls==0);
@@ -339,3 +341,55 @@ with tempfile.TemporaryDirectory(prefix='hid_pairing_test_') as tmp:
     subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
                     '-fno-omit-frame-pointer','-I',str(root),str(cpp),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True,env=env)
+
+# Run the actual advertisement and identity helpers in both diagnostic builds.
+identity_config = sketch[sketch.index('#ifndef PROBE_ADVERTISE_HID'):sketch.index('static constexpr char PROBE_PIN')]
+advertisement_test = r'''
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <cassert>
+#include <vector>
+constexpr uint16_t HID_KEYBOARD=0x03c1;
+struct BLEUUID {uint16_t value;explicit BLEUUID(uint16_t v):value(v){}};
+struct BLEAdvertising {
+  uint16_t appearance=0xffff;
+  std::vector<uint16_t> services;
+  void setAppearance(uint16_t value) {appearance=value;}
+  void addServiceUUID(BLEUUID uuid) {services.push_back(uuid.value);}
+};
+// ACTUAL_CONFIG
+int main() {
+  BLEAdvertising adv; configureProbeAdvertisement(&adv);
+  assert(PROBE_HID_ADVERTISEMENT==(PROBE_ADVERTISE_HID==1));
+  assert(std::strcmp(PROBE_NAME,PROBE_ADVERTISE_HID ? "PLC_HID_AB" : "PLC_BLE_AB")==0);
+  assert(adv.appearance==(PROBE_ADVERTISE_HID ? HID_KEYBOARD : 0));
+  assert(adv.services.size()==(PROBE_ADVERTISE_HID ? 2u : 1u));
+  assert(adv.services.back()==0xffe0);
+  if(PROBE_ADVERTISE_HID) assert(adv.services.front()==0x1812);
+  // Check factory, already local, multicast and wraparound inputs.
+  const unsigned cases[4][2]={{0x1c,0x8d},{0x1e,0xcd},{0xff,0xff},{0,0}};
+  for(const auto &entry:cases) {
+    const unsigned first=entry[0],last=entry[1];
+    uint8_t mac[6]={uint8_t(first),0xdb,0xd4,0xa8,0xd3,uint8_t(last)};
+    applyProbeIdentity(mac);
+    assert((mac[0]&3)==2);
+    assert(mac[1]==0xdb && mac[2]==0xd4 && mac[3]==0xa8 && mac[4]==0xd3);
+    assert(mac[5]==(last^(PROBE_ADVERTISE_HID ? 0x70 : 0x60)));
+    assert(mac[5]!=(last^0x40)); // Original probe identity is never reused.
+    assert(mac[5]!=(last^(PROBE_ADVERTISE_HID ? 0x60 : 0x70)));
+  }
+  printf("PASS: diagnostic advertisement mode %d and 4 identity cases\n",PROBE_ADVERTISE_HID);
+}
+'''.replace('// ACTUAL_CONFIG',identity_config)
+with tempfile.TemporaryDirectory(prefix='hid_advertisement_test_') as tmp:
+    cpp=Path(tmp)/'advertisement.cpp';cpp.write_text(advertisement_test)
+    for mode in (0,1):
+        binary=Path(tmp)/('mode'+str(mode))
+        subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror',
+                        '-fsanitize=address,undefined','-fno-omit-frame-pointer',
+                        '-DPROBE_ADVERTISE_HID='+str(mode),str(cpp),'-o',str(binary)],check=True)
+        subprocess.run([str(binary)],check=True,env=env)
+    invalid=subprocess.run(['g++','-std=c++17','-DPROBE_ADVERTISE_HID=2','-fsyntax-only',str(cpp)],capture_output=True,text=True)
+    assert invalid.returncode!=0 and 'PROBE_ADVERTISE_HID must be 0 or 1' in invalid.stderr
+print('PASS: invalid diagnostic selector rejected')
