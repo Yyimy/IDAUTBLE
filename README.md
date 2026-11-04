@@ -535,3 +535,15 @@ neutro (`PROBE_ADVERTISE_HID=0`), validado en las pruebas anteriores con ET40.
 **0.2.0 sigue siendo exclusivamente una imagen de banco**, sin control de
 carretilla ni OTA. Ver el procedimiento de reinicio, reconexión, privacidad y
 olvido en [la guía del prototipo](firmware/HID_Coexistence_Probe/README.md).
+
+## Recuperación de notificaciones HID (prototipo 0.2.1)
+
+Guarda las suscripciones Report/Boot del receptor elegido y las recupera tras
+una conexión autenticada al mismo vínculo. Corrige el caso de 0.2.0 en el que
+Android reconectaba sin reescribir CCCD y el receptor permanecía `READY=0`.
+Una escritura nueva (también desactivar) prevalece sobre la caché y no se
+habilitan notificaciones de otros clientes. App 1.3.23 compatible, sin cambios.
+
+El registro v1 de 0.2.0 no contiene esas suscripciones: se conserva la identidad,
+pero debe obtenerse una suscripción nueva. Ver la [migración de una sola vez](firmware/HID_Coexistence_Probe/README.md).
+Continúa siendo exclusivamente un prototipo de banco.

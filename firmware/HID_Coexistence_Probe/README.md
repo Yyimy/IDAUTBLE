@@ -1,4 +1,4 @@
-# HID + mantenimiento: prueba de coexistencia 0.2.0
+# HID + mantenimiento: prueba de coexistencia 0.2.1
 
 **Primer prototipo de banco, separado del firmware operativo PLC Scanner.**
 La finalidad es verificar un teclado HID en un PC Windows o terminal Android y la
@@ -43,6 +43,50 @@ Se usa la clase HID incluida en el core, sin instalar otra biblioteca ni actuali
 el core. Los envíos utilizan `esp_ble_gatts_send_indicate` con conexión explícita.
 Se evita [`BLECharacteristic::notify()` de 3.0.7](https://github.com/espressif/arduino-esp32/blob/3.0.7/libraries/BLE/src/BLECharacteristic.cpp),
 que recorre los clientes conectados y comparte el estado de su descriptor CCCD.
+
+## Corrección de suscripciones tras reinicio (0.2.1)
+
+El caso observado en hardware es `SAVED=1;READY=0` con receptor seguro pero
+`report=0 boot=0`. Android puede reconectar un vínculo ya emparejado sin volver a
+escribir los CCCD: GATT establece que se conservan entre conexiones de clientes
+bonded. 0.2.0 guardaba la identidad, pero reiniciaba esos indicadores por sesión.
+
+0.2.1 guarda también los valores confirmados de notificación Report y Boot. Solo
+se recuperan para el receptor con identidad/vínculo verificados y MITM. Una
+escritura nueva de CCCD, incluida la desactivación, prevalece sobre el valor
+recordado. No se habilitan suscripciones de otros terminales ni del canal de
+mantenimiento. No hay envíos automáticos ni reproducción de pruebas pendientes.
+Los cambios se guardan desde el loop, sin escribir flash dentro del callback BLE;
+los valores sin cambios no provocan escrituras adicionales. La configuración
+confirmada debe terminar de guardarse antes de apagar el equipo.
+
+### Primera actualización desde 0.2.0
+
+El registro antiguo conserva la identidad pero **no contiene suscripciones**.
+Se lee sin inventarlas; aparece por USB `legacy subscriptions unknown`. Para
+obtener valores nuevos de forma inequívoca, realizar una sola vez:
+
+1. Cargar **HID-PROBE-0.2.1** por USB, manteniendo anuncio neutro `0`.
+2. Conectar la app, autorizar y pulsar **Forget receiver**.
+3. En los ajustes Bluetooth del **terminal receptor**, olvidar solo `PLC_BLE_AB`.
+   No olvidar el vínculo del terminal técnico.
+4. En la app pulsar **Assign receiver** y volver a emparejar el receptor dentro
+   de los 60 segundos. Debe aparecer `HID BOUND` y `SAVED=1;READY=1`.
+5. Probar el texto, reiniciar el ESP32 y reconectar. Debe aparecer `HID RESTORED`
+   y el estado debe recuperar las notificaciones sin repetir Assign.
+
+Si un cliente vuelve a escribir sus CCCD por sí mismo, el registro antiguo se
+actualiza al formato nuevo automáticamente. La secuencia anterior sirve para
+los terminales que no los reescriben al reconectar, como el caso investigado.
+El formato nuevo es v2; también se reconoce el registro vacío de v1. Un registro
+corrupto o una máscara inválida no conceden notificaciones. El firmware 0.2.0 no
+puede leer v2: al retroceder será necesaria una asignación nueva.
+
+La app **1.3.23 sigue siendo compatible**; no hace falta reinstalarla. La nueva
+recuperación debe validarse en los terminales físicos y en los dos órdenes de
+conexión. Comprobar también desactivar una suscripción y que no se reactive sola.
+
+Referencia normativa: [Bluetooth Core, GATT 3.3.3.3](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/generic-attribute-profile--gatt-.html).
 
 ## Receptor guardado y recuperación (0.2.0)
 

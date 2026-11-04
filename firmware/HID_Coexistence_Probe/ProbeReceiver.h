@@ -8,6 +8,8 @@ struct ReceiverIdentity {
   bool valid = false;
   uint8_t type = 0; // canonical public (0) or random static (1)
   uint8_t address[6] = {};
+  bool subscriptionsKnown = false;
+  uint8_t subscriptions = 0; // bit 0: report; bit 1: boot. Not part of identity.
   bool hasIrk = false;
   uint8_t irk[16] = {}; // Bluedroid little-endian; never returned in diagnostics
 };
@@ -34,26 +36,37 @@ bool resolvesRpa(const ReceiverIdentity &id, const uint8_t (&address)[6], Encryp
   const bool ok = encrypt(key, input, output);
   return ok && !std::memcmp(output+13, address+3, 3);
 }
-constexpr size_t receiverRecordSize = 26;
+constexpr size_t legacyReceiverRecordSize = 26;
+constexpr size_t receiverRecordSize = 27;
 inline bool encodeReceiver(const ReceiverIdentity &id, uint8_t (&out)[receiverRecordSize]) {
-  if (!stableIdentity(id)) return false;
+  if (!stableIdentity(id) || !id.subscriptionsKnown || id.subscriptions > 3) return false;
   std::memset(out, 0, sizeof(out));
-  out[0] = 0x48; out[1] = 1; out[2] = id.type;
+  out[0] = 0x48; out[1] = 2; out[2] = id.type;
   std::memcpy(out+3, id.address, 6); out[9] = id.hasIrk;
   if (id.hasIrk) std::memcpy(out+10, id.irk, 16);
+  out[26] = id.subscriptions;
   return true;
 }
 inline void clearReceiverRecord(uint8_t (&out)[receiverRecordSize]) {
   std::memset(out, 0, sizeof(out));
-  out[0] = 0x48; out[1] = 1; out[2] = 0xff;
+  out[0] = 0x48; out[1] = 2; out[2] = 0xff;
 }
 inline bool clearedReceiverRecord(const uint8_t *data, size_t size) {
   uint8_t empty[receiverRecordSize]; clearReceiverRecord(empty);
-  return size == sizeof(empty) && !std::memcmp(data, empty, sizeof(empty));
+  if (size == sizeof(empty)) return !std::memcmp(data, empty, sizeof(empty));
+  empty[1] = 1;
+  return size == legacyReceiverRecordSize && !std::memcmp(data, empty, size);
 }
 inline ReceiverIdentity decodeReceiver(const uint8_t *data, size_t size) {
   ReceiverIdentity id;
-  if (size != receiverRecordSize || data[0] != 0x48 || data[1] != 1 || data[9] > 1) return id;
+  if (size < 2) return id;
+  const bool legacy = size == legacyReceiverRecordSize && data[1] == 1;
+  const bool current = size == receiverRecordSize && data[1] == 2;
+  if ((!legacy && !current) || data[0] != 0x48 || data[9] > 1) return id;
+  if (current) {
+    if (data[26] > 3) return id;
+    id.subscriptionsKnown = true; id.subscriptions = data[26];
+  }
   id.valid = true; id.type = data[2]; id.hasIrk = data[9] == 1;
   std::memcpy(id.address, data+3, 6);
   if (id.hasIrk) std::memcpy(id.irk, data+10, 16);

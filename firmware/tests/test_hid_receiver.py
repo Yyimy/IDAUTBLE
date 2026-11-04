@@ -91,6 +91,7 @@ int main(){
  wrong[0]=0xf0;CHECK(!resolvesRpa(expected,wrong,aesIdentity));
  auto changed=expected;changed.irk[0]^=1;CHECK(!resolvesRpa(changed,rpa,aesIdentity));
  CHECK(!resolvesRpa(expected,rpa,[](auto,auto,auto){return false;}));
+ expected.subscriptionsKnown=true;expected.subscriptions=1;
  uint8_t encoded[receiverRecordSize];CHECK(encodeReceiver(expected,encoded));CHECK(sameIdentity(expected,decodeReceiver(encoded,sizeof(encoded))));
  CHECK(!decodeReceiver(encoded,sizeof(encoded)-1).valid);encoded[1]=9;CHECK(!decodeReceiver(encoded,sizeof(encoded)).valid);
  CHECK(!sameIdentity(expected,changed));
@@ -98,13 +99,29 @@ int main(){
  auto t=peer(0,rpa);tick();CHECK(peers.find(t)->identity.valid);CHECK(peers.role(Role::Keyboard).id==kNoConnection);
  pairWindow=true;pairTick();CHECK(!pairWindow);CHECK(peers.keyboardReady(t));CHECK(sameIdentity(savedReceiver,expected));CHECK(!receiverPreferences.bytes.empty());
  savedReceiver={};peers={};lastIdentityCheck=0;loadReceiver();CHECK(sameIdentity(savedReceiver,expected));
- t=peer(4,rpa,false);tick();CHECK(!peers.keyboardReady(t));
- peers.find(t)->secure=true;peers.find(t)->reportNotify=false;tick();CHECK(!peers.keyboardReady(t));
- peers.find(t)->reportNotify=true;tick();CHECK(peers.keyboardReady(t));CHECK(!peers.authorized(t));
+ t=peer(4,rpa,false);peers.find(t)->reportNotify=false;tick();CHECK(!peers.keyboardReady(t));
+ // Bonded host sends no CCCD write after reboot: recover the confirmed selection.
+ peers.find(t)->secure=true;tick();CHECK(peers.keyboardReady(t));CHECK(peers.find(t)->reportNotify);
+ CHECK(!peers.find(t)->reportSeen);CHECK(!peers.authorized(t));
+ // A fresh explicit disable overrides remembered report=1 and survives reboot.
+ peers.find(t)->reportSeen=true;peers.find(t)->reportNotify=false;tick();CHECK(!peers.keyboardReady(t));
+ CHECK(savedReceiver.subscriptions==0);CHECK(decodeReceiver(receiverPreferences.bytes.data(),receiverPreferences.bytes.size()).subscriptions==0);
+ peers={};t=peer(0,rpa);peers.find(t)->reportNotify=false;tick();CHECK(!peers.keyboardReady(t));
+ // Boot-only subscription also persists independently of the report CCCD.
+ peers.find(t)->bootSeen=true;peers.find(t)->bootNotify=true;peers.find(t)->reportProtocol=false;tick();
+ CHECK(savedReceiver.subscriptions==2);CHECK(peers.keyboardReady(t));CHECK(!peers.find(t)->reportNotify);
+ peers.find(t)->reportSeen=true;peers.find(t)->reportNotify=true;peers.find(t)->reportProtocol=true;tick();CHECK(peers.keyboardReady(t));
  // Maintenance first: its authorization survives restoration of the receiver.
  peers={};uint8_t appAddr[6]={0xc2,2,3,4,5,7};auto app=peer(1,appAddr);peers.find(app)->uartNotify=true;
  CHECK(peers.claimMaintenance(app));CHECK(peers.authorize(app,true));t=peer(2,rpa);tick();CHECK(peers.keyboardReady(t));CHECK(peers.authorized(app));
  CHECK(!peers.claimMaintenance(t));CHECK(peers.uartReady(app));
+ // Cached HID settings never enable the maintenance channel's HID subscriptions.
+ peers.find(app)->identity=savedReceiver;peers.find(app)->reportNotify=false;peers.find(app)->bootNotify=false;
+ CHECK(!peers.restoreSubscriptions(app,savedReceiver));CHECK(!peers.find(app)->reportNotify);CHECK(!peers.find(app)->bootNotify);
+ // A failed persistence update must not overwrite an explicit disable in RAM.
+ peers.find(t)->reportSeen=true;peers.find(t)->reportNotify=false;peers.find(t)->bootSeen=true;peers.find(t)->bootNotify=false;receiverPreferences.fail=true;tick();
+ CHECK(!peers.keyboardReady(t));CHECK(!peers.find(t)->reportNotify);
+ receiverPreferences.fail=false;tick();CHECK(savedReceiver.subscriptions==0);
  // A secure stranger, missing bond or replacement IRK must never inherit HID.
  peers={};t=peer(1,appAddr);tick();CHECK(!peers.keyboardReady(t));
  peers={};bonds.clear();t=peer(1,rpa);tick();CHECK(!peers.keyboardReady(t));
@@ -127,6 +144,19 @@ int main(){
  receiverPreferences.fail=false;CHECK(forgetReceiver());CHECK(!savedReceiver.valid);CHECK(clearedReceiverRecord(receiverPreferences.bytes.data(),receiverPreferences.bytes.size()));CHECK(bonds.size()==1);
  loadReceiver();CHECK(!savedReceiver.valid);
  peers={};t=peer(0,rpa);tick();CHECK(!peers.keyboardReady(t));
+ // Legacy v1 carries identity but no subscription evidence: never guess enabled.
+ reset();expected=bondIdentity(bonds[0]);expected.subscriptionsKnown=true;expected.subscriptions=3;
+ CHECK(encodeReceiver(expected,encoded));uint8_t legacyBytes[26];memcpy(legacyBytes,encoded,26);legacyBytes[1]=1;
+ receiverPreferences.bytes.assign(legacyBytes,legacyBytes+26);loadReceiver();CHECK(savedReceiver.valid);CHECK(!savedReceiver.subscriptionsKnown);
+ t=peer(0,rpa);peers.find(t)->reportNotify=false;tick();CHECK(!peers.keyboardReady(t));CHECK(!peers.find(t)->bootNotify);
+ peers.find(t)->reportSeen=true;peers.find(t)->reportNotify=true;tick();CHECK(peers.keyboardReady(t));
+ CHECK(receiverPreferences.bytes.size()==27);CHECK(receiverPreferences.bytes[1]==2);
+ CHECK(savedReceiver.subscriptionsKnown);CHECK(savedReceiver.subscriptions==1);
+ // Corrupt/unknown CCCD masks cannot become an enabled subscription.
+ CHECK(encodeReceiver(expected,encoded));encoded[26]=4;CHECK(!decodeReceiver(encoded,sizeof(encoded)).valid);
+ expected.subscriptions=4;CHECK(!encodeReceiver(expected,encoded));
+ uint8_t legacyEmpty[26]={};legacyEmpty[0]=0x48;legacyEmpty[1]=1;legacyEmpty[2]=0xff;
+ CHECK(clearedReceiverRecord(legacyEmpty,sizeof(legacyEmpty)));
  // Corrupt storage fails closed, with no automatic assignment.
  receiverPreferences.bytes={1,2,3};loadReceiver();CHECK(!savedReceiver.valid);
  printf("PASS: %u receiver identity/persistence/reconnection/security assertions\n",checks);
