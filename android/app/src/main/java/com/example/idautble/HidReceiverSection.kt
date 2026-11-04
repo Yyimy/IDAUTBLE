@@ -10,7 +10,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-fun HidReceiverSection(state: HidReceiverState, connected: Boolean, authorised: Boolean, onAction: (String) -> Unit) {
+fun HidReceiverSection(state: HidReceiverState, connected: Boolean, authorised: Boolean, onAction: (String) -> Unit, configurableFormat: Boolean = false) {
     if (!state.supported) return
     var expanded by rememberSaveable { mutableStateOf(false) }
     var confirmForget by remember { mutableStateOf(false) }
@@ -43,7 +43,7 @@ fun HidReceiverSection(state: HidReceiverState, connected: Boolean, authorised: 
         }
         MaintenanceActionButton("Send test text", { onAction("HIDTYPE=TEST") }, MaintenanceActionTone.INFO, modifier = Modifier.fillMaxWidth(),
             enabled = enabled && saved && info?.ready == true)
-        Text("Test sends PALLET123, TAB, LOC01 and ENTER. Focus an empty test field on the receiver first.", fontSize = 11.sp)
+        Text(if (configurableFormat) "Test uses the saved HID OUTPUT format with PALLET123 and LOC01. Focus an empty test field on the receiver first." else "Test sends PALLET123, TAB, LOC01 and ENTER. Focus an empty test field on the receiver first.", fontSize = 11.sp)
     }
     if (confirmForget) AlertDialog(
         onDismissRequest = { confirmForget = false },

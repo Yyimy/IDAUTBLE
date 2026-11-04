@@ -1,4 +1,4 @@
-# HID + mantenimiento: prueba de coexistencia 0.2.2
+# HID + mantenimiento: prueba de coexistencia 0.3.0
 
 **Primer prototipo de banco, separado del firmware operativo PLC Scanner.**
 La finalidad es verificar un teclado HID en un PC Windows o terminal Android y la
@@ -8,8 +8,78 @@ El receptor recibe exclusivamente un texto sintético solicitado por el técnico
 Esta imagen **no ejecuta el controlador de la carretilla**: no supervisa baterías,
 no controla relé/salidas, no lee sensores/códigos y no realiza OTA. Usar una placa
 de banco alimentada por USB, fuera de la operativa de la carretilla. El firmware
-operativo `../PLC_Scanner_v3/` permanece sin cambios. La app 1.3.23 añade los
+operativo `../PLC_Scanner_v3/` permanece sin cambios. La app 1.3.24 añade los
 controles del prototipo, visibles solo al detectar un firmware compatible.
+
+## Formato configurable (0.3.0 / app 1.3.24)
+
+Esta fase incorpora el formato sobre el prototipo ya probado. **Todavía envía datos
+sintéticos; no activa lecturas reales ni sustituye el firmware operativo.** El
+anuncio neutro y el registro persistente del receptor de 0.2.2 se conservan.
+Actualizar la carpeta completa del sketch, incluidos todos los `.h`, por USB.
+
+En TERMINAL, debajo de HID RECEIVER, aparece **HID OUTPUT · PROTOTYPE** cuando
+INFO anuncia `HIDFORMAT=1`. Opciones:
+
+| Parámetro | Valores |
+|---|---|
+| Fields | Pallet, Location o Both (palet primero) |
+| Separator | Texto ASCII y `{TAB}`, `{ENTER}`, `{SPACE}` combinables; máximo 32 caracteres/teclas |
+| Final key | Enter, Tab o None, independiente del separador |
+| Receiver keyboard layout | US o Spanish; debe coincidir con el teclado físico configurado en el receptor |
+
+`{ENTER}{ENTER}` inserta dos pulsaciones Enter, no el texto del token. `{{` inserta
+una llave literal `{`. No se admiten ESC, Unicode ni controles arbitrarios. El
+separador solo se inserta al elegir Both; se conserva al elegir un único campo.
+La tecla final se aplica una sola vez al conjunto.
+
+Save format exige AUTH de mantenimiento y confirma el contenido devuelto por el
+PLC. Se guarda bajo la clave independiente `format` en `hid_probe`; no altera la
+asignación del receptor ni configuración del PLC. Un fallo de almacenamiento
+mantiene el formato activo anterior. El ajuste no se puede cambiar durante un
+envío. Refresh vuelve a cargar lo guardado, descartando la edición local.
+Los equipos sin ajuste previo conservan Both + TAB + ENTER + US.
+
+Protocolo (getter sin autorización, setter protegido):
+
+```text
+HIDCFG?
+HIDCFG=1;FIELDS=PU;SEPHEX=0A0A;END=ENTER;LAYOUT=ES
+```
+
+FIELDS es P/U/PU, SEPHEX es hexadecimal ASCII mayúsculo (09=TAB, 0A=ENTER,
+20=espacio; `-` significa vacío). END es ENTER/TAB/NONE, LAYOUT US/ES. Se rechazan
+claves desconocidas/duplicadas, campos incompletos y bytes inválidos sin aplicar
+cambios parciales. Los tokens son una ayuda de la app; no se envían literalmente.
+
+Send test text usa el formato **guardado** con PALLET123 y LOC01. USB, BLE y TCP
+registran `HIDTEST=SUBMITTED;TEXTHEX=...`: HEX evita que los Enter del separador
+rompan líneas de diagnóstico y mantiene las tramas dentro del límite de la cola.
+SUBMITTED sigue significando aceptación local de los informes BLE, no que el
+programa del cliente haya guardado el dato. No se reproducen teclas tras un corte.
+
+El formateador reutilizable rechaza todo el resultado si falta un campo elegido,
+contiene bytes no admitidos o supera 512 bytes; nunca sustituye datos antiguos.
+La integración de este formateador con las lecturas reales queda pendiente.
+
+### Comprobación en los terminales
+
+1. Hacer Pull tras integrar el PR, instalar app 1.3.24 y cargar el sketch completo
+   HID-PROBE-0.3.0 por USB. No borrar la flash ni olvidar el receptor ya asignado.
+2. Conectar app y receptor, autorizar PIN / ACCESS. En HID OUTPUT comprobar el
+   formato cargado y elegir el idioma físico del receptor.
+3. Con Both, separador `{ENTER}{ENTER}` y final Enter, guardar. En un editor de
+   texto vacío pulsar Send test text: PALLET123, una línea vacía y LOC01, con Enter final.
+4. Probar Pallet y Location por separado, y luego Both con TAB o un separador de
+   signos `;=|`. TAB puede cambiar de campo o activar controles según la app receptora.
+5. Reiniciar sin olvidar dispositivos; Refresh debe recuperar el formato y el
+   receptor debe volver a funcionar con la asignación existente.
+6. Con WiFi/TCP configurados de nuevo por USB (red solo RAM), comprobar recepción
+   de los resultados TEXTHEX en servidor y del texto exacto en receptor.
+
+Las pruebas host cubren parser, límites, ausencia de campos, persistencia fallida,
+mapas US/ES y liberación/cancelación. Queda pendiente esta prueba física del nuevo
+formato, especialmente los signos y teclas muertas del teclado español.
 
 ## Preparar la placa
 
@@ -357,8 +427,9 @@ python3 firmware/tests/test_hid_tcp.py
    `HID_PROBE_TEST;HIDTEST=SUBMITTED;TEXT=PALLET123<TAB>LOC01<ENTER>` tras una
    prueba iniciada desde la app. El receptor debe recibir realmente el texto.
 5. Repetir durante 15 minutos con envíos en los minutos 0, 5, 10 y 15, guardando
-   estados del PLC y registros del servidor. La validación física de 0.2.2 está
-   pendiente; los tests en host no la sustituyen.
+   estados del PLC y registros del servidor. Alex confirmó la recepción en servidor y receptor tras 15 minutos con ambos
+   enlaces BLE y WiFi/TCP activos en 0.2.2. El formato nuevo de 0.3.0 requiere su
+   propia comprobación física.
 
 ## WiFi y TCP opcionales
 
@@ -394,7 +465,7 @@ MTU, autorización y heap libre/mínimo. El nivel de batería del servicio HID e
 | Desconectar/reconectar app sin perder HID | Pendiente | Pendiente |
 | Desconectar HID a mitad del texto; sin repetición | Pendiente | Pendiente |
 | Bloquear PIN a mitad del texto; liberar tecla | Pendiente | Pendiente |
-| Mantener ambas conexiones con WiFi/TCP activos durante 15 min | Pendiente | Pendiente |
+| Mantener ambas conexiones con WiFi/TCP activos durante 15 min | Pendiente | Validado en 0.2.2; repetir formato nuevo |
 | Recuperar publicidad al desconectar un terminal | Pendiente | Pendiente |
 | Intento de tercer cliente | Pendiente | Pendiente |
 
@@ -409,7 +480,7 @@ las dos sustituye la matriz física anterior.
 
 ## Integración posterior en el PLC operativo
 
-La siguiente fase, tras validar la coexistencia, incorporará el registro de
-sesiones al firmware operativo, vinculación persistente del receptor, selector
-APP/HID en la app, formato de lecturas reales, idioma/terminadores y adaptación
-READY/OTA. El prototipo actual no ofrece ese selector ni reemplaza la app.
+La siguiente fase trasladará el registro de sesiones y la vinculación persistente
+al firmware operativo, incorporará el selector APP/HID y conectará el formato
+configurable a las lecturas reales. Debe preservar autorización, ACK/outbox,
+rutas TCP, READY y OTA. El prototipo no ofrece aún ese selector ni reemplaza al PLC.

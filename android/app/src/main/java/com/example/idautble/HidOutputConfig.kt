@@ -1,0 +1,74 @@
+package com.example.idautble
+
+/** ASCII payload, with key tokens decoded before transport; no delimiter injection. */
+data class HidOutputConfig(
+    val fields: String = "PU",
+    val separator: String = "\t",
+    val ending: String = "ENTER",
+    val layout: String = "US",
+) {
+    fun wire(): String {
+        require(fields in setOf("P", "U", "PU") && ending in setOf("ENTER", "TAB", "NONE") && layout in setOf("US", "ES"))
+        require(separator.length <= 32 && separator.all(::hidOutputCharacter))
+        val hex = if (separator.isEmpty()) "-" else separator.map { "%02X".format(it.code) }.joinToString("")
+        return "HIDCFG=1;FIELDS=$fields;SEPHEX=$hex;END=$ending;LAYOUT=$layout"
+    }
+    fun preview(): String = buildString {
+        if (fields != "U") append("PALLET123")
+        if (fields == "PU") append(separator)
+        if (fields != "P") append("LOC01")
+        if (ending == "ENTER") append('\n') else if (ending == "TAB") append('\t')
+    }.let(::hidSeparatorPattern)
+}
+
+data class HidOutputState(
+    val supported: Boolean = false,
+    val config: HidOutputConfig? = null,
+    val busy: Boolean = false,
+    val message: String = "",
+    val revision: Long = 0,
+)
+
+private fun hidOutputCharacter(c: Char) = c == '\t' || c == '\n' || c.code in 32..126
+
+fun hidSeparatorPattern(bytes: String): String = buildString {
+    bytes.forEach { append(when (it) { '\t' -> "{TAB}"; '\n' -> "{ENTER}"; ' ' -> "{SPACE}"; '{' -> "{{"; else -> it.toString() }) }
+}
+
+/** null means invalid: never silently truncate or strip an unrecognised token. */
+fun decodeHidSeparator(pattern: String): String? {
+    if (pattern.length > 224) return null
+    val out = StringBuilder()
+    var i = 0
+    while (i < pattern.length) {
+        if (pattern[i] != '{') {
+            if (!hidOutputCharacter(pattern[i])) return null
+            out.append(pattern[i++])
+        } else if (pattern.startsWith("{{", i)) { out.append('{'); i += 2 }
+        else {
+            val end = pattern.indexOf('}', i)
+            if (end < 0) return null
+            out.append(when (pattern.substring(i, end + 1)) { "{TAB}" -> '\t'; "{ENTER}" -> '\n'; "{SPACE}" -> ' '; else -> return null })
+            i = end + 1
+        }
+        if (out.length > 32) return null
+    }
+    return out.toString()
+}
+
+fun parseHidOutputConfig(text: String): HidOutputConfig? {
+    if (text.length > 160 || !text.startsWith("HIDCFG=1;")) return null
+    val values = linkedMapOf<String, String>()
+    for (part in text.substring(9).split(';')) {
+        val pair = part.split('=', limit = 2)
+        if (pair.size != 2 || values.put(pair[0], pair[1]) != null) return null
+    }
+    if (values.keys != setOf("FIELDS", "SEPHEX", "END", "LAYOUT")) return null
+    val hex = values["SEPHEX"] ?: return null
+    val separator = if (hex == "-") "" else {
+        if (hex.isEmpty() || hex.length > 64 || hex.length % 2 != 0 || !hex.all { it in '0'..'9' || it in 'A'..'F' }) return null
+        hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("")
+    }
+    val result = HidOutputConfig(values.getValue("FIELDS"), separator, values.getValue("END"), values.getValue("LAYOUT"))
+    return runCatching { result.wire(); result }.getOrNull()
+}

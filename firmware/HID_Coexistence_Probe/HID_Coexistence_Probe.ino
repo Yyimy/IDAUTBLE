@@ -1,4 +1,4 @@
-// IDAUT HID coexistence probe 0.2.2 — BENCH TEST ONLY, not the PLC controller.
+// IDAUT HID coexistence probe 0.3.0 — BENCH TEST ONLY, not the PLC controller.
 // ESP32-S3 / Arduino-ESP32 3.0.7. No GPIO/I2C/RS485/relay/battery supervision.
 #include <Arduino.h>
 #include <atomic>
@@ -19,7 +19,7 @@
 struct Command;
 struct Reply;
 
-static constexpr char PROBE_VERSION[] = "HID-PROBE-0.2.2";
+static constexpr char PROBE_VERSION[] = "HID-PROBE-0.3.0";
 // Diagnostic A/B: 0 = neutral BLE advertisement (first test), 1 = HID advertisement.
 // Both modes keep exactly the same GATT services, PIN, bonding and MITM gates.
 #ifndef PROBE_ADVERTISE_HID
@@ -50,6 +50,8 @@ static constexpr uint32_t PAIR_WINDOW_MS = 60000;
 static probe::Sessions peers;
 static probe::Keyboard keyboard;
 static Preferences receiverPreferences;
+static probe::OutputFormat outputFormat;
+static String typingDescription;
 static bool receiverStorageReady = false;
 static probe::ReceiverIdentity savedReceiver;
 static uint32_t lastIdentityCheck = 0;
@@ -284,9 +286,22 @@ static probe::ReceiverIdentity authenticatedIdentity(const probe::Peer &peer) {
   }
   return found;
 }
+static void loadOutputFormat() {
+  outputFormat = {};
+  if (!receiverStorageReady || !receiverPreferences.isKey("format")) return;
+  const String stored = receiverPreferences.getString("format", "");
+  if (!probe::parseOutputFormat(stored.c_str(), outputFormat)) Serial.println("HID FORMAT invalid; defaults active");
+}
+static bool saveOutputFormat(const probe::OutputFormat &candidate) {
+  const std::string canonical = probe::outputWire(candidate);
+  if (!receiverStorageReady || receiverPreferences.putString("format", canonical.c_str()) != canonical.size()) return false;
+  outputFormat = candidate;
+  return true;
+}
 static void loadReceiver() {
   savedReceiver = {};
   receiverStorageReady = receiverPreferences.begin("hid_probe", false);
+  loadOutputFormat();
   if (!receiverStorageReady) { Serial.println("HID STORAGE unavailable"); return; }
   if (!receiverPreferences.isKey("receiver")) { Serial.println("HID RECEIVER not assigned"); return; }
   const size_t size = receiverPreferences.getBytesLength("receiver");
@@ -514,14 +529,15 @@ static void processCommand(const Command &command) {
   if (command.length == 4 && command.data[0] == 0x1b && command.data[1] == 'C' && command.data[2] == 13 && command.data[3] == 10) {
     reply(command.source, command.usb, true, "CONECTADO"); return;
   }
-  if (text == "INFO?") { reply(command.source, command.usb, true, "FW=" + String(PROBE_VERSION) + ";PROTO=V2;ACKMODE=0;HEARTBEAT=0"); return; }
+  if (text == "INFO?") { reply(command.source, command.usb, true, "FW=" + String(PROBE_VERSION) + ";PROTO=V2;ACKMODE=0;HEARTBEAT=0;HIDFORMAT=1"); return; }
+  if (text == "HIDCFG?") { reply(command.source, command.usb, true, probe::outputWire(outputFormat).c_str()); return; }
   if (text == "HIDRECEIVER?") { reply(command.source, command.usb, true, receiverText()); return; }
   if (text == "HIDTEST?" || text == "status") {
     if (command.usb) serialStatus(); else reply(command.source, false, true, statusText());
     return;
   }
   if (text == "help") {
-    reply(command.source, command.usb, true, "BENCH ONLY: HIDPAIR=1 | HIDPAIR=0 | HIDFORGET=1 | HIDRECEIVER? | HIDTYPE=TEST | HIDTEST? | status. USB only: NET=SSID=...;PWD=...;HOST=...;PORT=... | WIFI=0"); return;
+    reply(command.source, command.usb, true, "BENCH ONLY: HIDPAIR=1 | HIDPAIR=0 | HIDFORGET=1 | HIDRECEIVER? | HIDCFG? | HIDCFG=1;FIELDS=P/ U/ PU;SEPHEX=09;END=ENTER/TAB/NONE;LAYOUT=US/ES | HIDTYPE=TEST | HIDTEST? | status. USB only: NET=SSID=...;PWD=...;HOST=...;PORT=... | WIFI=0"); return;
   }
   if (text == "AUTH=OFF") {
     portENTER_CRITICAL(&peerMux); peers.revoke(command.source); portEXIT_CRITICAL(&peerMux);
@@ -542,6 +558,15 @@ static void processCommand(const Command &command) {
   }
   if (text.endsWith("?")) { reply(command.source, command.usb, false, "ERR=PROBE_ONLY"); return; }
   if (!command.usb && !s.authorized(command.source)) { reply(command.source, false, false, "ERR=AUTH_REQUIRED"); return; }
+  if (text.startsWith("HIDCFG=")) {
+    if (keyboard.busy()) { reply(command.source, command.usb, false, "ERR=HIDCFG_BUSY"); return; }
+    probe::OutputFormat candidate;
+    if (!probe::parseOutputFormat(text.c_str(), candidate)) { reply(command.source, command.usb, false, "ERR=HIDCFG_INVALID"); return; }
+    if (!saveOutputFormat(candidate)) {
+      reply(command.source, command.usb, false, "ERR=HIDCFG_STORAGE"); return;
+    }
+    reply(command.source, command.usb, true, probe::outputWire(outputFormat).c_str()); return;
+  }
   if (text == "HIDFORGET=1") {
     if (!forgetReceiver()) { reply(command.source, command.usb, false, "ERR=HID_STORAGE"); return; }
     pairWindow = false; keyboard.cancel(); unbindAfterRelease = true;
@@ -568,7 +593,16 @@ static void processCommand(const Command &command) {
   }
   if (text == "HIDTYPE=TEST") {
     const auto host = s.role(probe::Role::Keyboard);
-    const bool accepted = keyboard.start(host, command.source, command.usb, millis(), s);
+    std::string formatted;
+    const bool accepted = probe::formatReading(outputFormat, "PALLET123", "LOC01", formatted) &&
+        keyboard.startText(host, command.source, command.usb, millis(), s, formatted.c_str(), outputFormat.layout);
+    if (accepted) {
+      typingDescription = "";
+      for (unsigned char c : formatted) {
+        typingDescription += "0123456789ABCDEF"[c >> 4];
+        typingDescription += "0123456789ABCDEF"[c & 15];
+      }
+    }
     reply(command.source, command.usb, accepted, accepted ? "HIDTEST=QUEUED" : "ERR=HID_NOT_READY_OR_BUSY"); return;
   }
   if (command.usb && text.startsWith("NET=")) {
@@ -616,7 +650,7 @@ static void keyboardTick() {
   });
   auto result = keyboard.takeResult();
   if (result == probe::TypingResult::None) return;
-  const String event = result == probe::TypingResult::Done ? "HIDTEST=SUBMITTED;TEXT=PALLET123<TAB>LOC01<ENTER>" : "HIDTEST=CANCELLED_OR_FAILED;NO_REPLAY";
+  const String event = result == probe::TypingResult::Done ? "HIDTEST=SUBMITTED;TEXTHEX=" + typingDescription : "HIDTEST=CANCELLED_OR_FAILED;NO_REPLAY";
   Serial.println(event);
   if (!keyboard.usbOwner()) reply(keyboard.owner(), false, result == probe::TypingResult::Done, event);
   if (tcp.connected()) queueTcp("HID_PROBE_TEST;" + event);
@@ -644,7 +678,7 @@ static uint16_t cccdHandle(BLECharacteristic *c) {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("BENCH ONLY: HID-PROBE-0.2.2. Not the PLC controller.");
+  Serial.println("BENCH ONLY: HID-PROBE-0.3.0. Not the PLC controller.");
   Serial.printf("BLE DIAGNOSTIC mode=%s name=%s\n",
       PROBE_HID_ADVERTISEMENT ? "HID_ADVERTISEMENT" : "NEUTRAL_ADVERTISEMENT", PROBE_NAME);
   Serial.println("Same GATT services, fixed PIN and SC/MITM security in both modes.");
