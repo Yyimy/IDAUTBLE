@@ -1,4 +1,4 @@
-// IDAUT HID coexistence probe 0.1.1 — BENCH TEST ONLY, not the PLC controller.
+// IDAUT HID coexistence probe 0.1.2 — BENCH TEST ONLY, not the PLC controller.
 // ESP32-S3 / Arduino-ESP32 3.0.7. No GPIO/I2C/RS485/relay/battery supervision.
 #include <Arduino.h>
 #include <atomic>
@@ -14,8 +14,26 @@
 struct Command;
 struct Reply;
 
-static constexpr char PROBE_VERSION[] = "HID-PROBE-0.1.1";
-static constexpr char PROBE_NAME[] = "PLC_HID_TEST";
+static constexpr char PROBE_VERSION[] = "HID-PROBE-0.1.2";
+// Diagnostic A/B: 0 = neutral BLE advertisement (first test), 1 = HID advertisement.
+// Both modes keep exactly the same GATT services, PIN, bonding and MITM gates.
+#ifndef PROBE_ADVERTISE_HID
+#define PROBE_ADVERTISE_HID 0
+#endif
+static_assert(PROBE_ADVERTISE_HID == 0 || PROBE_ADVERTISE_HID == 1,
+    "PROBE_ADVERTISE_HID must be 0 or 1");
+static constexpr bool PROBE_HID_ADVERTISEMENT = PROBE_ADVERTISE_HID == 1;
+static constexpr const char *PROBE_NAME = PROBE_ADVERTISE_HID ? "PLC_HID_AB" : "PLC_BLE_AB";
+static void applyProbeIdentity(uint8_t (&address)[6]) {
+  address[0] = (address[0] | 0x02) & 0xfe;
+  // Fresh, distinct identities for both cases, avoiding the 0.1.0/0.1.1 cache.
+  address[5] ^= PROBE_HID_ADVERTISEMENT ? 0x70 : 0x60;
+}
+static void configureProbeAdvertisement(BLEAdvertising *adv) {
+  adv->setAppearance(PROBE_HID_ADVERTISEMENT ? HID_KEYBOARD : 0);
+  if (PROBE_HID_ADVERTISEMENT) adv->addServiceUUID(BLEUUID(uint16_t(0x1812)));
+  adv->addServiceUUID(BLEUUID(uint16_t(0xffe0)));
+}
 static constexpr char PROBE_PIN[] = "123456";  // Public sample; six digits.
 constexpr bool validProbePin() {
   if (sizeof(PROBE_PIN) != 7) return false;
@@ -127,8 +145,15 @@ class SecurityCallbacks : public BLESecurityCallbacks {
   void onPassKeyNotify(uint32_t pin) override {
     Serial.printf("BLE PASSKEY_NOTIFY fixed_pin_match=%u\n", pin == strtoul(PROBE_PIN, nullptr, 10));
   }
-  bool onSecurityRequest() override { return true; }
-  bool onConfirmPIN(uint32_t pin) override { return pin == strtoul(PROBE_PIN, nullptr, 10); }
+  bool onSecurityRequest() override {
+    Serial.println("BLE SECURITY_REQUEST accepted=1");
+    return true;
+  }
+  bool onConfirmPIN(uint32_t pin) override {
+    const bool matches = pin == strtoul(PROBE_PIN, nullptr, 10);
+    Serial.printf("BLE NUMERIC_CONFIRM fixed_pin_match=%u accepted=%u\n", matches, matches);
+    return matches;
+  }
   void onAuthenticationComplete(esp_ble_auth_cmpl_t result) override {
     const bool secure = result.success && (result.auth_mode & ESP_LE_AUTH_REQ_MITM);
     portENTER_CRITICAL(&peerMux);
@@ -433,7 +458,10 @@ static uint16_t cccdHandle(BLECharacteristic *c) {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("BENCH ONLY: HID-PROBE-0.1.1. Not the PLC controller.");
+  Serial.println("BENCH ONLY: HID-PROBE-0.1.2. Not the PLC controller.");
+  Serial.printf("BLE DIAGNOSTIC mode=%s name=%s\n",
+      PROBE_HID_ADVERTISEMENT ? "HID_ADVERTISEMENT" : "NEUTRAL_ADVERTISEMENT", PROBE_NAME);
+  Serial.println("Same GATT services, fixed PIN and SC/MITM security in both modes.");
   Serial.println("No sensor, battery, relay or OTA control in this image.");
   commands = xQueueCreate(8, sizeof(Command)); replies = xQueueCreate(12, sizeof(Reply));
   if (!commands || !replies) { Serial.println("Queue allocation failed"); while (true) delay(1000); }
@@ -443,8 +471,7 @@ void setup() {
   if (esp_efuse_mac_get_default(testBase) != ESP_OK) {
     Serial.println("Factory identity unavailable"); while (true) delay(1000);
   }
-  testBase[0] = (testBase[0] | 0x02) & 0xfe;
-  testBase[5] ^= 0x40;
+  applyProbeIdentity(testBase);
   if (esp_base_mac_addr_set(testBase) != ESP_OK) { Serial.println("Test identity failed"); while (true) delay(1000); }
   BLEDevice::init(PROBE_NAME);
   BLEDevice::setMTU(185);
@@ -498,9 +525,7 @@ void setup() {
   outputHandle = output->getHandle(); bootOutputHandle = bootOutput->getHandle();
   protocolHandle = hid->protocolMode()->getHandle(); controlHandle = hid->hidControl()->getHandle();
   auto *adv = BLEDevice::getAdvertising();
-  adv->setAppearance(HID_KEYBOARD);
-  adv->addServiceUUID(BLEUUID(uint16_t(0x1812)));
-  adv->addServiceUUID(BLEUUID(uint16_t(0xffe0)));
+  configureProbeAdvertisement(adv);
   adv->setScanResponse(true);
   BLEAdvertisementData scan; scan.setName(PROBE_NAME); adv->setScanResponseData(scan);
   lastAdvertiseAttempt = millis() - 1500;

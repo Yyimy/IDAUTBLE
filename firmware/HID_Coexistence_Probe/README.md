@@ -1,4 +1,4 @@
-# HID + mantenimiento: prueba de coexistencia 0.1.1
+# HID + mantenimiento: prueba de coexistencia 0.1.2
 
 **Primer prototipo de banco, separado del firmware operativo PLC Scanner.**
 La finalidad es verificar un teclado HID en un PC Windows o terminal Android y la
@@ -17,7 +17,8 @@ operativo `../PLC_Scanner_v3/` y la app de mantenimiento no cambian en esta fase
 3. Mantener USB CDC habilitado y el esquema de partición **Minimal SPIFFS con OTA**.
    Conservar la configuración de flash/PSRAM de la placa; no borrar toda la flash.
 4. Cargar por USB y abrir el monitor serie a 115200 con terminador de línea.
-5. El dispositivo se anuncia como **PLC_HID_TEST**. El PIN de muestra es **123456**,
+5. En 0.1.2 se anuncia por defecto como **PLC_BLE_AB** (anuncio neutro de diagnóstico).
+   El PIN de muestra es **123456**,
    configurable mediante `PROBE_PIN` (exactamente seis dígitos).
 
 La prueba utiliza una identidad MAC local derivada de la MAC de fábrica, solo en
@@ -42,7 +43,63 @@ el core. Los envíos utilizan `esp_ble_gatts_send_indicate` con conexión explí
 Se evita [`BLECharacteristic::notify()` de 3.0.7](https://github.com/espressif/arduino-esp32/blob/3.0.7/libraries/BLE/src/BLECharacteristic.cpp),
 que recorre los clientes conectados y comparte el estado de su descriptor CCCD.
 
-## Corrección de emparejamiento (0.1.1)
+## Diagnóstico A/B de anuncio (0.1.2)
+
+Se ha observado en Zebra ET40 / Android 14 que el diálogo se cierra antes de
+poder introducir el PIN, incluso desde los ajustes del sistema. El ESP32 registra
+`fixed_pin_match=1` y fallo de autenticación `0x51`. En Windows se ha podido
+introducir el PIN; aún no está confirmado el emparejamiento ni el envío HID allí.
+Esta versión es una prueba de aislamiento, **no una solución confirmada**.
+
+Al principio del `.ino` está el selector:
+
+```cpp
+#ifndef PROBE_ADVERTISE_HID
+#define PROBE_ADVERTISE_HID 0
+#endif
+```
+
+| Valor | Nombre | Anuncio |
+|---|---|---|
+| `0` (primera prueba) | `PLC_BLE_AB` | Apariencia genérica y UUID FFE0 |
+| `1` | `PLC_HID_AB` | Apariencia de teclado y UUID 1812 + FFE0 |
+
+**Ambos conservan exactamente los mismos servicios GATT, incluido HID, el PIN,
+SC/MITM, bonding y las comprobaciones por sesión.** Se comparan los indicios del
+anuncio, no la presencia del servicio HID. Se usan nombres y MAC distintas y nuevas
+respecto a 0.1.0/0.1.1 para evitar reutilizar sus vínculos/caché. Los vínculos del
+ESP32 siguen compartiendo el almacenamiento Bluetooth habitual; no se borran.
+
+1. Hacer Pull y cargar por USB con valor `0`. Cerrar la app en el Zebra.
+2. Confirmar en serie `HID-PROBE-0.1.2` y
+   `mode=NEUTRAL_ADVERTISEMENT name=PLC_BLE_AB`.
+3. Desde ajustes Bluetooth del Zebra, buscar **PLC_BLE_AB** e intentar emparejar
+   con el PIN configurado (`123456` por defecto). Si ya se probó este modo,
+   olvidar solo ese nombre antes de repetir.
+4. Registrar desde `BLE CONNECT` hasta el resultado de `BLE SECURITY` y cualquier
+   desconexión. Que el diálogo permita escribir no basta: el éxito exige
+   `success=1 secure=1 matched=1`. Entonces probar la conexión desde la app.
+5. Cambiar el selector a `1`, recompilar y cargar por USB. Repetir en el mismo
+   Zebra con **PLC_HID_AB**. Si ya se probó, olvidar solo ese nombre.
+6. Comparar con Windows, anotando si autentica, no solo si deja escribir el PIN.
+   Probar un único terminal a la vez durante esta comparación.
+
+Si el neutro autentica y el HID no, queda implicado el camino que activa el
+anuncio de teclado. Si ambos fallan, esta prueba no descarta el servicio HID ni
+identifica al responsable: habría que inspeccionar el intercambio SMP/HCI. Si
+ambos autentican con las identidades nuevas, tampoco demuestra por sí solo que
+el problema anterior esté corregido: los vínculos/caché pueden haber influido.
+
+Se añaden logs de solicitud de seguridad y confirmación numérica, sin imprimir
+el PIN. Una confirmación numérica inesperada se registra y mantiene el criterio
+anterior de aceptación; no se acepta automáticamente para sortear el fallo.
+No se cambia la app ni el firmware operativo y no se cambia a Just Works.
+
+Para la prueba de coexistencia completa de abajo, usar el valor `1`. El modo
+neutro conserva HID pero su descubrimiento automático por un host no está
+asegurado. `STATUS?` continúa respondiendo `ERR=PROBE_ONLY` por diseño.
+
+## Historial: corrección de emparejamiento (0.1.1)
 
 En 0.1.0 se solicitaba cifrado desde `BLEDevice` y otra vez desde el callback de
 conexión. Además, la app Android inicia su propio `createBond()`. El log
@@ -56,15 +113,8 @@ Las sesiones solo se habilitan tras autenticar con MITM; el PIN y la autorizaci�
 por conexión siguen siendo necesarios. El nivel `0` aquí no habilita
 escrituras ni pulsaciones sin autenticar.
 
-Si ya se intentó conectar con 0.1.0:
-
-1. Cargar 0.1.1 por USB y reiniciar la placa.
-2. En el terminal de mantenimiento, olvidar **solo PLC_HID_TEST** en los ajustes
-   Bluetooth. Mantener el receptor HID desconectado durante este primer intento.
-3. Volver a buscar desde la app y pulsar Conectar. Introducir el PIN configurado
-   (123456 en el ejemplo) y esperar a `CONECTADO`.
-4. Autorizar después en PIN / ACCESS para enviar HIDPAIR/HIDTYPE, como se indica
-   abajo. El diálogo de Android y la autorización de mantenimiento son pasos distintos.
+Para nuevas pruebas, usar **0.1.2 y el procedimiento A/B de arriba**. El nombre
+anterior era `PLC_HID_TEST`; ya no se utiliza en las dos variantes de diagnóstico.
 
 El nuevo log incluye `success`, `secure`, `matched` y `auth_mode`; el motivo solo
 se muestra cuando hay un fallo. Una conexión válida debe mostrar `success=1`,
@@ -75,7 +125,7 @@ los nuevos campos. El código hexadecimal por sí solo no demuestra un PIN mal e
 
 ## Prueba recomendada: app primero
 
-1. Desde nuestra app Android, buscar **PLC_HID_TEST**, emparejar y conectar.
+1. Con `PROBE_ADVERTISE_HID=1`, desde nuestra app Android buscar **PLC_HID_AB**, emparejar y conectar.
    Usar el PIN del prototipo. El nombre/MAC son diferentes de los del PLC operativo.
 2. Esperar a `CONECTADO` en TERMINAL. Las consultas automáticas `STATUS?` reciben
    `ERR=PROBE_ONLY`: es esperado; la prueba no presenta mediciones ficticias como
@@ -88,7 +138,7 @@ los nuevos campos. El código hexadecimal por sí solo no demuestra un PIN mal e
 
    La app añade CRLF automáticamente. Aparece `HIDTEST=PAIR_WINDOW_60S`.
 4. En el **otro dispositivo** (PC Windows o Android receptor), emparejar
-   **PLC_HID_TEST** desde sus ajustes Bluetooth como teclado.
+   **PLC_HID_AB** desde sus ajustes Bluetooth como teclado.
 5. Esperar a `HIDTEST=BOUND` en la app o `HID BOUND` por USB. La asignación solo
    se hace durante la ventana y a una conexión cifrada con suscripción HID. La
    conexión que ya pertenece a mantenimiento nunca se convierte en receptor.
