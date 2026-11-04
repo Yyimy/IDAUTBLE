@@ -1,4 +1,4 @@
-// IDAUT HID coexistence probe 0.1.0 — BENCH TEST ONLY, not the PLC controller.
+// IDAUT HID coexistence probe 0.1.1 — BENCH TEST ONLY, not the PLC controller.
 // ESP32-S3 / Arduino-ESP32 3.0.7. No GPIO/I2C/RS485/relay/battery supervision.
 #include <Arduino.h>
 #include <atomic>
@@ -14,7 +14,7 @@
 struct Command;
 struct Reply;
 
-static constexpr char PROBE_VERSION[] = "HID-PROBE-0.1.0";
+static constexpr char PROBE_VERSION[] = "HID-PROBE-0.1.1";
 static constexpr char PROBE_NAME[] = "PLC_HID_TEST";
 static constexpr char PROBE_PIN[] = "123456";  // Public sample; six digits.
 constexpr bool validProbePin() {
@@ -108,7 +108,8 @@ class ServerCallbacks : public BLEServerCallbacks {
       return;
     }
     Serial.printf("BLE CONNECT id=%u generation=%lu\n", token.id, (unsigned long)token.generation);
-    esp_ble_set_encryption(param->connect.remote_bda, ESP_BLE_SEC_ENCRYPT_MITM);
+    // The central initiates bonding. Starting SMP here would duplicate the
+    // core's connect hook and race Android createBond()/the HID host.
   }
   void onDisconnect(BLEServer *, esp_ble_gatts_cb_param_t *param) override {
     portENTER_CRITICAL(&peerMux);
@@ -119,8 +120,13 @@ class ServerCallbacks : public BLEServerCallbacks {
   }
 };
 class SecurityCallbacks : public BLESecurityCallbacks {
-  uint32_t onPassKeyRequest() override { return strtoul(PROBE_PIN, nullptr, 10); }
-  void onPassKeyNotify(uint32_t) override { Serial.println("Pairing requested; use configured probe PIN"); }
+  uint32_t onPassKeyRequest() override {
+    Serial.println("BLE PASSKEY_REQUEST");
+    return strtoul(PROBE_PIN, nullptr, 10);
+  }
+  void onPassKeyNotify(uint32_t pin) override {
+    Serial.printf("BLE PASSKEY_NOTIFY fixed_pin_match=%u\n", pin == strtoul(PROBE_PIN, nullptr, 10));
+  }
   bool onSecurityRequest() override { return true; }
   bool onConfirmPIN(uint32_t pin) override { return pin == strtoul(PROBE_PIN, nullptr, 10); }
   void onAuthenticationComplete(esp_ble_auth_cmpl_t result) override {
@@ -128,7 +134,10 @@ class SecurityCallbacks : public BLESecurityCallbacks {
     portENTER_CRITICAL(&peerMux);
     const bool matched = peers.secureAddress(result.bd_addr, secure);
     portEXIT_CRITICAL(&peerMux);
-    Serial.printf("BLE SECURITY secure=%u matched=%u reason=0x%02x\n", secure, matched, result.fail_reason);
+    // fail_reason is meaningful only when authentication failed.
+    Serial.printf("BLE SECURITY success=%u secure=%u matched=%u auth_mode=0x%02x reason=0x%02x\n",
+        result.success, secure, matched, unsigned(result.auth_mode),
+        result.success ? 0u : unsigned(result.fail_reason));
     if (matched && !secure) esp_ble_gap_disconnect(result.bd_addr);
   }
 };
@@ -424,7 +433,7 @@ static uint16_t cccdHandle(BLECharacteristic *c) {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("BENCH ONLY: HID-PROBE-0.1.0. Not the PLC controller.");
+  Serial.println("BENCH ONLY: HID-PROBE-0.1.1. Not the PLC controller.");
   Serial.println("No sensor, battery, relay or OTA control in this image.");
   commands = xQueueCreate(8, sizeof(Command)); replies = xQueueCreate(12, sizeof(Reply));
   if (!commands || !replies) { Serial.println("Queue allocation failed"); while (true) delay(1000); }
@@ -439,7 +448,11 @@ void setup() {
   if (esp_base_mac_addr_set(testBase) != ESP_OK) { Serial.println("Test identity failed"); while (true) delay(1000); }
   BLEDevice::init(PROBE_NAME);
   BLEDevice::setMTU(185);
-  BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
+  // 3.0.7 BLEDevice::gattServerEventHandler automatically requests encryption
+  // on connect for a non-zero level. Let Android/HID initiate a single pairing.
+  // This only disables proactive SMP; all data/CCCD permissions and the
+  // per-peer secure/MITM gates below remain mandatory.
+  BLEDevice::setEncryptionLevel(static_cast<esp_ble_sec_act_t>(0));
   BLEDevice::setSecurityCallbacks(new SecurityCallbacks());
   BLEDevice::setCustomGapHandler(gapEvent);
   BLEDevice::setCustomGattsHandler(gattEvent);
