@@ -1,4 +1,4 @@
-// IDAUT HID coexistence probe 0.2.1 — BENCH TEST ONLY, not the PLC controller.
+// IDAUT HID coexistence probe 0.2.2 — BENCH TEST ONLY, not the PLC controller.
 // ESP32-S3 / Arduino-ESP32 3.0.7. No GPIO/I2C/RS485/relay/battery supervision.
 #include <Arduino.h>
 #include <atomic>
@@ -7,6 +7,9 @@
 #include <BLEHIDDevice.h>
 #include <BLE2902.h>
 #include <WiFi.h>
+#include <lwip/sockets.h>
+#include <errno.h>
+#include "ProbeTcpOutbox.h"
 #include <Preferences.h>
 #include <mbedtls/aes.h>
 #include <esp_mac.h>
@@ -16,7 +19,7 @@
 struct Command;
 struct Reply;
 
-static constexpr char PROBE_VERSION[] = "HID-PROBE-0.2.1";
+static constexpr char PROBE_VERSION[] = "HID-PROBE-0.2.2";
 // Diagnostic A/B: 0 = neutral BLE advertisement (first test), 1 = HID advertisement.
 // Both modes keep exactly the same GATT services, PIN, bonding and MITM gates.
 #ifndef PROBE_ADVERTISE_HID
@@ -77,6 +80,8 @@ struct Reply {
 };
 static QueueHandle_t commands, replies;
 static WiFiClient tcp;
+static probe::TcpOutbox tcpOutbox;
+static bool tcpActive = false;
 static String wifiSsid, wifiPassword, tcpHost;
 static uint16_t tcpPort = 0;
 static bool wifiEnabled = false;
@@ -458,24 +463,48 @@ static bool parseNetwork(String text) {
   wifiSsid = ssid; wifiPassword = password; tcpHost = host; tcpPort = port;
   return true;
 }
+static bool queueTcp(const String &text) {
+  if (!tcpActive || !tcp.connected()) return false;
+  const String line = text + "\r\n";
+  if (tcpOutbox.push((const uint8_t *)line.c_str(), line.length(), millis())) return true;
+  Serial.println("PROBE TCP diagnostic queue full/oversize; message dropped");
+  return false;
+}
 static void networkTick() {
-  if (!wifiEnabled || WiFi.status() != WL_CONNECTED) return;
-  if (!tcp.connected() && uint32_t(millis() - lastTcpTry) >= 3000) {
-    lastTcpTry = millis();
-    if (tcp.connect(tcpHost.c_str(), tcpPort, 200)) {
-      tcp.setNoDelay(true);
-      tcp.println("HID_PROBE=CONNECTED;FW=" + String(PROBE_VERSION));
-      Serial.println("PROBE TCP connected");
-    }
+  if (!wifiEnabled || WiFi.status() != WL_CONNECTED) {
+    if (tcpActive) tcp.stop();
+    tcpActive = false; tcpOutbox.clear(); return;
   }
-  if (tcp.connected() && uint32_t(millis() - lastTcpPing) >= 10000) {
-    lastTcpPing = millis();
-    String line = statusText() + "\r\n";
-    if ((size_t)tcp.availableForWrite() >= line.length()) tcp.write((const uint8_t *)line.c_str(), line.length());
+  if (!tcp.connected()) {
+    tcpActive = false; tcpOutbox.clear();
+    if (uint32_t(millis() - lastTcpTry) < 3000) return;
+    lastTcpTry = millis();
+    if (!tcp.connect(tcpHost.c_str(), tcpPort, 200)) return;
+    tcp.setNoDelay(true); tcpActive = true;
+    queueTcp("HID_PROBE=CONNECTED;FW=" + String(PROBE_VERSION));
+    Serial.println("PROBE TCP connected");
+  }
+  if (uint32_t(millis() - lastTcpPing) >= 10000) {
+    lastTcpPing = millis(); queueTcp(statusText());
+  }
+  // NetworkClient 3.0.7 inherits Print::availableForWrite() == 0. Use one
+  // nonblocking socket send per tick instead of that gate or its write retry loop.
+  const auto result = tcpOutbox.flush(millis(), [](const uint8_t *data, size_t length) {
+    const int fd = tcp.fd();
+    if (fd < 0) return -1;
+    const int sent = ::send(fd, data, length, MSG_DONTWAIT);
+    if (sent > 0) return sent;
+    if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return 0;
+    return -1;
+  });
+  if (result == probe::TcpFlush::Failed) {
+    Serial.println("PROBE TCP send failed/stalled; pending diagnostics discarded");
+    tcp.stop(); tcpActive = false; tcpOutbox.clear(); return;
   }
   // No remote commands, ACK, PING or business records in this probe.
   for (unsigned n = 0; n < 128 && tcp.available(); ++n) tcp.read();
 }
+
 static void processCommand(const Command &command) {
   auto s = snapshot();
   if (!command.usb && !s.uartReady(command.source)) return;
@@ -544,7 +573,7 @@ static void processCommand(const Command &command) {
   }
   if (command.usb && text.startsWith("NET=")) {
     if (!parseNetwork(text)) { Serial.println("ERR=NET_FIELDS"); return; }
-    tcp.stop(); WiFi.persistent(false); WiFi.mode(WIFI_STA);
+    tcp.stop(); tcpActive = false; tcpOutbox.clear(); WiFi.persistent(false); WiFi.mode(WIFI_STA);
     const IPAddress dhcp(0, 0, 0, 0);
     if (!WiFi.config(dhcp, dhcp, dhcp)) { Serial.println("ERR=DHCP_CONFIG"); return; }
     wifiEnabled = true; WiFi.setAutoReconnect(true);
@@ -552,7 +581,7 @@ static void processCommand(const Command &command) {
     Serial.println("PROBE WiFi connecting; credentials only in RAM"); return;
   }
   if (command.usb && text == "WIFI=0") {
-    tcp.stop(); wifiEnabled = false; WiFi.disconnect(true, false);
+    tcp.stop(); tcpActive = false; tcpOutbox.clear(); wifiEnabled = false; WiFi.disconnect(true, false);
     Serial.println("PROBE WiFi disabled"); return;
   }
   reply(command.source, command.usb, false, "ERR=PROBE_ONLY");
@@ -590,10 +619,7 @@ static void keyboardTick() {
   const String event = result == probe::TypingResult::Done ? "HIDTEST=SUBMITTED;TEXT=PALLET123<TAB>LOC01<ENTER>" : "HIDTEST=CANCELLED_OR_FAILED;NO_REPLAY";
   Serial.println(event);
   if (!keyboard.usbOwner()) reply(keyboard.owner(), false, result == probe::TypingResult::Done, event);
-  if (tcp.connected()) {
-    const String line = "HID_PROBE_TEST;" + event + "\r\n";
-    if ((size_t)tcp.availableForWrite() >= line.length()) tcp.write((const uint8_t *)line.c_str(), line.length());
-  }
+  if (tcp.connected()) queueTcp("HID_PROBE_TEST;" + event);
   if (unbindAfterRelease) {
     portENTER_CRITICAL(&peerMux); peers.unbindKeyboard(); portEXIT_CRITICAL(&peerMux);
     unbindAfterRelease = false;
@@ -618,7 +644,7 @@ static uint16_t cccdHandle(BLECharacteristic *c) {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("BENCH ONLY: HID-PROBE-0.2.1. Not the PLC controller.");
+  Serial.println("BENCH ONLY: HID-PROBE-0.2.2. Not the PLC controller.");
   Serial.printf("BLE DIAGNOSTIC mode=%s name=%s\n",
       PROBE_HID_ADVERTISEMENT ? "HID_ADVERTISEMENT" : "NEUTRAL_ADVERTISEMENT", PROBE_NAME);
   Serial.println("Same GATT services, fixed PIN and SC/MITM security in both modes.");

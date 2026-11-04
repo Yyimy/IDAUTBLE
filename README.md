@@ -547,3 +547,13 @@ habilitan notificaciones de otros clientes. App 1.3.23 compatible, sin cambios.
 El registro v1 de 0.2.0 no contiene esas suscripciones: se conserva la identidad,
 pero debe obtenerse una suscripción nueva. Ver la [migración de una sola vez](firmware/HID_Coexistence_Probe/README.md).
 Continúa siendo exclusivamente un prototipo de banco.
+
+## Telemetría TCP del prototipo (0.2.2)
+
+Corrige la condición availableForWrite del core 3.0.7 que impedía enviar estados
+y resultados HID aunque sí llegase el saludo TCP. Los tres mensajes usan una
+cola de diagnóstico volátil con escrituras parciales no bloqueantes; se limpia
+al desconectar/reconfigurar y no sustituye el ACK/outbox de negocio del firmware
+operativo. Conserva la asignación HID y la compatibilidad con app 1.3.23. Ver el
+[procedimiento WiFi/TCP](firmware/HID_Coexistence_Probe/README.md) para repetir la
+prueba de coexistencia sin olvidar los terminales.
