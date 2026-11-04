@@ -1,4 +1,4 @@
-# HID + mantenimiento: prueba de coexistencia 0.2.1
+# HID + mantenimiento: prueba de coexistencia 0.2.2
 
 **Primer prototipo de banco, separado del firmware operativo PLC Scanner.**
 La finalidad es verificar un teclado HID en un PC Windows o terminal Android y la
@@ -66,7 +66,7 @@ El registro antiguo conserva la identidad pero **no contiene suscripciones**.
 Se lee sin inventarlas; aparece por USB `legacy subscriptions unknown`. Para
 obtener valores nuevos de forma inequívoca, realizar una sola vez:
 
-1. Cargar **HID-PROBE-0.2.1** por USB, manteniendo anuncio neutro `0`.
+1. Cargar **HID-PROBE-0.2.1 o posterior** por USB, manteniendo anuncio neutro `0`.
 2. Conectar la app, autorizar y pulsar **Forget receiver**.
 3. En los ajustes Bluetooth del **terminal receptor**, olvidar solo `PLC_BLE_AB`.
    No olvidar el vínculo del terminal técnico.
@@ -323,6 +323,42 @@ ventana para dos receptores candidatos a la vez: este prototipo admite uno.
 - Una tercera conexión se rechaza. Un fallo de cifrado cierra esa conexión.
 - Tres PIN de mantenimiento incorrectos bloquean esa sesión hasta reconectar.
   Es una política del prototipo, no una sustitución de la política operativa.
+
+## Diagnóstico TCP corregido (0.2.2)
+
+En Arduino-ESP32 3.0.7, NetworkClient no sobrescribe el valor por defecto cero de
+`Print::availableForWrite()`. Hasta 0.2.1, el saludo se enviaba con println, pero
+los estados y resultados se condicionaban a ese valor y se descartaban.
+
+0.2.2 usa para los tres tipos de mensaje una cola volátil de ocho líneas de hasta
+192 bytes. Cada vuelta realiza como máximo un envío de 128 bytes con
+`MSG_DONTWAIT`, conservando el resto de una escritura parcial y reintentando
+EAGAIN/EWOULDBLOCK/EINTR sin esperar dentro del socket. Un error fatal o cinco
+segundos sin progreso cierran la conexión y descartan lo pendiente. La pérdida
+de WiFi, una reconexión TCP y NET/WIFI=0 también limpian la cola. Una cola llena
+muestra un diagnóstico por USB; no bloquea la lectura HID ni promete entrega.
+No es un outbox persistente de negocio, no interpreta ACK y no reproduce teclas.
+
+La prueba con backpressure se ejecuta así:
+
+```bash
+python3 firmware/tests/test_hid_tcp.py
+```
+
+### Repetir la prueba de coexistencia
+
+1. Cargar 0.2.2 por USB y confirmar INFO?. Conservar anuncio neutro `0` y la
+   asignación HID de 0.2.1: no se modifica el formato NVS ni hace falta olvidar
+   dispositivos o reinstalar la app.
+2. Reconectar ambos terminales. Confirmar APP=1;HID=1 y autorizar mantenimiento.
+3. Configurar NET una sola vez por USB (los parámetros de red desaparecen al
+   reiniciar). Esperar a WIFI=1;TCP=1; no repetir NET mientras sigue conectando.
+4. Comprobar en servidor el saludo, estados cada 10 s y
+   `HID_PROBE_TEST;HIDTEST=SUBMITTED;TEXT=PALLET123<TAB>LOC01<ENTER>` tras una
+   prueba iniciada desde la app. El receptor debe recibir realmente el texto.
+5. Repetir durante 15 minutos con envíos en los minutos 0, 5, 10 y 15, guardando
+   estados del PLC y registros del servidor. La validación física de 0.2.2 está
+   pendiente; los tests en host no la sustituyen.
 
 ## WiFi y TCP opcionales
 
