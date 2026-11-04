@@ -23,6 +23,7 @@ struct Peer {
   uint8_t addressType = 0xff;
   ReceiverIdentity identity;
   bool uartNotify = false;
+  bool reportSeen = false, bootSeen = false;
   bool reportNotify = false;
   bool bootNotify = false;
   bool reportProtocol = true;
@@ -107,6 +108,16 @@ class Sessions {
     auto existing = role(Role::Keyboard);
     if (existing.id != kNoConnection && !(existing == token)) return false;
     p->role = Role::Keyboard;
+    return true;
+  }
+  // Restore only the selected authenticated identity. A fresh CCCD write, even
+  // an explicit disable, always wins over remembered state for this connection.
+  bool restoreSubscriptions(Token token, const ReceiverIdentity &saved) {
+    auto *p = find(token);
+    if (!p || !p->secure || p->role == Role::Maintenance || !saved.subscriptionsKnown ||
+        !sameIdentity(p->identity, saved)) return false;
+    if (!p->reportSeen) p->reportNotify = (saved.subscriptions & 1) != 0;
+    if (!p->bootSeen) p->bootNotify = (saved.subscriptions & 2) != 0;
     return true;
   }
   void unbindKeyboard() {

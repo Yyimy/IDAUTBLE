@@ -1,4 +1,4 @@
-// IDAUT HID coexistence probe 0.2.0 — BENCH TEST ONLY, not the PLC controller.
+// IDAUT HID coexistence probe 0.2.1 — BENCH TEST ONLY, not the PLC controller.
 // ESP32-S3 / Arduino-ESP32 3.0.7. No GPIO/I2C/RS485/relay/battery supervision.
 #include <Arduino.h>
 #include <atomic>
@@ -16,7 +16,7 @@
 struct Command;
 struct Reply;
 
-static constexpr char PROBE_VERSION[] = "HID-PROBE-0.2.0";
+static constexpr char PROBE_VERSION[] = "HID-PROBE-0.2.1";
 // Diagnostic A/B: 0 = neutral BLE advertisement (first test), 1 = HID advertisement.
 // Both modes keep exactly the same GATT services, PIN, bonding and MITM gates.
 #ifndef PROBE_ADVERTISE_HID
@@ -213,8 +213,8 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
   if (handle == uartCccd || handle == inputCccd || handle == bootCccd) {
     const bool enabled = length == 2 && data[0] == 1 && data[1] == 0;
     if (handle == uartCccd) p->uartNotify = enabled;
-    if (handle == inputCccd) p->reportNotify = enabled;
-    if (handle == bootCccd) p->bootNotify = enabled;
+    if (handle == inputCccd) { p->reportNotify = enabled; p->reportSeen = true; }
+    if (handle == bootCccd) { p->bootNotify = enabled; p->bootSeen = true; }
     portEXIT_CRITICAL(&peerMux);
     return;
   }
@@ -287,10 +287,11 @@ static void loadReceiver() {
   const size_t size = receiverPreferences.getBytesLength("receiver");
   if (!size) { Serial.println("HID RECEIVER not assigned"); return; }
   uint8_t record[probe::receiverRecordSize];
-  if (size == sizeof(record) && receiverPreferences.getBytes("receiver", record, sizeof(record)) == sizeof(record)) {
-    if (probe::clearedReceiverRecord(record, sizeof(record))) { Serial.println("HID RECEIVER not assigned"); return; }
-    savedReceiver = probe::decodeReceiver(record, sizeof(record));
+  if ((size == sizeof(record) || size == probe::legacyReceiverRecordSize) && receiverPreferences.getBytes("receiver", record, size) == size) {
+    if (probe::clearedReceiverRecord(record, size)) { Serial.println("HID RECEIVER not assigned"); return; }
+    savedReceiver = probe::decodeReceiver(record, size);
   }
+  if (savedReceiver.valid && !savedReceiver.subscriptionsKnown) Serial.println("HID RECEIVER legacy subscriptions unknown; fresh HID subscription required");
   Serial.println(savedReceiver.valid ? "HID RECEIVER loaded" : "HID STORAGE invalid record; assign again or forget");
 }
 static bool saveReceiver(const probe::ReceiverIdentity &identity) {
@@ -342,9 +343,16 @@ static void receiverTick() {
   if (!savedReceiver.valid || pairWindow || unbindAfterRelease) return;
   s = snapshot();
   for (const auto &p : s.peers) {
-    if (!p.used || p.role != probe::Role::Unassigned || !probe::sameIdentity(savedReceiver, p.identity)) continue;
+    if (!p.used || !p.secure || p.role == probe::Role::Maintenance || !probe::sameIdentity(savedReceiver, p.identity)) continue;
+    auto updated = savedReceiver;
+    if (p.reportSeen) { updated.subscriptionsKnown = true; updated.subscriptions = (updated.subscriptions & ~1u) | (p.reportNotify ? 1 : 0); }
+    if (p.bootSeen) { updated.subscriptionsKnown = true; updated.subscriptions = (updated.subscriptions & ~2u) | (p.bootNotify ? 2 : 0); }
+    if (updated.subscriptionsKnown && (!savedReceiver.subscriptionsKnown || updated.subscriptions != savedReceiver.subscriptions)) {
+      if (!saveReceiver(updated)) { Serial.println("HID CCCD storage failed; recovery deferred"); continue; }
+    }
     portENTER_CRITICAL(&peerMux);
-    const bool restored = peers.bindKeyboard(p.token);
+    peers.restoreSubscriptions(p.token, savedReceiver);
+    const bool restored = p.role == probe::Role::Unassigned && peers.bindKeyboard(p.token);
     portEXIT_CRITICAL(&peerMux);
     if (restored) Serial.printf("HID RESTORED id=%u generation=%lu\n", p.token.id, (unsigned long)p.token.generation);
   }
@@ -397,7 +405,10 @@ static void pairTick() {
   if (!candidates) return; // A transient/private address alone is not a persistent identity.
   const auto *p = s.find(candidate);
   if (!p || !p->identity.valid) return;
-  if (!saveReceiver(p->identity)) {
+  auto selectedIdentity = p->identity;
+  selectedIdentity.subscriptionsKnown = true;
+  selectedIdentity.subscriptions = (p->reportNotify ? 1 : 0) | (p->bootNotify ? 2 : 0);
+  if (!saveReceiver(selectedIdentity)) {
     pairWindow = false;
     reply(pairOwner, pairFromUsb, false, "ERR=HID_STORAGE"); return;
   }
@@ -607,7 +618,7 @@ static uint16_t cccdHandle(BLECharacteristic *c) {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("BENCH ONLY: HID-PROBE-0.2.0. Not the PLC controller.");
+  Serial.println("BENCH ONLY: HID-PROBE-0.2.1. Not the PLC controller.");
   Serial.printf("BLE DIAGNOSTIC mode=%s name=%s\n",
       PROBE_HID_ADVERTISEMENT ? "HID_ADVERTISEMENT" : "NEUTRAL_ADVERTISEMENT", PROBE_NAME);
   Serial.println("Same GATT services, fixed PIN and SC/MITM security in both modes.");
