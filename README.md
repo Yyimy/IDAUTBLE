@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.21-plc3, versionCode 25 |
+| App Android | [android/](android/) | 1.3.22-plc3, versionCode 26 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.12-rc1 |
 
 ## Trabajar sin ZIP
@@ -500,3 +500,20 @@ El firmware operativo y la app conservan sus versiones y funcionamiento. La
 integración del selector APP/HID y de las lecturas reales se hará tras validar
 la prueba de coexistencia. Este sketch de banco no controla la carretilla ni
 supervisa sus baterías; revisar las instrucciones antes de cargarlo.
+
+## Teclado físico durante mantenimiento (app 1.3.22)
+
+La actividad contempla cambios de tipo/disponibilidad de teclado y navegación,
+además de orientación/tamaño. Así, registrar o retirar un teclado HID no recrea
+la actividad por esos cambios, evitando perder su registro en memoria y cerrar
+su GATT desde `onDestroy`. Compose recibe la nueva configuración mediante su
+ciclo habitual. Esto no garantiza supervivencia a cierre de la app o del proceso.
+
+En el prototipo HID, `ERR=PROBE_ONLY` al consultar `STATUS?` es esperado y no
+significa rechazo del emparejamiento. El estado detallado se consulta por USB
+con `status`: `APP=1` y `uart=1` confirman el canal de mantenimiento; el receptor
+requiere rol `HID`, no solo `UNASSIGNED` con suscripción report/boot. Abrir
+`HIDPAIR=1` por USB con solo el receptor candidato disponible permite asignarlo.
+El anuncio neutro 0.1.2 ha autenticado y enviado texto a un Zebra ET40/Android 14
+en las pruebas del usuario. Sigue pendiente validar la corrección de ciclo de
+vida y las dos conexiones con envío iniciado desde la app.

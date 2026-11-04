@@ -480,3 +480,19 @@ Validación final 03/11/2026: testDebugUnitTest, assembleDebug y lintDebug corre
 Lint: 0 errores y 0 MissingPermission, 32 advertencias y 3 avisos informativos;
 ningún aviso en StatusRefreshPolicy. git diff --check correcto. Sin validación
 física de esta corrección; el firmware 3.0.11 permanece sin cambios.
+
+
+### Teclado físico / coexistencia HID (1.3.22)
+
+- Con la app conectada y con entradas en el log, registrar/conectar y desconectar
+  un teclado físico Bluetooth. Repetir durante el establecimiento del GATT.
+- Comprobar que no se recrea la pantalla, no se pierde el log ni se cierra el
+  GATT por los cambios de teclado/disponibilidad/navegación. El teclado en
+  pantalla puede cambiar según las preferencias del sistema.
+- En HID-PROBE-0.1.2, usar anuncio neutro y dos terminales: uno receptor, otro
+  con la app. `ERR=PROBE_ONLY` ante STATUS? es normal. Consultar `status` por USB,
+  asignar el receptor mediante HIDPAIR=1 y comprobar CLIENTS=2, APP=1, HID=1.
+- Autorizar la app con PIN / ACCESS y enviar HIDTYPE=TEST desde su terminal TXT.
+  Solo el receptor debe recibir las teclas; la app conserva su log y conexión.
+- Esta comprobación necesita hardware; las pruebas unitarias y la compilación
+  no validan la ausencia de recreación en el Zebra.
