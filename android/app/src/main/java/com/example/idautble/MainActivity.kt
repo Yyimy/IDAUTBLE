@@ -362,6 +362,8 @@ class MainActivity : ComponentActivity() {
     private val uiIdentity = mutableStateOf<EquipmentIdentity?>(null)
     private val uiEquipmentId = mutableStateOf<String?>(null)
     private val uiReadings = mutableStateOf(PlcReadingsState())
+    private val uiHidReceiver = mutableStateOf(HidReceiverState())
+    private var hidReceiverRequest = 0L
     private val uiIdentityDraft = mutableStateOf("")
     private val uiIdentityBusy = mutableStateOf(false)
     private val uiIdentityStatus = mutableStateOf("")
@@ -844,7 +846,74 @@ class MainActivity : ComponentActivity() {
         sendBytes(bytes, "HEX")
     }
 
+    private fun requestHidReceiverAction(command: String) {
+        if (!bleChannelReady || !uiHidReceiver.value.supported || uiHidReceiver.value.busy) return
+        if (command != "HIDRECEIVER?" && !maintenanceSession.isAuthorized()) {
+            showIdentityAuthorizationMessage()
+            return
+        }
+        if (command !in setOf("HIDRECEIVER?", "HIDPAIR=1", "HIDPAIR=0", "HIDFORGET=1", "HIDTYPE=TEST")) return
+        val request = ++hidReceiverRequest
+        uiHidReceiver.value = uiHidReceiver.value.copy(busy = true, message = "Waiting for the PLC...")
+        sendText(command, true)
+        mainHandler.postDelayed({
+            if (request == hidReceiverRequest && uiHidReceiver.value.busy) {
+                uiHidReceiver.value = uiHidReceiver.value.copy(busy = false,
+                    message = "No confirmation. Refresh receiver status before retrying.")
+            }
+        }, 8000)
+    }
+
+    private fun handleHidReceiverMessage(message: PlcMessage) {
+        val text = message.text
+        if (message.acknowledged && text.startsWith("FW=")) {
+            val supported = supportsPersistentHidReceiver(text)
+            uiHidReceiver.value = HidReceiverState(supported = supported)
+            if (supported) requestHidReceiverAction("HIDRECEIVER?")
+            return
+        }
+        if (!uiHidReceiver.value.supported) return
+        if (message.acknowledged && text.startsWith("HIDRECEIVER=")) {
+            val info = parseHidReceiver(text)
+            hidReceiverRequest++
+            uiHidReceiver.value = uiHidReceiver.value.copy(info = info, busy = false,
+                message = if (info == null) "Invalid receiver response. Refresh before making changes." else if (uiHidReceiver.value.message == "Waiting for the PLC...") "" else uiHidReceiver.value.message)
+        } else if (message.acknowledged && text.startsWith("HIDTEST=")) {
+            val summary = when {
+                text == "HIDTEST=BOUND" -> "Receiver saved and ready."
+                text == "HIDTEST=FORGOTTEN" -> "Receiver assignment forgotten."
+                text == "HIDTEST=PAIR_WINDOW_60S" -> "Assignment open for 60 seconds. Connect the intended receiver."
+                text == "HIDTEST=PAIR_CLOSED" -> "Assignment cancelled."
+                text == "HIDTEST=PAIR_TIMEOUT" -> "No bonded HID receiver found within 60 seconds."
+                text == "HIDTEST=QUEUED" -> "Sending test text..."
+                text.startsWith("HIDTEST=SUBMITTED") -> "Test submitted. Check the text on the receiver."
+                text.startsWith("HIDTEST=CANCELLED") -> "Test cancelled; it will not be replayed."
+                else -> return
+            }
+            hidReceiverRequest++
+            uiHidReceiver.value = uiHidReceiver.value.copy(busy = text == "HIDTEST=QUEUED", message = summary)
+            if (text == "HIDTEST=QUEUED") {
+                val request = hidReceiverRequest
+                mainHandler.postDelayed({
+                    if (request == hidReceiverRequest && uiHidReceiver.value.busy)
+                        uiHidReceiver.value = uiHidReceiver.value.copy(busy = false, message = "Test result not confirmed. Check the receiver before retrying.")
+                }, 8000)
+            }
+        } else if (message.rejected && text.startsWith("ERR=HID")) {
+            hidReceiverRequest++
+            uiHidReceiver.value = uiHidReceiver.value.copy(busy = false, message = when (text) {
+                "ERR=HID_ALREADY_BOUND" -> "Forget the current receiver assignment before replacing it."
+                "ERR=HID_STORAGE" -> "The PLC could not save the assignment. Refresh before retrying."
+                "ERR=HID_AMBIGUOUS" -> "More than one receiver is available. Connect only the intended receiver."
+                "ERR=HID_NOT_READY_OR_BUSY" -> "The receiver is not ready or a test is already running."
+                else -> text
+            })
+        }
+    }
+
     private fun resetSecureTransport() {
+        hidReceiverRequest++
+        uiHidReceiver.value = HidReceiverState()
         txTimeout?.let { mainHandler.removeCallbacks(it) }
         txTimeout = null
         maintenanceSession.reset()
@@ -1230,6 +1299,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleProtocolControl(message: PlcMessage) {
         val text = message.text
+        handleHidReceiverMessage(message)
         statusRefresh.otaMessage(text)
         networkSession.setPaused(statusRefresh.otaActive)
         if (message.acknowledged && text.startsWith("COUNTERS=")) {
@@ -1967,6 +2037,8 @@ class MainActivity : ComponentActivity() {
                     autoRefreshEnabled = uiAutoRefreshEnabled.value,
                     onAutoRefreshChange = { setAutoRefresh(it) },
                     readings = uiReadings.value,
+                    hidReceiver = uiHidReceiver.value,
+                    onHidReceiverAction = { requestHidReceiverAction(it) },
                     equipmentId = uiEquipmentId.value,
                     onIdentityClick = { openIdentityDialog() },
                     onMaintenanceClick = { openPinDialog() },
@@ -2118,6 +2190,8 @@ private fun PlcBleTesterLandscape(
     autoRefreshEnabled: Boolean,
     onAutoRefreshChange: (Boolean) -> Unit,
     readings: PlcReadingsState,
+    hidReceiver: HidReceiverState,
+    onHidReceiverAction: (String) -> Unit,
     equipmentId: String?,
     onIdentityClick: () -> Unit,
     onMaintenanceClick: () -> Unit,
@@ -2536,6 +2610,8 @@ private fun PlcBleTesterLandscape(
                                         modifier = Modifier.fillMaxWidth(),
                                     )
                                 }
+
+                                HidReceiverSection(hidReceiver, connected, maintenanceAuthorised, onHidReceiverAction)
 
                                 CollapsibleSettingsSection(
                                     title = "DEVICE ID",

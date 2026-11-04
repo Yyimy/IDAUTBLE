@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.22-plc3, versionCode 26 |
+| App Android | [android/](android/) | 1.3.23-plc3, versionCode 27 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.12-rc1 |
 
 ## Trabajar sin ZIP
@@ -517,3 +517,21 @@ requiere rol `HID`, no solo `UNASSIGNED` con suscripción report/boot. Abrir
 El anuncio neutro 0.1.2 ha autenticado y enviado texto a un Zebra ET40/Android 14
 en las pruebas del usuario. Sigue pendiente validar la corrección de ciclo de
 vida y las dos conexiones con envío iniciado desde la app.
+
+## Receptor HID persistente (prototipo 0.2.0 / app 1.3.23)
+
+El prototipo guarda un único receptor en su espacio `hid_probe`. La app compatible
+muestra **HID RECEIVER · PROTOTYPE**, debajo de PIN / ACCESS, con Refresh, Assign
+receiver, Cancel assignment, Forget receiver y Send test text. Cambiar la
+asignación y enviar teclas requieren autorización de mantenimiento por sesión.
+
+La recuperación exige autenticación MITM, un vínculo Bluetooth presente, identidad
+coincidente y suscripción HID. Usa la identidad distribuida durante bonding y la
+IRK para resolver direcciones privadas; las claves no se muestran en diagnósticos.
+Un receptor desconocido o una identidad no resoluble no se asignan automáticamente.
+Olvidar la asignación no borra el emparejamiento de los terminales. Mantener anuncio
+neutro (`PROBE_ADVERTISE_HID=0`), validado en las pruebas anteriores con ET40.
+
+**0.2.0 sigue siendo exclusivamente una imagen de banco**, sin control de
+carretilla ni OTA. Ver el procedimiento de reinicio, reconexión, privacidad y
+olvido en [la guía del prototipo](firmware/HID_Coexistence_Probe/README.md).

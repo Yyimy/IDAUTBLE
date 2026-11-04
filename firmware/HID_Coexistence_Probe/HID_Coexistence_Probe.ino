@@ -1,4 +1,4 @@
-// IDAUT HID coexistence probe 0.1.2 — BENCH TEST ONLY, not the PLC controller.
+// IDAUT HID coexistence probe 0.2.0 — BENCH TEST ONLY, not the PLC controller.
 // ESP32-S3 / Arduino-ESP32 3.0.7. No GPIO/I2C/RS485/relay/battery supervision.
 #include <Arduino.h>
 #include <atomic>
@@ -7,6 +7,8 @@
 #include <BLEHIDDevice.h>
 #include <BLE2902.h>
 #include <WiFi.h>
+#include <Preferences.h>
+#include <mbedtls/aes.h>
 #include <esp_mac.h>
 #include "ProbeSessions.h"
 #include "ProbeKeyboard.h"
@@ -14,7 +16,7 @@
 struct Command;
 struct Reply;
 
-static constexpr char PROBE_VERSION[] = "HID-PROBE-0.1.2";
+static constexpr char PROBE_VERSION[] = "HID-PROBE-0.2.0";
 // Diagnostic A/B: 0 = neutral BLE advertisement (first test), 1 = HID advertisement.
 // Both modes keep exactly the same GATT services, PIN, bonding and MITM gates.
 #ifndef PROBE_ADVERTISE_HID
@@ -44,6 +46,10 @@ static_assert(validProbePin(), "Use a six-digit probe PIN");
 static constexpr uint32_t PAIR_WINDOW_MS = 60000;
 static probe::Sessions peers;
 static probe::Keyboard keyboard;
+static Preferences receiverPreferences;
+static bool receiverStorageReady = false;
+static probe::ReceiverIdentity savedReceiver;
+static uint32_t lastIdentityCheck = 0;
 static portMUX_TYPE peerMux = portMUX_INITIALIZER_UNLOCKED;
 static BLEServer *server;
 static std::atomic<esp_gatt_if_t> gattInterface{ESP_GATT_IF_NONE};
@@ -158,6 +164,11 @@ class SecurityCallbacks : public BLESecurityCallbacks {
     const bool secure = result.success && (result.auth_mode & ESP_LE_AUTH_REQ_MITM);
     portENTER_CRITICAL(&peerMux);
     const bool matched = peers.secureAddress(result.bd_addr, secure);
+    if (matched && secure) for (auto &p : peers.peers)
+      if (p.used && !memcmp(p.address, result.bd_addr, 6)) {
+        p.addressType = result.addr_type;
+        p.identity = {}; // Re-read the current bond after each authentication.
+      }
     portEXIT_CRITICAL(&peerMux);
     // fail_reason is meaningful only when authentication failed.
     Serial.printf("BLE SECURITY success=%u secure=%u matched=%u auth_mode=0x%02x reason=0x%02x\n",
@@ -230,6 +241,114 @@ static void advertiseTick() {
   advertisePending = true;
   BLEDevice::getAdvertising()->start();
 }
+static bool aesIdentity(const uint8_t *key, const uint8_t *input, uint8_t *output) {
+  mbedtls_aes_context ctx;
+  mbedtls_aes_init(&ctx);
+  const bool ok = mbedtls_aes_setkey_enc(&ctx, key, 128) == 0 &&
+      mbedtls_aes_crypt_ecb(&ctx, MBEDTLS_AES_ENCRYPT, input, output) == 0;
+  mbedtls_aes_free(&ctx);
+  return ok;
+}
+static probe::ReceiverIdentity bondIdentity(const esp_ble_bond_dev_t &bond) {
+  probe::ReceiverIdentity id;
+  id.valid = true;
+  id.hasIrk = (bond.bond_key.key_mask & ESP_BLE_ID_KEY_MASK) != 0;
+  id.type = uint8_t(id.hasIrk ? bond.bond_key.pid_key.addr_type : bond.bd_addr_type) & 1;
+  memcpy(id.address, id.hasIrk ? bond.bond_key.pid_key.static_addr : bond.bd_addr, 6);
+  if (id.hasIrk) memcpy(id.irk, bond.bond_key.pid_key.irk, 16);
+  return probe::stableIdentity(id) ? id : probe::ReceiverIdentity{};
+}
+static probe::ReceiverIdentity authenticatedIdentity(const probe::Peer &peer) {
+  if (!peer.secure || peer.addressType == 0xff) return {};
+  int count = esp_ble_get_bond_device_num();
+  if (count <= 0 || count > 16) return {};
+  esp_ble_bond_dev_t bonds[16] = {};
+  if (esp_ble_get_bond_device_list(&count, bonds) != ESP_OK) return {};
+  probe::ReceiverIdentity found;
+  for (int i = 0; i < count; ++i) {
+    const auto id = bondIdentity(bonds[i]);
+    if (!id.valid) continue;
+    const bool direct = ((uint8_t(bonds[i].bd_addr_type) & 1) == (peer.addressType & 1)) &&
+        !memcmp(bonds[i].bd_addr, peer.address, 6);
+    const bool canonical = id.type == (peer.addressType & 1) && !memcmp(id.address, peer.address, 6);
+    const bool privateMatch = peer.addressType >= 1 && peer.addressType <= 3 &&
+        probe::resolvesRpa(id, peer.address, aesIdentity);
+    if (!direct && !canonical && !privateMatch) continue;
+    if (found.valid && !probe::sameIdentity(found, id)) return {}; // Ambiguous: fail closed.
+    found = id;
+  }
+  return found;
+}
+static void loadReceiver() {
+  savedReceiver = {};
+  receiverStorageReady = receiverPreferences.begin("hid_probe", false);
+  if (!receiverStorageReady) { Serial.println("HID STORAGE unavailable"); return; }
+  if (!receiverPreferences.isKey("receiver")) { Serial.println("HID RECEIVER not assigned"); return; }
+  const size_t size = receiverPreferences.getBytesLength("receiver");
+  if (!size) { Serial.println("HID RECEIVER not assigned"); return; }
+  uint8_t record[probe::receiverRecordSize];
+  if (size == sizeof(record) && receiverPreferences.getBytes("receiver", record, sizeof(record)) == sizeof(record)) {
+    if (probe::clearedReceiverRecord(record, sizeof(record))) { Serial.println("HID RECEIVER not assigned"); return; }
+    savedReceiver = probe::decodeReceiver(record, sizeof(record));
+  }
+  Serial.println(savedReceiver.valid ? "HID RECEIVER loaded" : "HID STORAGE invalid record; assign again or forget");
+}
+static bool saveReceiver(const probe::ReceiverIdentity &identity) {
+  uint8_t record[probe::receiverRecordSize];
+  if (!receiverStorageReady || !probe::encodeReceiver(identity, record)) return false;
+  if (receiverPreferences.putBytes("receiver", record, sizeof(record)) != sizeof(record)) return false;
+  savedReceiver = identity;
+  return true;
+}
+static bool forgetReceiver() {
+  if (!receiverStorageReady) return false;
+  // A committed tombstone avoids treating a failed key lookup as successful erase.
+  uint8_t record[probe::receiverRecordSize]; probe::clearReceiverRecord(record);
+  if (receiverPreferences.putBytes("receiver", record, sizeof(record)) != sizeof(record)) return false;
+  savedReceiver = {};
+  return true;
+}
+static String receiverText() {
+  auto s = snapshot();
+  String text = "HIDRECEIVER=1;SAVED=" + String(savedReceiver.valid ? 1 : 0);
+  text += ";READY=" + String(s.keyboardReady(s.role(probe::Role::Keyboard)) ? 1 : 0);
+  text += ";WINDOW=" + String(pairWindow ? 1 : 0);
+  text += ";STORE=" + String(receiverStorageReady ? "OK" : "ERROR");
+  text += ";ID=";
+  if (!savedReceiver.valid) text += "-";
+  else {
+    char address[18];
+    snprintf(address, sizeof(address), "%02X:%02X:%02X:%02X:%02X:%02X", savedReceiver.address[0],
+        savedReceiver.address[1], savedReceiver.address[2], savedReceiver.address[3], savedReceiver.address[4], savedReceiver.address[5]);
+    text += address;
+  }
+  return text; // Never return IRK or other bond keys.
+}
+static void receiverTick() {
+  const uint32_t now = millis();
+  if (uint32_t(now - lastIdentityCheck) < 250) return;
+  lastIdentityCheck = now;
+  auto s = snapshot();
+  for (const auto &p : s.peers) {
+    if (!p.used || !p.secure || p.identity.valid) continue;
+    // Called from loop, not a BLE callback; allow bond database to settle.
+    const auto identity = authenticatedIdentity(p);
+    if (!identity.valid) continue;
+    portENTER_CRITICAL(&peerMux);
+    auto *live = peers.find(p.token);
+    if (live && live->secure) live->identity = identity;
+    portEXIT_CRITICAL(&peerMux);
+  }
+  if (!savedReceiver.valid || pairWindow || unbindAfterRelease) return;
+  s = snapshot();
+  for (const auto &p : s.peers) {
+    if (!p.used || p.role != probe::Role::Unassigned || !probe::sameIdentity(savedReceiver, p.identity)) continue;
+    portENTER_CRITICAL(&peerMux);
+    const bool restored = peers.bindKeyboard(p.token);
+    portEXIT_CRITICAL(&peerMux);
+    if (restored) Serial.printf("HID RESTORED id=%u generation=%lu\n", p.token.id, (unsigned long)p.token.generation);
+  }
+}
 static String statusText() {
   auto s = snapshot();
   String text = "HIDTEST=1;FW=" + String(PROBE_VERSION) + ";CLIENTS=" + String(s.count());
@@ -242,6 +361,7 @@ static String statusText() {
 }
 static void serialStatus() {
   Serial.println(statusText());
+  Serial.println(receiverText());
   auto s = snapshot();
   for (const auto &p : s.peers) {
     if (!p.used) continue;
@@ -256,21 +376,42 @@ static void pairTick() {
   if (!pairWindow) return;
   auto s = snapshot();
   if (uint32_t(millis() - pairStarted) >= PAIR_WINDOW_MS || (!pairFromUsb && !s.authorized(pairOwner))) {
-    pairWindow = false; Serial.println("HID binding window closed"); return;
-  }
-  for (const auto &p : s.peers) {
-    if (!p.used || p.role != probe::Role::Unassigned || !p.secure) continue;
-    portENTER_CRITICAL(&peerMux);
-    const bool bound = peers.bindKeyboard(p.token);
-    portEXIT_CRITICAL(&peerMux);
-    if (bound) {
-      pairWindow = false;
-      Serial.printf("HID BOUND id=%u generation=%lu (session only)\n", p.token.id, (unsigned long)p.token.generation);
-      reply(pairOwner, pairFromUsb, true, "HIDTEST=BOUND");
-      return;
+    pairWindow = false; Serial.println("HID binding window closed");
+    if (pairFromUsb || s.authorized(pairOwner)) {
+      reply(pairOwner, pairFromUsb, true, "HIDTEST=PAIR_TIMEOUT");
+      reply(pairOwner, pairFromUsb, true, receiverText());
     }
+    return;
   }
+  probe::Token candidate;
+  unsigned candidates = 0;
+  for (const auto &p : s.peers) {
+    if (!p.used || p.role != probe::Role::Unassigned || !p.secure ||
+        !(p.reportProtocol ? p.reportNotify : p.bootNotify)) continue;
+    candidate = p.token; ++candidates;
+  }
+  if (candidates > 1) {
+    pairWindow = false;
+    reply(pairOwner, pairFromUsb, false, "ERR=HID_AMBIGUOUS"); return;
+  }
+  if (!candidates) return; // A transient/private address alone is not a persistent identity.
+  const auto *p = s.find(candidate);
+  if (!p || !p->identity.valid) return;
+  if (!saveReceiver(p->identity)) {
+    pairWindow = false;
+    reply(pairOwner, pairFromUsb, false, "ERR=HID_STORAGE"); return;
+  }
+  portENTER_CRITICAL(&peerMux);
+  const bool bound = peers.bindKeyboard(candidate);
+  portEXIT_CRITICAL(&peerMux);
+  pairWindow = false;
+  if (bound) {
+    Serial.printf("HID BOUND id=%u generation=%lu (saved receiver)\n", candidate.id, (unsigned long)candidate.generation);
+    reply(pairOwner, pairFromUsb, true, "HIDTEST=BOUND");
+    reply(pairOwner, pairFromUsb, true, receiverText());
+  } else reply(pairOwner, pairFromUsb, false, "ERR=HID_DISCONNECTED_AFTER_SAVE");
 }
+
 static bool parseNetwork(String text) {
   String ssid, password, host;
   uint16_t port = 0;
@@ -334,12 +475,13 @@ static void processCommand(const Command &command) {
     reply(command.source, command.usb, true, "CONECTADO"); return;
   }
   if (text == "INFO?") { reply(command.source, command.usb, true, "FW=" + String(PROBE_VERSION) + ";PROTO=V2;ACKMODE=0;HEARTBEAT=0"); return; }
+  if (text == "HIDRECEIVER?") { reply(command.source, command.usb, true, receiverText()); return; }
   if (text == "HIDTEST?" || text == "status") {
     if (command.usb) serialStatus(); else reply(command.source, false, true, statusText());
     return;
   }
   if (text == "help") {
-    reply(command.source, command.usb, true, "BENCH ONLY: HIDPAIR=1 | HIDPAIR=0 | HIDTYPE=TEST | HIDTEST? | status. USB only: NET=SSID=...;PWD=...;HOST=...;PORT=... | WIFI=0"); return;
+    reply(command.source, command.usb, true, "BENCH ONLY: HIDPAIR=1 | HIDPAIR=0 | HIDFORGET=1 | HIDRECEIVER? | HIDTYPE=TEST | HIDTEST? | status. USB only: NET=SSID=...;PWD=...;HOST=...;PORT=... | WIFI=0"); return;
   }
   if (text == "AUTH=OFF") {
     portENTER_CRITICAL(&peerMux); peers.revoke(command.source); portEXIT_CRITICAL(&peerMux);
@@ -360,22 +502,29 @@ static void processCommand(const Command &command) {
   }
   if (text.endsWith("?")) { reply(command.source, command.usb, false, "ERR=PROBE_ONLY"); return; }
   if (!command.usb && !s.authorized(command.source)) { reply(command.source, false, false, "ERR=AUTH_REQUIRED"); return; }
-  if (text == "HIDPAIR=1") {
-    if (keyboard.busy()) { reply(command.source, command.usb, false, "BUSY"); return; }
-    if (s.role(probe::Role::Keyboard).id != probe::kNoConnection) { reply(command.source, command.usb, false, "ERR=HID_ALREADY_BOUND"); return; }
-    pairOwner = command.source; pairFromUsb = command.usb;
-    pairStarted = millis(); pairWindow = true;
-    reply(command.source, command.usb, true, "HIDTEST=PAIR_WINDOW_60S"); return;
-  }
-  if (text == "HIDPAIR=0") {
-    keyboard.cancel();
-    // Keep the target while releasing any held key; unbind once the job ends.
-    pairWindow = false; unbindAfterRelease = true;
+  if (text == "HIDFORGET=1") {
+    if (!forgetReceiver()) { reply(command.source, command.usb, false, "ERR=HID_STORAGE"); return; }
+    pairWindow = false; keyboard.cancel(); unbindAfterRelease = true;
     if (!keyboard.busy()) {
       portENTER_CRITICAL(&peerMux); peers.unbindKeyboard(); portEXIT_CRITICAL(&peerMux);
       unbindAfterRelease = false;
     }
-    reply(command.source, command.usb, true, "HIDTEST=PAIR_CLOSED"); return;
+    reply(command.source, command.usb, true, "HIDTEST=FORGOTTEN");
+    reply(command.source, command.usb, true, receiverText()); return;
+  }
+  if (text == "HIDPAIR=1") {
+    if (keyboard.busy()) { reply(command.source, command.usb, false, "BUSY"); return; }
+    if (s.role(probe::Role::Keyboard).id != probe::kNoConnection) { reply(command.source, command.usb, false, "ERR=HID_ALREADY_BOUND"); return; }
+    if (!receiverStorageReady) { reply(command.source, command.usb, false, "ERR=HID_STORAGE"); return; }
+    pairOwner = command.source; pairFromUsb = command.usb;
+    pairStarted = millis(); pairWindow = true;
+    reply(command.source, command.usb, true, "HIDTEST=PAIR_WINDOW_60S");
+    reply(command.source, command.usb, true, receiverText()); return;
+  }
+  if (text == "HIDPAIR=0") {
+    pairWindow = false;
+    reply(command.source, command.usb, true, "HIDTEST=PAIR_CLOSED");
+    reply(command.source, command.usb, true, receiverText()); return;
   }
   if (text == "HIDTYPE=TEST") {
     const auto host = s.role(probe::Role::Keyboard);
@@ -458,7 +607,7 @@ static uint16_t cccdHandle(BLECharacteristic *c) {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("BENCH ONLY: HID-PROBE-0.1.2. Not the PLC controller.");
+  Serial.println("BENCH ONLY: HID-PROBE-0.2.0. Not the PLC controller.");
   Serial.printf("BLE DIAGNOSTIC mode=%s name=%s\n",
       PROBE_HID_ADVERTISEMENT ? "HID_ADVERTISEMENT" : "NEUTRAL_ADVERTISEMENT", PROBE_NAME);
   Serial.println("Same GATT services, fixed PIN and SC/MITM security in both modes.");
@@ -473,6 +622,7 @@ void setup() {
   }
   applyProbeIdentity(testBase);
   if (esp_base_mac_addr_set(testBase) != ESP_OK) { Serial.println("Test identity failed"); while (true) delay(1000); }
+  loadReceiver();
   BLEDevice::init(PROBE_NAME);
   BLEDevice::setMTU(185);
   // 3.0.7 BLEDevice::gattServerEventHandler automatically requests encryption
@@ -535,6 +685,6 @@ void loop() {
   serialTick();
   Command command;
   if (xQueueReceive(commands, &command, 0) == pdTRUE) processCommand(command);
-  advertiseTick(); pairTick(); keyboardTick(); uartTick(); networkTick();
+  advertiseTick(); receiverTick(); pairTick(); keyboardTick(); uartTick(); networkTick();
   delay(1);
 }
