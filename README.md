@@ -4,8 +4,8 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.28-plc3, versionCode 32 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.15-rc1 |
+| App Android | [android/](android/) | 1.3.29-plc3, versionCode 33 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.16-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -577,7 +577,11 @@ Pulsa **Assign receiver** y conecta desde los ajustes Bluetooth del terminal que
 recibirá los códigos. Tras asignarlo, configura en **HID OUTPUT** los campos,
 el separador, la tecla final y el idioma del teclado. Desde la app 1.3.26 con
 firmware 3.0.14-rc1, el separador admite también `{UP}`, `{DOWN}`, `{LEFT}`
-y `{RIGHT}`. Puedes combinarlas con texto, Tab y Enter. La asignación y el formato
+y `{RIGHT}`. Puedes combinarlas con texto, Tab y Enter.
+
+La app 1.3.29 con PLC 3.0.16-rc1 añade Escape, Backspace, Delete, Insert,
+Home, End, Page Up, Page Down y F1–F12 al separador y al selector de tecla final.
+La tecla final admite también las flechas y espacio. La asignación y el formato
 del PLC operativo se guardan por separado de los del prototipo. Usa el nombre
 Bluetooth del PLC operativo para vincularlo.
 

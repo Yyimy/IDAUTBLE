@@ -9,8 +9,67 @@ internal val hidArrowTokens = mapOf(
     "{DOWN}" to '\u0082',
     "{UP}" to '\u0083',
 )
-private val hidSeparatorTokens = mapOf("{TAB}" to '\t', "{ENTER}" to '\n', "{SPACE}" to ' ') + hidArrowTokens
+private val hidExtendedTokens = mapOf(
+    "{ESC}" to '\u0084',
+    "{BACKSPACE}" to '\u0085',
+    "{DELETE}" to '\u0086',
+    "{INSERT}" to '\u0087',
+    "{HOME}" to '\u0088',
+    "{END}" to '\u0089',
+    "{PAGEUP}" to '\u008a',
+    "{PAGEDOWN}" to '\u008b',
+    "{F1}" to '\u008c',
+    "{F2}" to '\u008d',
+    "{F3}" to '\u008e',
+    "{F4}" to '\u008f',
+    "{F5}" to '\u0090',
+    "{F6}" to '\u0091',
+    "{F7}" to '\u0092',
+    "{F8}" to '\u0093',
+    "{F9}" to '\u0094',
+    "{F10}" to '\u0095',
+    "{F11}" to '\u0096',
+    "{F12}" to '\u0097',
+)
+private val hidBaseTokens = mapOf("{TAB}" to '\t', "{ENTER}" to '\n', "{SPACE}" to ' ')
+private val hidSeparatorTokens = hidBaseTokens + hidArrowTokens + hidExtendedTokens
 private val hidTokensByByte = hidSeparatorTokens.entries.associate { (token, byte) -> byte to token }
+private val hidEndingLabels = mapOf(
+    "ENTER" to "Enter",
+    "TAB" to "Tab",
+    "NONE" to "None",
+    "SPACE" to "Space",
+    "RIGHT" to "Right",
+    "LEFT" to "Left",
+    "DOWN" to "Down",
+    "UP" to "Up",
+    "ESC" to "Escape",
+    "BACKSPACE" to "Backspace",
+    "DELETE" to "Delete",
+    "INSERT" to "Insert",
+    "HOME" to "Home",
+    "END" to "End",
+    "PAGEUP" to "Page up",
+    "PAGEDOWN" to "Page down",
+    "F1" to "F1",
+    "F2" to "F2",
+    "F3" to "F3",
+    "F4" to "F4",
+    "F5" to "F5",
+    "F6" to "F6",
+    "F7" to "F7",
+    "F8" to "F8",
+    "F9" to "F9",
+    "F10" to "F10",
+    "F11" to "F11",
+    "F12" to "F12",
+)
+internal fun hidEndingOptions(extended: Boolean) =
+    if (extended) hidEndingLabels else hidEndingLabels.filterKeys { it in setOf("ENTER", "TAB", "NONE") }
+
+internal fun hidSeparatorOptions(allowArrows: Boolean, extended: Boolean) =
+    hidBaseTokens.keys + (if (allowArrows || extended) hidArrowTokens.keys else emptySet()) +
+        (if (extended) hidExtendedTokens.keys else emptySet())
 
 data class HidOutputConfig(
     val fields: String = "PU",
@@ -19,7 +78,7 @@ data class HidOutputConfig(
     val layout: String = "US",
 ) {
     fun wire(): String {
-        require(fields in setOf("P", "U", "PU") && ending in setOf("ENTER", "TAB", "NONE") && layout in setOf("US", "ES"))
+        require(fields in setOf("P", "U", "PU") && ending in hidEndingLabels && layout in setOf("US", "ES"))
         require(separator.length <= HID_SEPARATOR_LIMIT && separator.all { hidOutputCharacter(it) || it in hidTokensByByte })
         val hex = if (separator.isEmpty()) "-" else separator.map { "%02X".format(it.code) }.joinToString("")
         return "HIDCFG=1;FIELDS=$fields;SEPHEX=$hex;END=$ending;LAYOUT=$layout"
@@ -28,7 +87,7 @@ data class HidOutputConfig(
         if (fields != "U") append("PALLET123")
         if (fields == "PU") append(separator)
         if (fields != "P") append("LOC01")
-        if (ending == "ENTER") append('\n') else if (ending == "TAB") append('\t')
+        hidSeparatorTokens["{$ending}"]?.let { append(it) }
     }.let(::hidSeparatorPattern)
 }
 
@@ -39,6 +98,7 @@ data class HidOutputState(
     val message: String = "",
     val revision: Long = 0,
     val arrowSeparators: Boolean = false,
+    val extendedKeys: Boolean = false,
 )
 
 private fun hidOutputCharacter(c: Char) = c == '\t' || c == '\n' || c.code in 32..126
@@ -50,8 +110,8 @@ fun hidSeparatorPattern(bytes: String): String = buildString {
 }
 
 /** null means invalid: never silently truncate or strip an unrecognised token. */
-fun decodeHidSeparator(pattern: String, allowArrows: Boolean = true): String? {
-    if (pattern.length > HID_SEPARATOR_LIMIT * 7) return null
+fun decodeHidSeparator(pattern: String, allowArrows: Boolean = true, extended: Boolean = true): String? {
+    if (pattern.length > HID_SEPARATOR_LIMIT * "{BACKSPACE}".length) return null
     val out = StringBuilder()
     var i = 0
     while (i < pattern.length) {
@@ -63,6 +123,7 @@ fun decodeHidSeparator(pattern: String, allowArrows: Boolean = true): String? {
             val end = pattern.indexOf('}', i)
             if (end < 0) return null
             val token = pattern.substring(i, end + 1)
+            if (!extended && token in hidExtendedTokens) return null
             if (!allowArrows && token in hidArrowTokens) return null
             out.append(hidSeparatorTokens[token] ?: return null)
             i = end + 1
