@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.29-plc3, versionCode 33 |
+| App Android | [android/](android/) | 1.3.30-plc3, versionCode 34 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.16-rc1 |
 
 ## Trabajar sin ZIP

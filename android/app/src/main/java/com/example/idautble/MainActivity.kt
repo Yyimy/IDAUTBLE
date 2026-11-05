@@ -521,8 +521,8 @@ class MainActivity : ComponentActivity() {
                 val dev = result.device ?: return
                 val addr = dev.address ?: return
 
-                val nameRaw =
-                    runCatching { result.scanRecord?.deviceName }.getOrNull()
+                val name =
+                    result.scanRecord?.deviceName?.trim()?.takeIf { it.isNotEmpty() }
                         ?: runCatching {
                                 if (
                                     Build.VERSION.SDK_INT >= 31 &&
@@ -534,11 +534,9 @@ class MainActivity : ComponentActivity() {
                                     null
                                 else dev.name
                             }
-                            .getOrNull()
-
-                val name = nameRaw?.trim()
-
-                if (name.isNullOrEmpty()) return
+                            .getOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                        ?: recentPlc?.takeIf { it.address == addr }?.let { foundMap[addr]?.name ?: it.name }
+                        ?: return
 
                 val rssi = result.rssi
                 val device = BleDevice(name, addr, rssi)
@@ -2524,9 +2522,12 @@ private fun PlcBleTesterLandscape(
                                     }
 
                                     if (selected != null) {
+                                        val observation = selected.rssi?.let { " | RSSI:$it" }
+                                            ?: if (devices.any { it.address == selected.address && it.rssi == null }) {
+                                                " | Last connected PLC"
+                                            } else ""
                                         Text(
-                                            text =
-                                                "${selected.name} | ${selected.address} | ${selected.rssi?.let { "RSSI:$it" } ?: "Not seen in scan"}",
+                                            text = "${selected.name} | ${selected.address}$observation",
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             fontSize = 11.sp,
