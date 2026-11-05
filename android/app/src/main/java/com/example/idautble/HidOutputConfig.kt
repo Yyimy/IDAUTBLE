@@ -1,5 +1,7 @@
 package com.example.idautble
 
+internal const val HID_SEPARATOR_LIMIT = 32
+
 /** Separator tokens are encoded as individual bytes in SEPHEX. */
 internal val hidArrowTokens = mapOf(
     "{RIGHT}" to '\u0080',
@@ -18,7 +20,7 @@ data class HidOutputConfig(
 ) {
     fun wire(): String {
         require(fields in setOf("P", "U", "PU") && ending in setOf("ENTER", "TAB", "NONE") && layout in setOf("US", "ES"))
-        require(separator.length <= 32 && separator.all { hidOutputCharacter(it) || it in hidTokensByByte })
+        require(separator.length <= HID_SEPARATOR_LIMIT && separator.all { hidOutputCharacter(it) || it in hidTokensByByte })
         val hex = if (separator.isEmpty()) "-" else separator.map { "%02X".format(it.code) }.joinToString("")
         return "HIDCFG=1;FIELDS=$fields;SEPHEX=$hex;END=$ending;LAYOUT=$layout"
     }
@@ -49,7 +51,7 @@ fun hidSeparatorPattern(bytes: String): String = buildString {
 
 /** null means invalid: never silently truncate or strip an unrecognised token. */
 fun decodeHidSeparator(pattern: String, allowArrows: Boolean = true): String? {
-    if (pattern.length > 224) return null
+    if (pattern.length > HID_SEPARATOR_LIMIT * 7) return null
     val out = StringBuilder()
     var i = 0
     while (i < pattern.length) {
@@ -65,7 +67,7 @@ fun decodeHidSeparator(pattern: String, allowArrows: Boolean = true): String? {
             out.append(hidSeparatorTokens[token] ?: return null)
             i = end + 1
         }
-        if (out.length > 32) return null
+        if (out.length > HID_SEPARATOR_LIMIT) return null
     }
     return out.toString()
 }
@@ -80,7 +82,7 @@ fun parseHidOutputConfig(text: String): HidOutputConfig? {
     if (values.keys != setOf("FIELDS", "SEPHEX", "END", "LAYOUT")) return null
     val hex = values["SEPHEX"] ?: return null
     val separator = if (hex == "-") "" else {
-        if (hex.isEmpty() || hex.length > 64 || hex.length % 2 != 0 || !hex.all { it in '0'..'9' || it in 'A'..'F' }) return null
+        if (hex.isEmpty() || hex.length > HID_SEPARATOR_LIMIT * 2 || hex.length % 2 != 0 || !hex.all { it in '0'..'9' || it in 'A'..'F' }) return null
         hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("")
     }
     val result = HidOutputConfig(values.getValue("FIELDS"), separator, values.getValue("END"), values.getValue("LAYOUT"))
