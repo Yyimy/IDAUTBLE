@@ -4,8 +4,8 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.24-plc3, versionCode 28 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.12-rc1 |
+| App Android | [android/](android/) | 1.3.25-plc3, versionCode 29 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.13-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -44,7 +44,7 @@ Instrucciones de conexión, red y OTA: [android/LEEME_PLC3.md](android/LEEME_PLC
 
 ## Arduino IDE
 
-Abre **firmware/PLC_Scanner_v3/PLC_Scanner_v3.ino**; `Types.h` debe estar en la misma carpeta.
+Abre **firmware/PLC_Scanner_v3/PLC_Scanner_v3.ino**; mantén todos sus archivos `.h` en la misma carpeta.
 
 Usa **esp32 by Espressif Systems 3.0.7**, Adafruit ADS1X15 2.5.0 y Adafruit BusIO 1.16.2. Objetivo de compilación: ESP32S3 Dev Module, USB CDC habilitado y partición Minimal SPIFFS con OTA. Ajusta flash/PSRAM a la placa física.
 
@@ -568,3 +568,29 @@ guarda en el prototipo con autorización y confirmación del PLC, y se recupera
 tras reiniciar. Send test text aplica el formato guardado a datos sintéticos.
 El firmware operativo sigue en 3.0.12-rc1; las lecturas reales se integrarán después
 de validar el nuevo formato. [Opciones y secuencia de prueba](firmware/HID_Coexistence_Probe/README.md#formato-configurable-030--app-1324).
+
+
+## Teclado HID en el firmware operativo (3.0.13-rc1)
+
+En la app 1.3.25, abre **HID RECEIVER** y autoriza los cambios desde **PIN / ACCESS**.
+Pulsa **Assign receiver** y conecta desde los ajustes Bluetooth del terminal que
+recibirá los códigos. Tras asignarlo, configura en **HID OUTPUT** los campos,
+el separador, la tecla final y el idioma del teclado. La asignación y el formato
+del PLC operativo se guardan por separado de los del prototipo. Usa el nombre
+Bluetooth del PLC operativo para vincularlo.
+
+Una lectura completa (fotocélula o comando L) envía los campos seleccionados
+al receptor asignado y continúa por las rutas V2 habituales. Los resultados
+de Send test text son sintéticos y se muestran en la app de mantenimiento.
+Si falta un campo seleccionado, se omite el tecleo de esa lectura. Se admiten
+cuatro lecturas HID pendientes, además de la que se está escribiendo. El monitor
+serie registra los descartes por falta de receptor o cola llena. Los trabajos
+HID están ligados a la conexión del receptor y se descartan al perderla. Los
+reintentos de eventos V2 no vuelven a generar tecleo.
+
+Para la primera prueba física, carga por USB el sketch completo en una placa de
+pruebas. Conecta la app y el receptor HID desde terminales distintos. Comprueba
+Send test text, una lectura completa con TCP activo, una lectura con un campo
+ausente y la reconexión tras un reinicio. Verifica el texto en el terminal y la
+trama V2 en el servidor. Si el receptor aún conserva la definición GATT antigua
+del PLC operativo, olvida esa vinculación en el terminal y vuelve a emparejarlo.

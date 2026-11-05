@@ -80,6 +80,7 @@ types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#includ
 names=['handleAuthCommand','maintenanceAuthorized','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
+using std::min;
 #define V_BAT_ABSENT 2.0f
 #define V_CUTOFF_COLLAPSE 13.5f
 #define V_CUTOFF_WARN 14.0f
@@ -136,6 +137,26 @@ int esp_ble_get_bond_device_num(){return bondCount;}
 int esp_ble_get_bond_device_list(int*,esp_ble_bond_dev_t*){return ESP_OK;}
 int esp_ble_remove_bond_device(uint8_t*){++bondsRemoved;return ESP_OK;}
 '''
+shim += r'''
+namespace plcHid {
+void batteryLevel(uint8_t) {}
+bool canNotify(uint32_t session) {
+  return session == gBleSession && gBleSecure && deviceConnected && cccd.enabled;
+}
+int notify(uint32_t session, uint8_t *data, size_t length) {
+  if (!canNotify(session)) return -1;
+  const auto size = std::min(length, size_t(gBleMtu - 3));
+  characteristic.setValue(data, size);
+  characteristic.notify();
+  return int(size);
+}
+bool authorized(uint32_t) { return gMaintenanceAuthorized; }
+void setAuthorized(uint32_t, bool value) { gMaintenanceAuthorized = value; }
+bool handle(const String&, uint8_t) { return false; }
+std::vector<std::pair<String, String>> readings;
+void reading(const String &pallet, const String &location) { readings.emplace_back(pallet, location); }
+}
+'''
 # Types require integer definitions and String prototypes are declared by Arduino in firmware.
 includes=shim[:shim.index('using std::size_t;')]
 body=includes+types+'\n'+shim[shim.index('using std::size_t;'):]+'\n'
@@ -169,16 +190,18 @@ int main(){
  CHECK(!otaParseStart("OTA=URL=http://192.168.4.2:8080/x;SIZE=-1;SHA256="));
  resetScanner();nowMs=0;gRtcIso="2026-10-29T12:00:00";gFotoEstado='1';enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx="]d1PARTIAL";nowMs=2001;scanTick();
  CHECK(!gScanActive);CHECK(failCount==1);CHECK(gCodPalet=="-"&&gCodUbic=="-");CHECK(emitted.size()==1);
- resetScanner();nowMs=3000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx="]d1PAL;]Q1LOC\r\n";nowMs=3020;scanTick();CHECK(!gScanActive);CHECK(gCodPalet=="PAL"&&gCodUbic=="LOC");CHECK(failCount==0);
+ resetScanner();plcHid::readings.clear();nowMs=3000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx="]d1PAL;]Q1LOC\r\n";nowMs=3020;scanTick();CHECK(!gScanActive);CHECK(gCodPalet=="PAL"&&gCodUbic=="LOC");CHECK(failCount==0);
+ CHECK(plcHid::readings.size()==1&&plcHid::readings[0].first=="PAL"&&plcHid::readings[0].second=="LOC");
  resetScanner();nowMs=4000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx=std::string(330,'A')+"\n";scanTick();CHECK(failCount==1);CHECK(gCodPalet=="-");
- resetScanner();nowMs=5000;gAlturaEnabled=true;enqueueScan(BLECMD_A,false);scanTick();CHECK(gScanActive);nowMs=5251;scanTick();CHECK(!gScanActive&&gAltura=="-");
+ CHECK(plcHid::readings.size()==2&&plcHid::readings[1].first=="-"&&plcHid::readings[1].second=="-");
+ resetScanner();nowMs=5000;gAlturaEnabled=true;enqueueScan(BLECMD_A,false);scanTick();CHECK(gScanActive);nowMs=5251;scanTick();CHECK(!gScanActive&&gAltura=="-");CHECK(plcHid::readings.size()==2);
  resetScanner();nowMs=6000;gFotoLista=false;gFotoUltLect=LOW;rawFoto=LOW;gFotoUltCambioMs=6000;photoTick();nowMs=7500;photoTick();CHECK(gFotoLista&&armadoInactividad&&!PaletCargado);
  rawFoto=HIGH;nowMs=7600;photoTick();nowMs=7851;photoTick();CHECK(PaletCargado&&loaded==1);
  // Hold a pallet longer than inactivity period; unloading must start a fresh timer.
  nowMs=8000000;photoTick();CHECK(!gCutRequested);
  rawFoto=LOW;nowMs=8000100;photoTick();nowMs=8000351;photoTick();CHECK(!PaletCargado&&!gCutRequested&&unloaded==1);
  nowMs=8000351+FOTO_INACTIVIDAD_MS-1;photoTick();CHECK(!gCutRequested);nowMs++;photoTick();CHECK(gCutRequested);
- 
+
  gCutRequested=false;lastBatSafetyCheck=0;vCollapseSinceMs=0;vWarnSinceMs=0;gBatV1=13.4f;gBatV2=19;gBatValid[0]=gBatValid[1]=true;
  nowMs=1000;batteryTick();CHECK(!gCutRequested);nowMs=3999;batteryTick();CHECK(!gCutRequested);nowMs=5000;batteryTick();CHECK(gCutRequested);
  // Invalid ADC data resets confirmation, and cannot masquerade as removal.

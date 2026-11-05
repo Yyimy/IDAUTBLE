@@ -9,6 +9,7 @@ data class HidReceiverInfo(
 
 data class HidReceiverState(
     val supported: Boolean = false,
+    val production: Boolean = false,
     val info: HidReceiverInfo? = null,
     val busy: Boolean = false,
     val message: String = "",
@@ -16,6 +17,7 @@ data class HidReceiverState(
 
 fun supportsPersistentHidReceiver(text: String): Boolean {
     if (!text.startsWith("FW=")) return false
+    if ("HIDRECEIVER=1" in text.split(';')) return true
     val version = text.split(';').firstOrNull()?.removePrefix("FW=") ?: return false
     val match = Regex("HID-PROBE-(\\d+)\\.(\\d+)\\.(\\d+)").matchEntire(version) ?: return false
     val major = match.groupValues[1].toIntOrNull() ?: return false
