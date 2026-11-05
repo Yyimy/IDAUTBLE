@@ -220,8 +220,9 @@ static const char *roleName(probe::Role role) {
 
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *, esp_ble_gatts_cb_param_t *param) override {
+    const uint32_t now = millis();
     portENTER_CRITICAL(&peerMux);
-    const auto token = peers.connect(param->connect.conn_id, param->connect.remote_bda);
+    const auto token = peers.connect(param->connect.conn_id, param->connect.remote_bda, now);
     portEXIT_CRITICAL(&peerMux);
     isAdvertising = false;
     advertisePending = false;
@@ -499,7 +500,7 @@ static void pairTick() {
   probe::Token candidate;
   unsigned candidates = 0;
   for (const auto &p : s.peers) {
-    if (!p.used || p.role != probe::Role::Unassigned || !p.secure ||
+    if (!p.used || p.expiring || p.role != probe::Role::Unassigned || !p.secure ||
         !(p.reportProtocol ? p.reportNotify : p.bootNotify)) continue;
     candidate = p.token; ++candidates;
   }
@@ -661,6 +662,40 @@ static void maintenanceLeaseTick() {
   if (expired) esp_ble_gap_disconnect(address);
 }
 
+static void unassignedLeaseTick() {
+  if (pairWindow || blocked()) return;
+
+  constexpr uint32_t graceMs = 20000;
+  constexpr uint32_t retryMs = 1500;
+  const uint32_t now = millis();
+  const auto state = snapshot();
+  for (const auto &candidate : state.peers) {
+    if (!candidate.used || candidate.role != probe::Role::Unassigned ||
+        uint32_t(now - candidate.unassignedSinceMs) < graceMs) continue;
+
+    uint8_t address[6];
+    bool expired = false;
+    portENTER_CRITICAL(&peerMux);
+    auto *peer = peers.find(candidate.token);
+    if (peer && peer->role == probe::Role::Unassigned) {
+      memcpy(address, peer->address, sizeof(address));
+      peer->expiring = true;
+      peer->unassignedSinceMs = now - graceMs + retryMs;
+      expired = true;
+    }
+    portEXIT_CRITICAL(&peerMux);
+
+    if (!expired) continue;
+    Serial.printf("BLE UNASSIGNED EXPIRED id=%u generation=%lu\n",
+        candidate.token.id, (unsigned long)candidate.token.generation);
+    if (esp_ble_gap_disconnect(address) != ESP_OK) {
+      portENTER_CRITICAL(&peerMux);
+      if (auto *live = peers.find(candidate.token)) live->expiring = false;
+      portEXIT_CRITICAL(&peerMux);
+    }
+  }
+}
+
 static void tick() {
   maintenanceLeaseTick();
   if (blocked()) {
@@ -669,6 +704,7 @@ static void tick() {
   } else {
     receiverTick();
     pairTick();
+    unassignedLeaseTick();
     const auto state = snapshot();
     if (pendingCount && !state.keyboardReady(pending[pendingHead].receiver)) {
       clearReadings();

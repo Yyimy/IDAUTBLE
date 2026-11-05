@@ -5,7 +5,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 | Componente | Carpeta | Versión |
 |---|---|---|
 | App Android | [android/](android/) | 1.3.32-plc3, versionCode 36 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.19-rc1 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.20-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -620,3 +620,6 @@ Con app 1.3.31 y PLC 3.0.17-rc1, **Disconnect** pide al propio PLC cerrar
 el enlace Bluetooth de la tablet de mantenimiento. Esto libera la plaza para
 el relevo incluso si Android mantiene abierto el enlace físico al cerrar GATT.
 La orden se rechaza durante OTA. El respaldo por inactividad sigue disponible.
+
+Los enlaces BLE sin rol se cierran tras 20 segundos. La ventana de asignación
+HID y la OTA suspenden este cierre mientras están activas.

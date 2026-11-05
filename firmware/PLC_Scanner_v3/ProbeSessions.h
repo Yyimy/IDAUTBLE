@@ -35,6 +35,8 @@ struct Peer {
   bool authLocked = false;
   uint16_t mtu = 23;
   uint32_t maintenanceActivityMs = 0;
+  uint32_t unassignedSinceMs = 0;
+  bool expiring = false;
 };
 
 // No BLE/global CCCD state: every capability belongs to a connection generation.
@@ -44,13 +46,14 @@ class Sessions {
   static constexpr size_t capacity = 2;
   Peer peers[capacity];
 
-  Token connect(uint16_t id, const uint8_t *address) {
+  Token connect(uint16_t id, const uint8_t *address, uint32_t now = 0) {
     if (id == kNoConnection || byId(id)) return {};
     for (const auto &p : peers) if (p.used && !std::memcmp(p.address, address, 6)) return {};
     for (auto &p : peers) {
       if (p.used) continue;
       p = Peer{};
       p.used = true;
+      p.unassignedSinceMs = now;
       p.token = {id, ++generation_};
       if (!p.token.generation) p.token.generation = ++generation_;
       std::memcpy(p.address, address, 6);
@@ -96,7 +99,7 @@ class Sessions {
   }
   bool claimMaintenance(Token token) {
     auto *p = find(token);
-    if (!p || !p->secure || !p->uartNotify || p->role == Role::Keyboard) return false;
+    if (!p || p->expiring || !p->secure || !p->uartNotify || p->role == Role::Keyboard) return false;
     auto existing = role(Role::Maintenance);
     if (existing.id != kNoConnection && !(existing == token)) return false;
     p->role = Role::Maintenance;
@@ -105,7 +108,7 @@ class Sessions {
   // Explicit admin action: a CCCD write by itself never becomes a keyboard role.
   bool bindKeyboard(Token token) {
     auto *p = find(token);
-    if (!p || !p->secure || p->role == Role::Maintenance || !subscription(*p)) return false;
+    if (!p || p->expiring || !p->secure || p->role == Role::Maintenance || !subscription(*p)) return false;
     auto existing = role(Role::Keyboard);
     if (existing.id != kNoConnection && !(existing == token)) return false;
     p->role = Role::Keyboard;
