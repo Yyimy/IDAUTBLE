@@ -917,7 +917,7 @@ class MainActivity : ComponentActivity() {
         val text = message.text
         if (message.acknowledged && text.startsWith("FW=")) {
             val supported = supportsPersistentHidReceiver(text)
-            uiHidReceiver.value = HidReceiverState(supported = supported)
+            uiHidReceiver.value = HidReceiverState(supported = supported, production = "HIDRECEIVER=1" in text.split(';'))
             if (supported) requestHidReceiverAction("HIDRECEIVER?")
             return
         }
@@ -2668,7 +2668,7 @@ private fun PlcBleTesterLandscape(
                                 }
 
                                 HidReceiverSection(hidReceiver, connected, maintenanceAuthorised, onHidReceiverAction, hidOutput.supported)
-                                HidOutputSection(hidOutput, connected, onHidOutputAction)
+                                HidOutputSection(hidOutput, connected, hidReceiver.production, onHidOutputAction)
 
                                 CollapsibleSettingsSection(
                                     title = "DEVICE ID",

@@ -120,7 +120,6 @@ BLECharacteristic *pCharacteristic = nullptr;
 std::atomic<bool> deviceConnected{false};
 std::atomic<bool> isAdvertising{false};
 std::atomic<unsigned long> lastAdvertiseCheck{0};
-const unsigned long ADV_CHECK_MS = 10000;  // 10 s
 
 // Comandos esperados (4 bytes)
 const uint8_t CMD_L[4] = {0x1B, 0x4C, 0x0D, 0x0A};  // Lectura global
@@ -161,7 +160,7 @@ static void otaSendErr(const String &err) {
 }
 
 static QueueHandle_t gCommandQueue = nullptr;
-static std::atomic<uint32_t> gBleSession{1};
+static std::atomic<uint32_t> gBleSession{0};
 
 static inline void bleSendBusy() {
   // “busy” explícito. Android puede reintentar en 200-500ms.
@@ -485,21 +484,16 @@ static void handleIdentityCommand(const String &s, uint8_t source);
 // Runtime v3: loop owns IO, parsing, output notifications and persistent
 // events.
 #define REQUIRE_MAINT_AUTH 1
-#define REQUIRE_BLE_PAIRING 1
-static std::atomic<bool> gBleSecure{false};
 // Preserve original low-battery policy until the electrical power path is
 // verified. 0: cut if ANY present battery is critical; 1: cut only if ALL
 // present are critical.
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.12-rc1"
+#define FIRMWARE_VERSION "3.0.13-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
-static BLE2902 *gCccd = nullptr;
-static std::atomic<uint16_t> gBleMtu{23};
 static uint32_t gTxDropped = 0, gEventOverflow = 0, gScanOverflow = 0;
-static std::atomic<bool> gMaintenanceAuthorized{false};
 static uint32_t gAuthBlockedUntil = 0;
 static uint8_t gAuthFails = 0;
 static String gMaintenancePin;
@@ -2048,181 +2042,115 @@ void sendResponse_I() {
 // BLE CALLBACKS
 // ============================================================================
 
-class MyCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *pChar) override {
-    const uint32_t receivedMs = millis();
-    String rxString = pChar->getValue();
-    if (rxString.length() == 0) return;
+static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t session) {
+  const uint32_t receivedMs = millis();
+  String rxString(reinterpret_cast<const char *>(data), length);
+  if (rxString.length() == 0) return;
 
-    String rxTrim = rxString;
-    rxTrim.trim();
+  String rxTrim = rxString;
+  rxTrim.trim();
 
-    BleCmd cmd = {};
-    cmd.receivedMs = receivedMs;
-    cmd.type = BLECMD_NONE;
-    cmd.payload[0] = '\0';
-    if (rxString.length() >= sizeof(cmd.payload)) {
-      bleSendBusy();
+  BleCmd cmd = {};
+  cmd.receivedMs = receivedMs;
+  cmd.type = BLECMD_NONE;
+  cmd.payload[0] = '\0';
+  if (rxString.length() >= sizeof(cmd.payload)) {
+    const uint8_t busy[] = {0x15, 'B', 'U', 'S', 'Y', 13, 10};
+    queueTargetFrame(busy, sizeof(busy), nullptr, TX_BLE_ONLY, session);
+    return;
+  }
+
+  // --------------------------
+  // 1) TEXTO (RTC/CFG) -> se difiere, NO se ejecuta aquí
+  // --------------------------
+  if (rxTrim.startsWith("RTC=")) {
+    cmd.type = BLECMD_RTC_SET;
+    strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
+    cmd.payload[sizeof(cmd.payload) - 1] = '\0';
+  } else if (rxTrim == "CFG?") {
+    cmd.type = BLECMD_CFG_GET;
+  } else if (rxTrim.startsWith("CFG=")) {
+    cmd.type = BLECMD_CFG_SET;
+    strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
+    cmd.payload[sizeof(cmd.payload) - 1] = '\0';
+  } else if (rxTrim == "NET?") {
+    cmd.type = BLECMD_NET_GET;
+  } else if (rxTrim.startsWith("NET=")) {
+    cmd.type = BLECMD_NET_SET;
+    strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
+    cmd.payload[sizeof(cmd.payload) - 1] = '\0';
+  } else if (rxTrim == "NETSTAT?") {
+    cmd.type = BLECMD_NETSTAT_GET;
+  } else if (rxTrim == "WIFI?") {
+    cmd.type = BLECMD_WIFI_GET;
+  } else if (rxTrim.startsWith("WIFI=")) {
+    cmd.type = BLECMD_WIFI_SET;
+    strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
+    cmd.payload[sizeof(cmd.payload) - 1] = '\0';
+  } else if (rxTrim == "ALT?") {
+    cmd.type = BLECMD_ALT_GET;
+  } else if (rxTrim.startsWith("ALT=")) {
+    cmd.type = BLECMD_ALT_SET;
+    strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
+    cmd.payload[sizeof(cmd.payload) - 1] = '\0';
+  } else if (rxTrim.startsWith("OTA=")) {
+    cmd.type = BLECMD_OTA_START;
+    strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
+    cmd.payload[sizeof(cmd.payload) - 1] = '\0';
+  } else if (rxTrim == "OTA?") {
+    cmd.type = BLECMD_OTA_STATUS;
+  } else if (rxTrim == "OTA!") {
+    cmd.type = BLECMD_OTA_ABORT;
+  } else if (rxTrim.startsWith("AUTH=") || rxTrim.startsWith("ACK=") ||
+             rxTrim.startsWith("ACKMODE=") ||
+             rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" ||
+             rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
+             rxTrim.startsWith("ID=") || rxTrim.startsWith("HID")) {
+    cmd.type = BLECMD_TEXT;
+    strlcpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload));
+  } else {
+    // --------------------------
+    // 2) BINARIO 4 bytes o ASCII "0x.."
+    // --------------------------
+    uint8_t rx[4];
+    bool ok = false;
+    int len = rxString.length();
+
+    if (len == 4) {
+      for (int i = 0; i < 4; i++) rx[i] = (uint8_t)rxString[i];
+      ok = true;
+    } else {
+      ok = parseAsciiCommand(rxTrim, rx);
+    }
+
+    // Si no parsea, NAK
+    if (!ok) {
+      uint8_t nakFrame[3] = {0x15, 0x0D, 0x0A};
+      queueTargetFrame(nakFrame, sizeof(nakFrame), nullptr, TX_BLE_ONLY, session);
       return;
     }
 
-    // --------------------------
-    // 1) TEXTO (RTC/CFG) -> se difiere, NO se ejecuta aquí
-    // --------------------------
-    if (rxTrim.startsWith("RTC=")) {
-      cmd.type = BLECMD_RTC_SET;
-      strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
-      cmd.payload[sizeof(cmd.payload) - 1] = '\0';
-    } else if (rxTrim == "CFG?") {
-      cmd.type = BLECMD_CFG_GET;
-    } else if (rxTrim.startsWith("CFG=")) {
-      cmd.type = BLECMD_CFG_SET;
-      strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
-      cmd.payload[sizeof(cmd.payload) - 1] = '\0';
-    } else if (rxTrim == "NET?") {
-      cmd.type = BLECMD_NET_GET;
-    } else if (rxTrim.startsWith("NET=")) {
-      cmd.type = BLECMD_NET_SET;
-      strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
-      cmd.payload[sizeof(cmd.payload) - 1] = '\0';
-    } else if (rxTrim == "NETSTAT?") {
-      cmd.type = BLECMD_NETSTAT_GET;
-    } else if (rxTrim == "WIFI?") {
-      cmd.type = BLECMD_WIFI_GET;
-    } else if (rxTrim.startsWith("WIFI=")) {
-      cmd.type = BLECMD_WIFI_SET;
-      strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
-      cmd.payload[sizeof(cmd.payload) - 1] = '\0';
-    } else if (rxTrim == "ALT?") {
-      cmd.type = BLECMD_ALT_GET;
-    } else if (rxTrim.startsWith("ALT=")) {
-      cmd.type = BLECMD_ALT_SET;
-      strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
-      cmd.payload[sizeof(cmd.payload) - 1] = '\0';
-    } else if (rxTrim.startsWith("OTA=")) {
-      cmd.type = BLECMD_OTA_START;
-      strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
-      cmd.payload[sizeof(cmd.payload) - 1] = '\0';
-    } else if (rxTrim == "OTA?") {
-      cmd.type = BLECMD_OTA_STATUS;
-    } else if (rxTrim == "OTA!") {
-      cmd.type = BLECMD_OTA_ABORT;
-    } else if (rxTrim.startsWith("AUTH=") || rxTrim.startsWith("ACK=") ||
-               rxTrim.startsWith("ACKMODE=") ||
-               rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" ||
-               rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
-               rxTrim.startsWith("ID=")) {
-      cmd.type = BLECMD_TEXT;
-      strlcpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload));
-    } else {
-      // --------------------------
-      // 2) BINARIO 4 bytes o ASCII "0x.."
-      // --------------------------
-      uint8_t rx[4];
-      bool ok = false;
-      int len = rxString.length();
-
-      if (len == 4) {
-        for (int i = 0; i < 4; i++) rx[i] = (uint8_t)rxString[i];
-        ok = true;
-      } else {
-        ok = parseAsciiCommand(rxTrim, rx);
-      }
-
-      // Si no parsea, NAK
-      if (!ok) {
-        uint8_t nakFrame[3] = {0x15, 0x0D, 0x0A};
-        sendBleReply(nakFrame, sizeof(nakFrame));
-        return;
-      }
-
-      cmd.type = cmdFromBinary4(rx);
-      if (cmd.type == BLECMD_NONE) {
-        uint8_t nakFrame[3] = {0x15, 0x0D, 0x0A};
-        sendBleReply(nakFrame, sizeof(nakFrame));
-        return;
-      }
-    }
-
-    cmd.source = 0;
-    cmd.session = gBleSession;
-    if (!gCommandQueue || xQueueSend(gCommandQueue, &cmd, 0) != pdTRUE) {
-      logHeightRejected(cmd, "COMMAND_QUEUE_FULL");
-      bleSendBusy();
+    cmd.type = cmdFromBinary4(rx);
+    if (cmd.type == BLECMD_NONE) {
+      uint8_t nakFrame[3] = {0x15, 0x0D, 0x0A};
+      queueTargetFrame(nakFrame, sizeof(nakFrame), nullptr, TX_BLE_ONLY, session);
+      return;
     }
   }
-};
 
-class ScannerSecurityCallbacks : public BLESecurityCallbacks {
-  uint32_t onPassKeyRequest() override {
-    return (uint32_t)gMaintenancePin.toInt();
-  }
-  void onPassKeyNotify(uint32_t pin) override {
-    Serial.printf("BLE pairing PIN: %06lu\n", (unsigned long)pin);
-  }
-  bool onSecurityRequest() override { return true; }
-  bool onConfirmPIN(uint32_t pin) override {
-    return pin == (uint32_t)gMaintenancePin.toInt();
-  }
-  void onAuthenticationComplete(esp_ble_auth_cmpl_t result) override {
-    gBleSecure = result.success;
-    if (!result.success) gMaintenanceAuthorized = false;
-  }
-};
-class MyServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer *pServer) override {
-    ++gBleSession;
-    gBleMtu = 23;
-    gBleSecure = false;
-    deviceConnected = true;
-    if (gCccd) gCccd->setNotifications(false);
-    isAdvertising = false;
-
-    logSerialBlock("Cliente BLE conectado\n");
-  }
-
-  void onDisconnect(BLEServer *pServer) override {
-    deviceConnected = false;
-    ++gBleSession;
-    gBleSecure = false;
-    gMaintenanceAuthorized = false;
-
-    // Session number invalidates commands queued by the disconnected client.
-
-    logSerialBlock("Cliente BLE desconectado\n");
-
-    isAdvertising = false;
-    lastAdvertiseCheck = millis() - ADV_CHECK_MS;
-  }
-  void onConnect(BLEServer *, esp_ble_gatts_cb_param_t *param) override {
-#if REQUIRE_BLE_PAIRING
-    esp_ble_set_encryption(param->connect.remote_bda, ESP_BLE_SEC_ENCRYPT_MITM);
-#endif
-  }
-  void onMtuChanged(BLEServer *, esp_ble_gatts_cb_param_t *param) override {
-    gBleMtu = param->mtu.mtu;
-  }
-};
-
-// ============================================================================
-// WATCHDOG ADVERTISING
-// ============================================================================
-void ensureAdvertising() {
-  if (!deviceConnected) {
-    unsigned long now = millis();
-    if (!isAdvertising && (now - lastAdvertiseCheck >= ADV_CHECK_MS)) {
-      logSerialBlock("Watchdog BLE: reintentando advertising...\n");
-      BLEAdvertising *adv = BLEDevice::getAdvertising();
-      if (adv) {
-        adv->start();
-        isAdvertising = true;
-        lastAdvertiseCheck = now;
-      } else {
-        logSerialBlock("ERROR: getAdvertising() devolvió nullptr\n");
-      }
-    }
+  cmd.source = 0;
+  cmd.session = session;
+  if (!gCommandQueue || xQueueSend(gCommandQueue, &cmd, 0) != pdTRUE) {
+    logHeightRejected(cmd, "COMMAND_QUEUE_FULL");
+    const uint8_t busy[] = {0x15, 'B', 'U', 'S', 'Y', 13, 10};
+    queueTargetFrame(busy, sizeof(busy), nullptr, TX_BLE_ONLY, session);
   }
 }
+
+static void applyConfiguredPin();
+#include "PlcHid.h"
+
+void ensureAdvertising() { plcHid::advertise(); }
 
 // ============================================================================
 // BLE WORKER (se ejecuta en loop, fuera del callback)
@@ -2230,7 +2158,7 @@ void ensureAdvertising() {
 static void bleProcessPendingOnce() {
   BleCmd cmd = {};
   if (xQueueReceive(gCommandQueue, &cmd, 0) != pdTRUE) return;
-  if (cmd.source == 0 && (!deviceConnected || cmd.session != gBleSession)) {
+  if (cmd.source == 0 && !plcHid::canNotify(cmd.session)) {
     logHeightRejected(cmd, "SESSION_EXPIRED");
     return;
   }
@@ -2285,6 +2213,7 @@ static void bleProcessPendingOnce() {
     // --------------------
     case BLECMD_RTC_SET: {
       String s(cmd.payload);
+  if (plcHid::handle(s, cmd.source)) return;
       String iso = s.substring(4);
       bool okSet = rtcSetFromIso19(iso);
 
@@ -2625,7 +2554,7 @@ static inline void updateLedMode() {
   } else {
     const bool ready = gWifiEnabled
                            ? (gTcpConnected && gTcpClient.connected())
-                           : bleCanNotify();
+                           : (bleCanNotify() || plcHid::keyboardReady());
     gLedMode = ready ? LED_READY : LED_DISCONNECTED;
     gLedReason = ready ? "LINK_READY"
                        : (gWifiEnabled ? "TCP_REQUIRED" : "BLE_REQUIRED");
@@ -3053,53 +2982,7 @@ void setup() {
 
   gAltura = "-";
 
-  BLEDevice::init(btName);
-  applyConfiguredPin();
-  BLEDevice::setMTU(185);
-#if REQUIRE_BLE_PAIRING
-  BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
-  BLEDevice::setSecurityCallbacks(new ScannerSecurityCallbacks());
-  BLESecurity *security = new BLESecurity();
-  security->setStaticPIN((uint32_t)gMaintenancePin.toInt());
-  security->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
-  security->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
-#endif
-
-  BLEServer *pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
-
-  BLEService *pService =
-      pServer->createService("0000FFE0-0000-1000-8000-00805F9B34FB");
-
-  pCharacteristic = pService->createCharacteristic(
-      "0000FFE1-0000-1000-8000-00805F9B34FB",
-      BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR |
-          BLECharacteristic::PROPERTY_NOTIFY);
-
-  gCccd = new BLE2902();
-#if REQUIRE_BLE_PAIRING
-  pCharacteristic->setAccessPermissions(ESP_GATT_PERM_WRITE_ENC_MITM);
-  gCccd->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM |
-                              ESP_GATT_PERM_WRITE_ENC_MITM);
-#endif
-  pCharacteristic->addDescriptor(gCccd);
-  pCharacteristic->setCallbacks(new MyCallbacks());
-
-  pService->start();
-
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID("0000FFE0-0000-1000-8000-00805F9B34FB");
-
-  pAdvertising->setScanResponse(true);
-  BLEAdvertisementData scanResp;
-  scanResp.setName(btName.c_str());
-  pAdvertising->setScanResponseData(scanResp);
-
-  pAdvertising->setMinPreferred(0x00);
-  pAdvertising->start();
-
-  isAdvertising = true;
-  lastAdvertiseCheck = millis();
+  plcHid::begin(btName);
 
   // --- LED ESTADO: arrancar en OFF, el loop decidirá el patrón ---
   gLedOutOn = false;
@@ -3173,6 +3056,7 @@ void loop() {
   outboxSaveIfNeeded();
   eventTick();
   txTick();
+  plcHid::tick();
   delay(1);
 }
 
@@ -3220,7 +3104,7 @@ static BleCmdType tcpTextCommandType(const String &s) {
 
 static bool maintenanceAuthorized() {
 #if REQUIRE_MAINT_AUTH
-  return gMaintenanceAuthorized.load();
+  return plcHid::authorized(gReplyContext.session);
 #else
   return true;
 #endif
@@ -3341,6 +3225,7 @@ static void sendCounters() {
 
 static void handleTextCommand(const BleCmd &cmd) {
   String s(cmd.payload);
+  if (plcHid::handle(s, cmd.source)) return;
   if (s == "ID?" || s.startsWith("ID=")) {
     handleIdentityCommand(s, cmd.source);
     return;
@@ -3358,7 +3243,8 @@ static void handleTextCommand(const BleCmd &cmd) {
   if (s == "INFO?") {
     replyLine(true, "FW=" FIRMWARE_VERSION ";PROTO=V2;ACKMODE=" +
                         String(gAckMode ? 1 : 0) +
-                        ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0));
+                        ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
+                        (cmd.source == 0 ? ";HIDFORMAT=1;HIDRECEIVER=1" : ""));
     return;
   }
   if (s == "STATUS?") {
@@ -3468,10 +3354,7 @@ static void outboxPush(const String &frame) {
   gOutboxDirty = true;
 }
 static bool bleCanNotify() {
-#if REQUIRE_BLE_PAIRING
-  if (!gBleSecure) return false;
-#endif
-  return deviceConnected && gCccd && gCccd->getNotifications();
+  return plcHid::canNotify(gBleSession);
 }
 static void eventTick() {
   // Do not transmit unpersisted events. ACK mode safely tolerates duplicates.
@@ -3560,18 +3443,16 @@ static void txTick() {
     heightTimingReported = true;
   }
   if (!bleDone) {
-    if (!bleCanNotify() || p.session != gBleSession)
-      bleDone = true;
-    else if (millis() - lastChunk >= 15) {
+    if (millis() - lastChunk >= 15) {
       lastChunk = millis();
-      size_t chunk = gBleMtu > 3 ? gBleMtu - 3 : 20;
-      if (chunk > p.len - offset) chunk = p.len - offset;
-      pCharacteristic->setValue(p.data + offset, chunk);
-      pCharacteristic->notify();
-      offset += chunk;
-      if (offset == p.len) {
-        bleDone = true;
-        accepted = true;
+      const int submitted = plcHid::notify(p.session, p.data + offset, p.len - offset);
+      if (submitted < 0) bleDone = true;
+      else if (submitted > 0) {
+        offset += size_t(submitted);
+        if (offset == p.len) {
+          bleDone = true;
+          accepted = true;
+        }
       }
     }
   }
@@ -3649,6 +3530,7 @@ static void finishScan() {
   gCurrentScan.heightTiming.sensorFinishedMs = millis();
   actualizarCampoBateriaBLE();
   String f = frameForScan(gCurrentScan);
+  if (gCurrentScan.type == BLECMD_L) plcHid::reading(gCodPalet, gCodUbic);
   if (gCurrentScan.event)
     outboxPush(f);
   else
@@ -3846,6 +3728,9 @@ static void batteryTick() {
     // Never interpret ADC communication errors as physical absence.
     return;
   }
+  const int hidBat1 = gBatV1 > V_BAT_ABSENT ? pctFrom2Digits(gNivelBat1) : 100;
+  const int hidBat2 = gBatV2 > V_BAT_ABSENT ? pctFrom2Digits(gNivelBat2) : 100;
+  plcHid::batteryLevel((hidBat1 == 100 && hidBat2 == 100) ? 0 : min(hidBat1, hidBat2));
   gBat1Present = gBatV1 > V_BAT_ABSENT;
   gBat2Present = gBatV2 > V_BAT_ABSENT;
   if (gBat1Present != gBat1PresentPrev || gBat2Present != gBat2PresentPrev)
@@ -3991,22 +3876,22 @@ static void applyConfiguredPin() {
 static void handleAuthCommand(const String &s, uint8_t source) {
   if (source != 0) return;
   if (s == "AUTH=OFF") {
-    gMaintenanceAuthorized = false;
+    plcHid::setAuthorized(gReplyContext.session, false);
     replyLine(true, "AUTH=OFF");
     return;
   }
   if (gAuthBlockedUntil && (int32_t)(gAuthBlockedUntil - millis()) > 0) {
-    gMaintenanceAuthorized = false;
+    plcHid::setAuthorized(gReplyContext.session, false);
     replyLine(false, "ERR=AUTH_LOCKED");
     return;
   }
   if (s.substring(5) == gMaintenancePin) {
-    gMaintenanceAuthorized = true;
+    plcHid::setAuthorized(gReplyContext.session, true);
     gAuthFails = 0;
     gAuthBlockedUntil = 0;
     replyLine(true, "AUTH=OK;TTL=SESSION");
   } else {
-    gMaintenanceAuthorized = false;
+    plcHid::setAuthorized(gReplyContext.session, false);
     if (++gAuthFails >= 5) {
       gAuthFails = 0;
       gAuthBlockedUntil = millis() + 60000UL;

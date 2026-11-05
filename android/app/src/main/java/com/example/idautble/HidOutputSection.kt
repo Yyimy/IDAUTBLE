@@ -10,7 +10,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-fun HidOutputSection(state: HidOutputState, connected: Boolean, onAction: (HidOutputConfig?) -> Unit) {
+fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Boolean, onAction: (HidOutputConfig?) -> Unit) {
     if (!state.supported) return
     var expanded by rememberSaveable { mutableStateOf(false) }
     var fields by remember { mutableStateOf("PU") }
@@ -24,7 +24,7 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, onAction: (HidOu
     val separator = decodeHidSeparator(pattern)
     val draft = separator?.let { HidOutputConfig(fields, it, ending, layout) }
     val enabled = connected && !state.busy
-    CollapsibleSettingsSection("HID OUTPUT · PROTOTYPE", "Pallet / location · keyboard format", expanded, { expanded = !expanded }) {
+    CollapsibleSettingsSection(if (production) "HID OUTPUT" else "HID OUTPUT · PROTOTYPE", "Pallet / location · keyboard format", expanded, { expanded = !expanded }) {
         Text("Fields", fontSize = 11.sp)
         HidOutputChoices(listOf("P" to "Pallet", "U" to "Location", "PU" to "Both"), fields, enabled) { fields = it }
         OutlinedTextField(value = pattern, onValueChange = { pattern = it }, label = { Text("Separator between fields", fontSize = 11.sp) },
@@ -47,7 +47,7 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, onAction: (HidOu
             MaintenanceActionButton("Refresh", { onAction(null) }, MaintenanceActionTone.INFO, Modifier.weight(1f), enabled)
             MaintenanceActionButton("Save format", { draft?.let(onAction) }, MaintenanceActionTone.SUCCESS, Modifier.weight(1f), enabled && draft != null && state.config != null)
         }
-        Text("Save requires PIN / ACCESS. Send test text in HID RECEIVER uses the saved format. Real PLC readings are not enabled in this prototype.", fontSize = 11.sp)
+        Text(if (production) "Save requires PIN / ACCESS. The assigned receiver uses the saved format for complete reads." else "Save requires PIN / ACCESS. Send test text in HID RECEIVER uses the saved format. Real PLC readings are not enabled in this prototype.", fontSize = 11.sp)
     }
 }
 

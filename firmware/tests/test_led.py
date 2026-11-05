@@ -39,6 +39,7 @@ bool gWifiEnabled = false, gTcpConnected = false;
 struct Tcp { bool up = false; bool connected() { return up; } } gTcpClient;
 bool bleReady = false;
 bool bleCanNotify() { return bleReady; }
+namespace plcHid { bool ready = false; bool keyboardReady() { return ready; } }
 bool output = false;
 void ledOut(bool on) { output = on; }
 '''
@@ -63,7 +64,8 @@ void reset() {
 }
 int main() {
   reset(); tick(0); CHECK(gLedMode == LED_DISCONNECTED);
-  bleReady = true; tick(1); CHECK(gLedMode == LED_READY);
+  plcHid::ready = true; tick(1); CHECK(gLedMode == LED_READY);
+  plcHid::ready = false; bleReady = true; tick(1); CHECK(gLedMode == LED_READY);
   // A BLE maintenance connection must not conceal a missing required TCP link.
   gWifiEnabled = true; tick(2); CHECK(gLedMode == LED_DISCONNECTED);
   gTcpConnected = true; tick(3); CHECK(gLedMode == LED_DISCONNECTED);

@@ -18,7 +18,7 @@ fun HidReceiverSection(state: HidReceiverState, connected: Boolean, authorised: 
     val saved = info?.identity != null
     val enabled = connected && !state.busy
     CollapsibleSettingsSection(
-        title = "HID RECEIVER · PROTOTYPE",
+        title = if (state.production) "HID RECEIVER" else "HID RECEIVER · PROTOTYPE",
         summary = when { info?.ready == true -> "Receiver ready"; saved -> "Saved · waiting for receiver"; else -> "No receiver assigned" },
         expanded = expanded,
         onToggle = { expanded = !expanded },
