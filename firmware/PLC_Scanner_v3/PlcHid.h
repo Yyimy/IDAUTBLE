@@ -261,10 +261,12 @@ class SecurityCallbacks : public BLESecurityCallbacks {
 
   void onAuthenticationComplete(esp_ble_auth_cmpl_t result) override {
     const bool secure = result.success && (result.auth_mode & ESP_LE_AUTH_REQ_MITM);
+    probe::Token token;
     portENTER_CRITICAL(&peerMux);
     const bool matched = peers.secureAddress(result.bd_addr, secure);
     for (auto &peer : peers.peers) {
       if (!peer.used || memcmp(peer.address, result.bd_addr, 6)) continue;
+      token = peer.token;
       if (secure) {
         peer.addressType = result.addr_type;
         peer.identity = {};
@@ -275,6 +277,9 @@ class SecurityCallbacks : public BLESecurityCallbacks {
       }
     }
     portEXIT_CRITICAL(&peerMux);
+    Serial.printf("BLE AUTH id=%u generation=%lu matched=%u success=%u secure=%u mode=0x%02X reason=0x%02X\n",
+        token.id, (unsigned long)token.generation, matched, result.success, secure,
+        (unsigned)result.auth_mode, (unsigned)result.fail_reason);
     if (matched && !secure) esp_ble_gap_disconnect(result.bd_addr);
   }
 };
@@ -329,8 +334,10 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
   auto *p = peers.byId(write.conn_id);
   if (!p) { portEXIT_CRITICAL(&peerMux); return; }
   if (handle == uartCccd || handle == inputCccd || handle == bootCccd) {
-    if (!write.is_prep && !write.offset && length == 2) {
-      const bool enabled = data[0] == 1 && data[1] == 0;
+    const auto token = p->token;
+    const bool validWrite = !write.is_prep && !write.offset && length == 2;
+    const bool enabled = validWrite && data[0] == 1 && data[1] == 0;
+    if (validWrite) {
       if (handle == uartCccd) {
         p->uartNotify = enabled;
         if (!enabled && p->role == probe::Role::Maintenance) {
@@ -343,6 +350,11 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
       if (handle == bootCccd) { p->bootNotify = enabled; p->bootSeen = true; }
     }
     portEXIT_CRITICAL(&peerMux);
+    if (handle != uartCccd) {
+      Serial.printf("HID CCCD id=%u generation=%lu type=%s valid_write=%u enabled=%u\n",
+          token.id, (unsigned long)token.generation, handle == inputCccd ? "REPORT" : "BOOT",
+          validWrite, enabled);
+    }
     return;
   }
   if (!p->secure) { portEXIT_CRITICAL(&peerMux); return; }
@@ -667,8 +679,9 @@ static void unassignedLeaseTick() {
 
   constexpr uint32_t graceMs = 20000;
   constexpr uint32_t retryMs = 1500;
-  const uint32_t now = millis();
+  // A BLE callback can add a peer while the snapshot is taken.
   const auto state = snapshot();
+  const uint32_t now = millis();
   for (const auto &candidate : state.peers) {
     if (!candidate.used || candidate.role != probe::Role::Unassigned ||
         uint32_t(now - candidate.unassignedSinceMs) < graceMs) continue;
