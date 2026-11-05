@@ -16,7 +16,7 @@ android = Path(__file__).resolve().parents[1]
 source = (android/'app/src/main/java/com/example/idautble/MainActivity.kt').read_text()
 
 def function(name):
-    match = re.search(r'    private fun '+name+r'\([^;]*?\)\s*\{', source, re.S)
+    match = re.search(r'    private fun '+name+r'\([^;]*?\)(?:\s*:\s*[\w?]+)?\s*\{', source, re.S)
     if not match:
         raise RuntimeError('Missing production function: '+name)
     end, depth = match.end(), 1
@@ -61,16 +61,24 @@ class BluetoothGatt {
     fun close() { closeCalls++; onClose() }
     fun executeReliableWrite(): Boolean { reliableCalls++; return onReliable() }
 }
+class BluetoothAdapter(var isEnabled: Boolean) {
+    val bluetoothLeScanner = Any()
+}
+class BluetoothManager(var adapter: BluetoothAdapter?)
 enum class LogLevel { WARN }
 class Harness {
     var permission = true
+    val manager = BluetoothManager(BluetoothAdapter(true))
+    var scanner: Any? = null
+    fun hasScanPermission() = permission
+    fun getSystemService(type: Class<BluetoothManager>) = manager
     val events = mutableListOf<String>()
     fun hasConnectPermission() = permission
     fun log(level: LogLevel, text: String) { events.add("warning") }
     fun failWrite(reason: String) { events.add("fail") }
     fun disconnectGatt(silentLog: Boolean) { events.add("disconnect") }
 '''
-body += '\n'.join(function(n) for n in ['closeGattSafely', 'handleBluetoothPermissionLoss', 'completeReliableWrite'])
+body += '\n'.join(function(n) for n in ['closeGattSafely', 'handleBluetoothPermissionLoss', 'completeReliableWrite', 'enabledBluetoothAdapter', 'initBluetooth'])
 body += r'''
 }
 var checks = 0
@@ -115,6 +123,17 @@ fun main() {
         g.onClose = { throw IllegalStateException("closed") }
         h.closeGattSafely(g); expect(g.closeCalls == 1)
         expect(h.events.isEmpty())
+    }
+    // BLE_ON can leave a scanner cached while the public adapter reports off.
+    run {
+        val h = Harness()
+        h.initBluetooth(); expect(h.scanner != null)
+        h.manager.adapter!!.isEnabled = false
+        expect(h.enabledBluetoothAdapter() == null)
+        h.initBluetooth(); expect(h.scanner == null)
+        h.manager.adapter!!.isEnabled = true
+        expect(h.enabledBluetoothAdapter() === h.manager.adapter)
+        h.initBluetooth(); expect(h.scanner != null)
     }
     println("PASS: $checks assertions against production GATT permission helpers")
 }
