@@ -38,6 +38,11 @@ uint32_t gBleSession=0;
 uint32_t nowMs=0;
 uint32_t millis(){return nowMs;}
 bool gOtaTaskHandle=false;
+bool pairWindow=false, blockedState=false;
+bool blocked(){return blockedState;}
+struct SerialStub {
+  template <typename... Args> void printf(const char*, Args...) {}
+} Serial;
 constexpr int OTA_IDLE=0;
 int gOtaState=OTA_IDLE;
 std::vector<uint8_t> disconnected;
@@ -145,6 +150,35 @@ int main() {
   nowMs+=2000;
   maintenanceLeaseTick();
   assert(disconnected.size()==1 && peers.keyboardReady(hid));
+
+  disconnected.clear();
+  auto unassigned=peers.connect(0,appAddress,nowMs);
+  peers.secureAddress(appAddress,true);
+  write(0,21,enabled);
+  nowMs+=19999;
+  unassignedLeaseTick();
+  assert(disconnected.empty());
+  ++nowMs;
+  pairWindow=true;
+  unassignedLeaseTick();
+  assert(disconnected.empty());
+  pairWindow=false;
+  blockedState=true;
+  unassignedLeaseTick();
+  assert(disconnected.empty());
+  blockedState=false;
+  unassignedLeaseTick();
+  unassignedLeaseTick();
+  assert(disconnected==std::vector<uint8_t>{appAddress[0]});
+  assert(!peers.claimMaintenance(unassigned) && peers.keyboardReady(hid));
+  peers.disconnect(0);
+  auto manual=peers.connect(0,appAddress,nowMs);
+  peers.secureAddress(appAddress,true);
+  write(0,21,enabled);
+  write(0,20,"INFO?");
+  nowMs+=20000;
+  unassignedLeaseTick();
+  assert(disconnected.size()==1 && peers.uartReady(manual));
 }
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
@@ -153,4 +187,4 @@ with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
     subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I',
                     str(sketch), str(cpp), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
-print('PASS: production HID GATT roles, reliable-write isolation, bounds, cancellation, generations and maintenance expiry')
+print('PASS: production HID GATT roles, reliable-write isolation, bounds, cancellation, generations and BLE lease expiry')
