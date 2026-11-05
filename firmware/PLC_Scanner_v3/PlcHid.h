@@ -673,12 +673,12 @@ static void unassignedLeaseTick() {
     if (!candidate.used || candidate.role != probe::Role::Unassigned ||
         uint32_t(now - candidate.unassignedSinceMs) < graceMs) continue;
 
-    uint8_t address[6];
+    probe::Peer expiredPeer;
     bool expired = false;
     portENTER_CRITICAL(&peerMux);
     auto *peer = peers.find(candidate.token);
     if (peer && peer->role == probe::Role::Unassigned) {
-      memcpy(address, peer->address, sizeof(address));
+      expiredPeer = *peer;
       peer->expiring = true;
       peer->unassignedSinceMs = now - graceMs + retryMs;
       expired = true;
@@ -686,9 +686,16 @@ static void unassignedLeaseTick() {
     portEXIT_CRITICAL(&peerMux);
 
     if (!expired) continue;
-    Serial.printf("BLE UNASSIGNED EXPIRED id=%u generation=%lu\n",
-        candidate.token.id, (unsigned long)candidate.token.generation);
-    if (esp_ble_gap_disconnect(address) != ESP_OK) {
+    Serial.printf("BLE UNASSIGNED EXPIRED id=%u generation=%lu secure=%u identity=%u "
+                  "saved=%u identity_match=%u protocol=%s report_seen=%u report_notify=%u "
+                  "boot_seen=%u boot_notify=%u saved_subscriptions_known=%u saved_subscriptions=%u\n",
+        candidate.token.id, (unsigned long)candidate.token.generation,
+        expiredPeer.secure, expiredPeer.identity.valid, savedReceiver.valid,
+        probe::sameIdentity(savedReceiver, expiredPeer.identity),
+        expiredPeer.reportProtocol ? "REPORT" : "BOOT",
+        expiredPeer.reportSeen, expiredPeer.reportNotify, expiredPeer.bootSeen, expiredPeer.bootNotify,
+        savedReceiver.subscriptionsKnown, savedReceiver.subscriptions);
+    if (esp_ble_gap_disconnect(expiredPeer.address) != ESP_OK) {
       portENTER_CRITICAL(&peerMux);
       if (auto *live = peers.find(candidate.token)) live->expiring = false;
       portEXIT_CRITICAL(&peerMux);
