@@ -20,7 +20,7 @@ struct Link {
 };
 
 static portMUX_TYPE linkMux = portMUX_INITIALIZER_UNLOCKED;
-static Link link;
+static Link activeLink;
 static uint32_t nextGeneration;
 static esp_gatt_if_t gattInterface = ESP_GATT_IF_NONE;
 static uint16_t reportHandle, bootHandle, reportCccd, bootCccd, protocolHandle;
@@ -28,7 +28,7 @@ static bool ready;
 
 static Link snapshot() {
   portENTER_CRITICAL(&linkMux);
-  const Link copy = link;
+  const Link copy = activeLink;
   portEXIT_CRITICAL(&linkMux);
   return copy;
 }
@@ -37,13 +37,13 @@ class ConnectionCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *, esp_ble_gatts_cb_param_t *event) override {
     auto &connected = event->connect;
     portENTER_CRITICAL(&linkMux);
-    const bool available = link.id == NO_CONNECTION;
+    const bool available = activeLink.id == NO_CONNECTION;
     if (available) {
-      link.id = connected.conn_id;
-      link.generation = ++nextGeneration;
-      memcpy(link.address, connected.remote_bda, sizeof(link.address));
+      activeLink.id = connected.conn_id;
+      activeLink.generation = ++nextGeneration;
+      memcpy(activeLink.address, connected.remote_bda, sizeof(activeLink.address));
     }
-    const auto generation = link.generation;
+    const auto generation = activeLink.generation;
     portEXIT_CRITICAL(&linkMux);
     if (!available) {
       esp_ble_gap_disconnect(connected.remote_bda);
@@ -56,9 +56,9 @@ class ConnectionCallbacks : public BLEServerCallbacks {
 
   void onDisconnect(BLEServer *, esp_ble_gatts_cb_param_t *event) override {
     portENTER_CRITICAL(&linkMux);
-    const bool matches = link.id == event->disconnect.conn_id;
-    const auto generation = link.generation;
-    if (matches) link = {};
+    const bool matches = activeLink.id == event->disconnect.conn_id;
+    const auto generation = activeLink.generation;
+    if (matches) activeLink = {};
     portEXIT_CRITICAL(&linkMux);
     Serial.printf("CLOSE id=%u generation=%lu reason=0x%02X\n", event->disconnect.conn_id,
         (unsigned long)(matches ? generation : 0), (unsigned)event->disconnect.reason);
@@ -74,9 +74,9 @@ class SecurityCallbacks : public BLESecurityCallbacks {
   void onAuthenticationComplete(esp_ble_auth_cmpl_t result) override {
     const bool secure = result.success && (result.auth_mode & ESP_LE_AUTH_REQ_MITM);
     portENTER_CRITICAL(&linkMux);
-    const bool matches = link.id != NO_CONNECTION && !memcmp(link.address, result.bd_addr, 6);
-    if (matches) link.secure = secure;
-    const auto generation = matches ? link.generation : 0;
+    const bool matches = activeLink.id != NO_CONNECTION && !memcmp(activeLink.address, result.bd_addr, 6);
+    if (matches) activeLink.secure = secure;
+    const auto generation = matches ? activeLink.generation : 0;
     portEXIT_CRITICAL(&linkMux);
     Serial.printf("AUTH generation=%lu matched=%u secure=%u reason=0x%02X\n",
         (unsigned long)generation, matches, secure, result.success ? 0u : unsigned(result.fail_reason));
@@ -95,14 +95,14 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
   const bool enabled = subscription && write.value[0] == 1 && write.value[1] == 0;
 
   portENTER_CRITICAL(&linkMux);
-  const bool matches = link.id == write.conn_id;
-  const auto generation = link.generation;
+  const bool matches = activeLink.id == write.conn_id;
+  const auto generation = activeLink.generation;
   if (matches && subscription) {
-    if (report) link.reportNotify = enabled;
-    if (boot) link.bootNotify = enabled;
+    if (report) activeLink.reportNotify = enabled;
+    if (boot) activeLink.bootNotify = enabled;
   }
   if (matches && write.handle == protocolHandle && write.len == 1 && write.value[0] <= 1)
-    link.reportProtocol = write.value[0] == 1;
+    activeLink.reportProtocol = write.value[0] == 1;
   portEXIT_CRITICAL(&linkMux);
 
   if (matches && subscription)
