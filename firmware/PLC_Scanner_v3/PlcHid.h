@@ -294,6 +294,7 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
     const bool owns = p && prepared.active && p->token == prepared.owner;
     const bool execute = owns && peers.uartReady(p->token) && !prepared.invalid &&
                          param->exec_write.exec_write_flag == ESP_GATT_PREP_WRITE_EXEC;
+    if (execute) peers.find(p->token)->maintenanceActivityMs = millis();
     if (owns) prepared.active = false;
     const auto token = prepared.owner;
     const auto length = prepared.length;
@@ -338,6 +339,7 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
                        peers.claimMaintenance(p->token);
   const auto token = p->token;
   if (claimed) {
+    p->maintenanceActivityMs = millis();
     gBleSession = token.generation;
     deviceConnected = true;
     if (!write.is_prep && prepared.active && prepared.owner == token) prepared.active = false;
@@ -357,8 +359,11 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
     }
   }
   portEXIT_CRITICAL(&peerMux);
-  if (claimed && !write.is_prep && !write.offset && length)
+  if (claimed && !write.is_prep && !write.offset && length) {
+    constexpr char ping[] = "MAINTPING\r\n";
+    if (length == sizeof(ping) - 1 && memcmp(data, ping, length) == 0) return;
     receiveBleCommand(data, length, token.generation);
+  }
 }
 
 static uint8_t reportMap[] = {
@@ -587,7 +592,33 @@ static bool keyboardReady() {
   return state.keyboardReady(state.role(probe::Role::Keyboard));
 }
 
+static void maintenanceLeaseTick() {
+  constexpr uint32_t idleMs = 60000;
+  constexpr uint32_t retryMs = 1500;
+  const uint32_t now = millis();
+  const bool otaActive = gOtaTaskHandle || gOtaState != OTA_IDLE;
+  uint8_t address[6];
+  bool expired = false;
+
+  portENTER_CRITICAL(&peerMux);
+  const auto owner = peers.role(probe::Role::Maintenance);
+  if (auto *peer = peers.find(owner)) {
+    if (otaActive) {
+      peer->maintenanceActivityMs = now;
+    } else if (uint32_t(now - peer->maintenanceActivityMs) >= idleMs) {
+      memcpy(address, peer->address, sizeof(address));
+      // Retry if the stack is slow to deliver the disconnect event.
+      peer->maintenanceActivityMs = now - idleMs + retryMs;
+      expired = true;
+    }
+  }
+  portEXIT_CRITICAL(&peerMux);
+
+  if (expired) esp_ble_gap_disconnect(address);
+}
+
 static void tick() {
+  maintenanceLeaseTick();
   if (blocked()) {
     keyboard.cancel();
     clearReadings();

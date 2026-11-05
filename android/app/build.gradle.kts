@@ -14,8 +14,8 @@ android {
         applicationId = "com.example.idautble"
         minSdk = 26
         targetSdk = 36
-        versionCode = 31
-        versionName = "1.3.27-plc3"
+        versionCode = 32
+        versionName = "1.3.28-plc3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

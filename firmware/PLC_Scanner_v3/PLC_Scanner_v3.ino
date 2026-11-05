@@ -490,7 +490,7 @@ static void handleIdentityCommand(const String &s, uint8_t source);
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.14-rc1"
+#define FIRMWARE_VERSION "3.0.15-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static uint32_t gTxDropped = 0, gEventOverflow = 0, gScanOverflow = 0;
@@ -3244,7 +3244,7 @@ static void handleTextCommand(const BleCmd &cmd) {
     replyLine(true, "FW=" FIRMWARE_VERSION ";PROTO=V2;ACKMODE=" +
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
-                        (cmd.source == 0 ? ";HIDFORMAT=1;HIDARROWS=1;HIDRECEIVER=1" : ""));
+                        (cmd.source == 0 ? ";HIDFORMAT=1;HIDARROWS=1;HIDRECEIVER=1;MAINTLEASE=1" : ""));
     return;
   }
   if (s == "STATUS?") {

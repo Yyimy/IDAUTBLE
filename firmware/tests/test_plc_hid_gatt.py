@@ -7,6 +7,7 @@ sketch = Path(__file__).resolve().parents[1] / 'PLC_Scanner_v3'
 source = (sketch / 'PlcHid.h').read_text()
 staging = source[source.index('struct PreparedWrite {'):source.index('static probe::Sessions snapshot()')]
 dispatcher = source[source.index('static void gattEvent('):source.index('static uint8_t reportMap[]')]
+lease = source[source.index('static void maintenanceLeaseTick()'):source.index('static void tick()')]
 shim = r'''
 #include "ProbeSessions.h"
 #include <algorithm>
@@ -32,6 +33,13 @@ std::atomic<esp_gatt_if_t> gattInterface{0};
 uint16_t uartCccd=21,inputCccd=31,bootCccd=32,outputHandle=33,bootOutputHandle=34,protocolHandle=35,controlHandle=36;
 probe::Sessions peers;
 uint32_t gBleSession=0;
+uint32_t nowMs=0;
+uint32_t millis(){return nowMs;}
+bool gOtaTaskHandle=false;
+constexpr int OTA_IDLE=0;
+int gOtaState=OTA_IDLE;
+std::vector<uint8_t> disconnected;
+void esp_ble_gap_disconnect(const uint8_t* address){disconnected.push_back(address[0]);}
 bool deviceConnected=false;
 #define portENTER_CRITICAL(x) ((void)0)
 #define portEXIT_CRITICAL(x) ((void)0)
@@ -103,12 +111,34 @@ int main() {
   exec(0);
   assert(messages.size()==3 && messages.back().first==replacement.generation);
   assert(peers.keyboardReady(hid));
+  nowMs=50000;
+  write(0,20,"MAINTPING\r\n");
+  assert(messages.size()==3 && peers.find(replacement)->maintenanceActivityMs==50000);
+  nowMs=109999;
+  maintenanceLeaseTick();
+  assert(disconnected.empty());
+  gOtaTaskHandle=true;
+  nowMs=120000;
+  maintenanceLeaseTick();
+  assert(disconnected.empty());
+  gOtaTaskHandle=false;
+  nowMs=179999;
+  maintenanceLeaseTick();
+  assert(disconnected.empty());
+  ++nowMs;
+  maintenanceLeaseTick();
+  maintenanceLeaseTick();
+  assert(disconnected==std::vector<uint8_t>{appAddress[0]});
+  peers.disconnect(0);
+  nowMs+=2000;
+  maintenanceLeaseTick();
+  assert(disconnected.size()==1 && peers.keyboardReady(hid));
 }
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
     cpp, exe = Path(tmp) / 'test.cpp', Path(tmp) / 'test'
-    cpp.write_text(shim + staging + dispatcher + cases)
+    cpp.write_text(shim + staging + dispatcher + lease + cases)
     subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I',
                     str(sketch), str(cpp), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
-print('PASS: production HID GATT roles, reliable-write isolation, bounds, cancellation and generations')
+print('PASS: production HID GATT roles, reliable-write isolation, bounds, cancellation, generations and maintenance expiry')
