@@ -4,7 +4,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.23-plc3, versionCode 27 |
+| App Android | [android/](android/) | 1.3.24-plc3, versionCode 28 |
 | Firmware PLC Scanner | [firmware/](firmware/) | 3.0.12-rc1 |
 
 ## Trabajar sin ZIP
@@ -557,3 +557,14 @@ al desconectar/reconfigurar y no sustituye el ACK/outbox de negocio del firmware
 operativo. Conserva la asignación HID y la compatibilidad con app 1.3.23. Ver el
 [procedimiento WiFi/TCP](firmware/HID_Coexistence_Probe/README.md) para repetir la
 prueba de coexistencia sin olvidar los terminales.
+
+
+## Formato de teclado HID (prototipo 0.3.0 / app 1.3.24)
+
+TERMINAL añade HID OUTPUT debajo de HID RECEIVER: Pallet / Location / Both,
+separador configurable con texto ASCII y tokens `{TAB}`, `{ENTER}`, `{SPACE}`,
+tecla final Enter / Tab / None e idioma de teclado US / Spanish. El ajuste se
+guarda en el prototipo con autorización y confirmación del PLC, y se recupera
+tras reiniciar. Send test text aplica el formato guardado a datos sintéticos.
+El firmware operativo sigue en 3.0.12-rc1; las lecturas reales se integrarán después
+de validar el nuevo formato. [Opciones y secuencia de prueba](firmware/HID_Coexistence_Probe/README.md#formato-configurable-030--app-1324).

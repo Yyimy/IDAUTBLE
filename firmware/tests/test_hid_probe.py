@@ -105,7 +105,7 @@ void reportsTest() {
   CHECK(asciiReport('\t',false,v) && v[2]==43);
   CHECK(asciiReport('\n',false,v) && v[2]==40);
   CHECK(asciiReport(' ',false,v) && v[2]==44);
-  CHECK(!asciiReport(char(0xc3),false,v)); CHECK(!asciiReport(';',false,v));
+  CHECK(!asciiReport(char(0xc3),false,v)); CHECK(!asciiReport(char(0),false,v));
   for (auto b:v) CHECK(b==0);
 }
 void typingTests() {

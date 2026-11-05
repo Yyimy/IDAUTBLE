@@ -364,6 +364,9 @@ class MainActivity : ComponentActivity() {
     private val uiReadings = mutableStateOf(PlcReadingsState())
     private val uiHidReceiver = mutableStateOf(HidReceiverState())
     private var hidReceiverRequest = 0L
+    private val uiHidOutput = mutableStateOf(HidOutputState())
+    private var hidOutputRequest = 0L
+    private var hidOutputExpected: HidOutputConfig? = null
     private val uiIdentityDraft = mutableStateOf("")
     private val uiIdentityBusy = mutableStateOf(false)
     private val uiIdentityStatus = mutableStateOf("")
@@ -864,6 +867,52 @@ class MainActivity : ComponentActivity() {
         }, 8000)
     }
 
+    private fun requestHidOutput(config: HidOutputConfig?) {
+        if (!bleChannelReady || !uiHidOutput.value.supported || uiHidOutput.value.busy) return
+        if (config != null && !maintenanceSession.isAuthorized()) { showIdentityAuthorizationMessage(); return }
+        val command = if (config == null) "HIDCFG?" else runCatching { config.wire() }.getOrNull() ?: return
+        hidOutputExpected = config
+        val request = ++hidOutputRequest
+        uiHidOutput.value = uiHidOutput.value.copy(busy = true, message = "Waiting for the PLC...")
+        sendText(command, true)
+        mainHandler.postDelayed({
+            if (request == hidOutputRequest && uiHidOutput.value.busy) {
+                hidOutputExpected = null
+                uiHidOutput.value = uiHidOutput.value.copy(busy = false, message = "No confirmation. Refresh to check the saved format.")
+            }
+        }, 8000)
+    }
+
+    private fun handleHidOutputMessage(message: PlcMessage) {
+        val text = message.text
+        if (message.acknowledged && text.startsWith("FW=")) {
+            val supported = text.split(';').count { it == "HIDFORMAT=1" } == 1
+            uiHidOutput.value = HidOutputState(supported = supported)
+            hidOutputRequest++; hidOutputExpected = null
+            if (supported) requestHidOutput(null)
+        } else if (message.acknowledged && text.startsWith("HIDCFG=")) {
+            if (!uiHidOutput.value.supported) return
+            val config = parseHidOutputConfig(text)
+            val expected = hidOutputExpected
+            hidOutputRequest++; hidOutputExpected = null
+            uiHidOutput.value = uiHidOutput.value.copy(config = config, busy = false, revision = uiHidOutput.value.revision + 1, message = when {
+                config == null -> "Invalid format response. Refresh before saving."
+                expected != null && config == expected -> "Format saved on the PLC."
+                expected != null -> "Saved format differs from the request. Check the values."
+                else -> "Saved format loaded from PLC."
+            })
+        } else if (message.rejected && uiHidOutput.value.busy &&
+            (text.startsWith("ERR=HIDCFG") || text.startsWith("ERR=AUTH") || text == "BUSY")) {
+            hidOutputRequest++; hidOutputExpected = null
+            uiHidOutput.value = uiHidOutput.value.copy(busy = false, message = when (text) {
+                "ERR=HIDCFG_STORAGE" -> "PLC storage failed. The active format was not changed."
+                "ERR=HIDCFG_BUSY", "BUSY" -> "Wait for the keyboard test to finish."
+                "ERR=HIDCFG_INVALID" -> "PLC rejected the format. Check the separator."
+                else -> "Enter the PIN in PIN / ACCESS before saving."
+            })
+        }
+    }
+
     private fun handleHidReceiverMessage(message: PlcMessage) {
         val text = message.text
         if (message.acknowledged && text.startsWith("FW=")) {
@@ -899,7 +948,7 @@ class MainActivity : ComponentActivity() {
                         uiHidReceiver.value = uiHidReceiver.value.copy(busy = false, message = "Test result not confirmed. Check the receiver before retrying.")
                 }, 8000)
             }
-        } else if (message.rejected && text.startsWith("ERR=HID")) {
+        } else if (message.rejected && text.startsWith("ERR=HID") && !text.startsWith("ERR=HIDCFG")) {
             hidReceiverRequest++
             uiHidReceiver.value = uiHidReceiver.value.copy(busy = false, message = when (text) {
                 "ERR=HID_ALREADY_BOUND" -> "Forget the current receiver assignment before replacing it."
@@ -912,6 +961,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun resetSecureTransport() {
+        hidOutputRequest++; hidOutputExpected = null
+        uiHidOutput.value = HidOutputState()
         hidReceiverRequest++
         uiHidReceiver.value = HidReceiverState()
         txTimeout?.let { mainHandler.removeCallbacks(it) }
@@ -1300,6 +1351,7 @@ class MainActivity : ComponentActivity() {
     private fun handleProtocolControl(message: PlcMessage) {
         val text = message.text
         handleHidReceiverMessage(message)
+        handleHidOutputMessage(message)
         statusRefresh.otaMessage(text)
         networkSession.setPaused(statusRefresh.otaActive)
         if (message.acknowledged && text.startsWith("COUNTERS=")) {
@@ -2037,6 +2089,8 @@ class MainActivity : ComponentActivity() {
                     autoRefreshEnabled = uiAutoRefreshEnabled.value,
                     onAutoRefreshChange = { setAutoRefresh(it) },
                     readings = uiReadings.value,
+                    hidOutput = uiHidOutput.value,
+                    onHidOutputAction = { requestHidOutput(it) },
                     hidReceiver = uiHidReceiver.value,
                     onHidReceiverAction = { requestHidReceiverAction(it) },
                     equipmentId = uiEquipmentId.value,
@@ -2190,6 +2244,8 @@ private fun PlcBleTesterLandscape(
     autoRefreshEnabled: Boolean,
     onAutoRefreshChange: (Boolean) -> Unit,
     readings: PlcReadingsState,
+    hidOutput: HidOutputState,
+    onHidOutputAction: (HidOutputConfig?) -> Unit,
     hidReceiver: HidReceiverState,
     onHidReceiverAction: (String) -> Unit,
     equipmentId: String?,
@@ -2611,7 +2667,8 @@ private fun PlcBleTesterLandscape(
                                     )
                                 }
 
-                                HidReceiverSection(hidReceiver, connected, maintenanceAuthorised, onHidReceiverAction)
+                                HidReceiverSection(hidReceiver, connected, maintenanceAuthorised, onHidReceiverAction, hidOutput.supported)
+                                HidOutputSection(hidOutput, connected, onHidOutputAction)
 
                                 CollapsibleSettingsSection(
                                     title = "DEVICE ID",

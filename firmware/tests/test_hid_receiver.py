@@ -42,6 +42,7 @@ static uint32_t pairStarted=0,lastIdentityCheck=0;
 static constexpr uint32_t PAIR_WINDOW_MS=60000;
 static Token pairOwner;
 static ReceiverIdentity savedReceiver;
+static OutputFormat outputFormat;
 static bool receiverStorageReady=false;
 static std::vector<std::string> replies;
 void reply(Token,bool,bool,const String &text){replies.push_back(text);}
@@ -49,13 +50,16 @@ String receiverText(){return "RECEIVER_STATUS";}
 struct {void println(const char*){} template<class... T> void printf(const char*,T...){} } Serial;
 struct Preferences {
   std::vector<uint8_t> bytes;
+  std::string format;
   bool fail=false;
   std::function<void()> duringWrite;
   bool begin(const char*,bool){return !fail;}
   size_t getBytesLength(const char*){return bytes.size();}
   size_t getBytes(const char*,void *out,size_t n){if(fail)return 0;if(n!=bytes.size())return 0;memcpy(out,bytes.data(),n);return n;}
   size_t putBytes(const char*,const void*data,size_t n){if(fail)return 0;bytes.assign((const uint8_t*)data,(const uint8_t*)data+n);if(duringWrite)duringWrite();return n;}
-  bool isKey(const char*){return !bytes.empty();}
+  String getString(const char*,const char*){return format;}
+  size_t putString(const char*,const char*text){if(fail)return 0;format=text;return format.size();}
+  bool isKey(const char*key){return std::string(key)=="receiver" ? !bytes.empty() : !format.empty();}
   bool remove(const char*){if(fail)return false;bytes.clear();return true;}
 } receiverPreferences;
 constexpr int ESP_OK=0, ESP_BLE_ID_KEY_MASK=2;
@@ -159,12 +163,21 @@ int main(){
  CHECK(clearedReceiverRecord(legacyEmpty,sizeof(legacyEmpty)));
  // Corrupt storage fails closed, with no automatic assignment.
  receiverPreferences.bytes={1,2,3};loadReceiver();CHECK(!savedReceiver.valid);
+ // Output format has its own key and commits only after successful persistence.
+ reset();outputFormat={};OutputFormat changedFormat;changedFormat.fields=2;changedFormat.ending='\t';changedFormat.layout=KeyLayout::ES;
+ CHECK(saveOutputFormat(changedFormat));CHECK(outputFormat.fields==2);
+ outputFormat={};loadReceiver();CHECK(outputFormat.fields==2);CHECK(outputFormat.ending=='\t');CHECK(outputFormat.layout==KeyLayout::ES);
+ auto before=outputWire(outputFormat);receiverPreferences.fail=true;changedFormat.fields=1;
+ CHECK(!saveOutputFormat(changedFormat));CHECK(outputWire(outputFormat)==before);
+ receiverPreferences.fail=false;receiverPreferences.format="HIDCFG=1;FIELDS=broken";loadReceiver();CHECK(outputWire(outputFormat)==outputWire(OutputFormat{}));
+ receiverPreferences.format="";loadReceiver();CHECK(outputWire(outputFormat)==outputWire(OutputFormat{}));
+ CHECK(!savedReceiver.valid);
  printf("PASS: %u receiver identity/persistence/reconnection/security assertions\n",checks);
 }
 '''
 # Replace non-standard temporary C array in the race test.
 code=code.replace('peer(0,(uint8_t[6]){0xc3,2,3,4,5,8});','const uint8_t other[6]={0xc3,2,3,4,5,8};peer(0,other);')
-code=code.replace('// FUNCTIONS','\n'.join(function(n) for n in ('bondIdentity','authenticatedIdentity','loadReceiver','saveReceiver','forgetReceiver','receiverTick','pairTick')))
+code=code.replace('// FUNCTIONS','\n'.join(function(n) for n in ('bondIdentity','authenticatedIdentity','loadOutputFormat','saveOutputFormat','loadReceiver','saveReceiver','forgetReceiver','receiverTick','pairTick')))
 with tempfile.TemporaryDirectory(prefix='hid_receiver_') as tmp:
  cpp=Path(tmp)/'test.cpp';exe=Path(tmp)/'test';cpp.write_text(code)
  subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(root),str(cpp),'-lcrypto','-o',str(exe)],check=True)
