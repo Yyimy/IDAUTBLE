@@ -461,9 +461,24 @@ static void advertise() {
 static void pairTick() {
   if (!pairWindow) return;
   auto s = snapshot();
-  if (uint32_t(millis() - pairStarted) >= PAIR_WINDOW_MS || !s.authorized(pairOwner) || blocked()) {
-    pairWindow = false; Serial.println("HID binding window closed");
-    if (s.authorized(pairOwner)) {
+  const uint32_t elapsed = millis() - pairStarted;
+  const bool ownerAuthorized = s.authorized(pairOwner);
+  const bool pairingBlocked = blocked();
+  if (elapsed >= PAIR_WINDOW_MS || !ownerAuthorized || pairingBlocked) {
+    pairWindow = false;
+    Serial.printf("HID binding window closed: elapsed_ms=%lu owner_authorized=%u blocked=%u peers=%u\n",
+        (unsigned long)elapsed, ownerAuthorized, pairingBlocked, (unsigned)s.count());
+    for (const auto &p : s.peers) {
+      if (!p.used) continue;
+      const char *role = "UNASSIGNED";
+      if (p.role == probe::Role::Maintenance) role = "MAINTENANCE";
+      if (p.role == probe::Role::Keyboard) role = "KEYBOARD";
+      Serial.printf("HID pairing peer: id=%u generation=%lu role=%s secure=%u identity=%u protocol=%s "
+                    "report_seen=%u report_notify=%u boot_seen=%u boot_notify=%u\n",
+          p.token.id, (unsigned long)p.token.generation, role, p.secure, p.identity.valid,
+          p.reportProtocol ? "REPORT" : "BOOT", p.reportSeen, p.reportNotify, p.bootSeen, p.bootNotify);
+    }
+    if (ownerAuthorized) {
       peerReply(pairOwner, true, "HIDTEST=PAIR_TIMEOUT");
       peerReply(pairOwner, true, receiverText());
     }
