@@ -34,9 +34,17 @@ std::atomic<esp_gatt_if_t> gattInterface{0};
 uint16_t uartCccd=21,inputCccd=31,bootCccd=32,outputHandle=33,bootOutputHandle=34,protocolHandle=35,controlHandle=36;
 probe::Sessions peers;
 probe::ReceiverIdentity savedReceiver;
-probe::Sessions snapshot(){return peers;}
 uint32_t gBleSession=0;
 uint32_t nowMs=0;
+bool connectDuringSnapshot=false;
+probe::Sessions snapshot(){
+  if (connectDuringSnapshot) {
+    const uint8_t address[6]={3};
+    peers.connect(0,address,++nowMs);
+    connectDuringSnapshot=false;
+  }
+  return peers;
+}
 uint32_t millis(){return nowMs;}
 bool gOtaTaskHandle=false;
 bool pairWindow=false, blockedState=false;
@@ -180,6 +188,10 @@ int main() {
   nowMs+=20000;
   unassignedLeaseTick();
   assert(disconnected.size()==1 && peers.uartReady(manual));
+  peers.disconnect(0);
+  connectDuringSnapshot=true;
+  unassignedLeaseTick();
+  assert(peers.byId(0) && !peers.byId(0)->expiring && disconnected.size()==1);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
