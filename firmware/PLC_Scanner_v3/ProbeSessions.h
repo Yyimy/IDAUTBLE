@@ -34,6 +34,7 @@ struct Peer {
   uint8_t authFailures = 0;
   bool authLocked = false;
   uint16_t mtu = 23;
+  uint32_t maintenanceActivityMs = 0;
 };
 
 // No BLE/global CCCD state: every capability belongs to a connection generation.

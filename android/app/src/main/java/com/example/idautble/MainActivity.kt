@@ -104,7 +104,7 @@ private object LogColors {
     val errRed = Color(0xFFD32F2F)
 }
 
-data class BleDevice(val name: String, val address: String, val rssi: Int)
+data class BleDevice(val name: String, val address: String, val rssi: Int?)
 
 enum class LogLevel {
     INFO,
@@ -284,6 +284,22 @@ class MainActivity : ComponentActivity() {
     private var scanner: BluetoothLeScanner? = null
     private var scanning = false
     private val foundMap = linkedMapOf<String, BleDevice>()
+    private val recentPlcPreferences by lazy { getSharedPreferences("recent_plc", MODE_PRIVATE) }
+    private var recentPlc: BleDevice? = null
+
+    private fun publishScanDevices() {
+        val scanned = foundMap.values.sortedByDescending { it.rssi }
+        val saved = recentPlc
+        uiDevices.value = if (saved != null && saved.address !in foundMap) scanned + saved else scanned
+    }
+
+    private fun rememberPlc(device: BleDevice) {
+        val saved = device.copy(rssi = null)
+        if (saved == recentPlc) return
+        recentPlc = saved
+        recentPlcPreferences.edit().putString("address", saved.address).putString("name", saved.name).apply()
+        publishScanDevices()
+    }
 
     private var gatt: BluetoothGatt? = null
     private var txChar: BluetoothGattCharacteristic? = null
@@ -348,10 +364,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private var appInForeground = false
+    private var maintenanceLeaseSupported = false
+    private var nextMaintenancePing = 0L
     private val statusRefreshTick =
         object : Runnable {
             override fun run() {
                 if (!appInForeground) return
+                val now = SystemClock.elapsedRealtime()
+                if (maintenanceLeaseSupported && bleChannelReady && now >= nextMaintenancePing) {
+                    nextMaintenancePing = now + 15000L
+                    enqueueWrite(PendingWrite("MAINTPING\r\n".toByteArray(Charsets.US_ASCII), "MAINTPING"))
+                }
                 networkSession.tick()
                 requestDeviceStatus(automatic = true)
                 mainHandler.postDelayed(this, 1000)
@@ -518,8 +541,12 @@ class MainActivity : ComponentActivity() {
                 if (name.isNullOrEmpty()) return
 
                 val rssi = result.rssi
-                foundMap[addr] = BleDevice(name, addr, rssi)
-                uiDevices.value = foundMap.values.sortedByDescending { it.rssi }
+                val device = BleDevice(name, addr, rssi)
+                foundMap[addr] = device
+                if (uiSelected.value?.let { it.address == addr && it.rssi == null } == true) {
+                    uiSelected.value = device
+                }
+                publishScanDevices()
             }
 
             override fun onScanFailed(errorCode: Int) {
@@ -570,7 +597,8 @@ class MainActivity : ComponentActivity() {
 
         log(LogLevel.INFO, "Scanning ...")
         foundMap.clear()
-        uiDevices.value = emptyList()
+        uiSelected.value = uiSelected.value?.copy(rssi = null)
+        publishScanDevices()
 
         try {
             scanner?.startScan(scanCb)
@@ -600,7 +628,7 @@ class MainActivity : ComponentActivity() {
         try {
             scanner?.stopScan(scanCb)
         } catch (_: Exception) {}
-        log(LogLevel.INFO, "Found: ${uiDevices.value.size}")
+        log(LogLevel.INFO, "Found: ${foundMap.size}")
     }
 
     // ============================
@@ -956,6 +984,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun resetSecureTransport() {
+        maintenanceLeaseSupported = false
+        nextMaintenancePing = 0L
         hidOutputRequest++; hidOutputExpected = null
         uiHidOutput.value = HidOutputState()
         hidReceiverRequest++
@@ -1178,13 +1208,15 @@ class MainActivity : ComponentActivity() {
         val packet = writeQueue.removeFirst()
         activeWrite = packet
         activeReliableWrite = packet.data.size > negotiatedMtu - 3
-        val secret = hasProtocolSecret(packet.data)
-        logTraffic(
-            LogLevel.TX,
-            redactProtocolText(asciiPretty(packet.data)),
-            if (secret) "[sensitive content hidden]" else bytesToHex(packet.data),
-            packet.data.size,
-        )
+        if (packet.tag != "MAINTPING") {
+            val secret = hasProtocolSecret(packet.data)
+            logTraffic(
+                LogLevel.TX,
+                redactProtocolText(asciiPretty(packet.data)),
+                if (secret) "[sensitive content hidden]" else bytesToHex(packet.data),
+                packet.data.size,
+            )
+        }
         try {
             if (activeReliableWrite && !g.beginReliableWrite()) {
                 failWrite("Could not start a long write")
@@ -1345,6 +1377,9 @@ class MainActivity : ComponentActivity() {
 
     private fun handleProtocolControl(message: PlcMessage) {
         val text = message.text
+        if (message.acknowledged && text.startsWith("FW=")) {
+            maintenanceLeaseSupported = "MAINTLEASE=1" in text.split(';')
+        }
         handleHidReceiverMessage(message)
         handleHidOutputMessage(message)
         statusRefresh.otaMessage(text)
@@ -1398,7 +1433,10 @@ class MainActivity : ComponentActivity() {
                 foundMap[address]?.let {
                     foundMap[address] = it.copy(name = identity.bluetoothName)
                 }
-                uiDevices.value = foundMap.values.sortedByDescending { it.rssi }
+                recentPlc?.takeIf { it.address == address }?.let {
+                    rememberPlc(it.copy(name = identity.bluetoothName))
+                }
+                publishScanDevices()
             }
             if (identityExpected == identity.id) {
                 uiIdentityStatus.value =
@@ -1437,6 +1475,7 @@ class MainActivity : ComponentActivity() {
         }
         if (message.acknowledged && text == "CONECTADO") {
             readyOk = true
+            uiSelected.value?.takeIf { it.address == lastConnectedAddress }?.let(::rememberPlc)
             bleChannelReady = true
             uiDeviceStatusReady.value = true
             networkSession.setReady(true)
@@ -2062,6 +2101,12 @@ class MainActivity : ComponentActivity() {
             IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED),
             ContextCompat.RECEIVER_EXPORTED,
         )
+        recentPlcPreferences.getString("address", null)?.takeIf(BluetoothAdapter::checkBluetoothAddress)?.let { address ->
+            val name = recentPlcPreferences.getString("name", null) ?: "PLC"
+            recentPlc = BleDevice(name, address, null)
+            uiSelected.value = recentPlc
+            publishScanDevices()
+        }
         requestBlePermissions()
         initBluetooth()
 
@@ -2196,6 +2241,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         appInForeground = true
+        nextMaintenancePing = 0L
         networkSession.setForeground(true)
         mainHandler.removeCallbacks(statusRefreshTick)
         mainHandler.post(statusRefreshTick)
@@ -2203,6 +2249,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         appInForeground = false
+        writeQueue.removeAll { it.tag == "MAINTPING" }
         networkSession.setForeground(false)
         mainHandler.removeCallbacks(statusRefreshTick)
         super.onStop()
@@ -2478,7 +2525,7 @@ private fun PlcBleTesterLandscape(
                                     if (selected != null) {
                                         Text(
                                             text =
-                                                "${selected.name} | ${selected.address} | RSSI:${selected.rssi}",
+                                                "${selected.name} | ${selected.address} | ${selected.rssi?.let { "RSSI:$it" } ?: "Not seen in scan"}",
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             fontSize = 11.sp,
@@ -2525,7 +2572,7 @@ private fun PlcBleTesterLandscape(
                                                     Spacer(Modifier.height(4.dp))
                                                 }
                                                 Text(
-                                                    "Visible devices: ${devices.size}",
+                                                    "Visible devices: ${devices.count { it.rssi != null }}",
                                                     fontSize = 11.sp,
                                                 )
                                                 LazyColumn(Modifier.heightIn(max = 180.dp)) {
@@ -2544,7 +2591,7 @@ private fun PlcBleTesterLandscape(
                                                                 overflow = TextOverflow.Ellipsis,
                                                             )
                                                             Text(d.address, fontSize = 11.sp)
-                                                            Text("RSSI:${d.rssi}", fontSize = 11.sp)
+                                                            Text(d.rssi?.let { "RSSI:$it" } ?: "Last PLC", fontSize = 11.sp)
                                                         }
                                                         Divider()
                                                     }

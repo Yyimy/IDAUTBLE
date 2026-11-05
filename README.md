@@ -4,8 +4,8 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.27-plc3, versionCode 31 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.14-rc1 |
+| App Android | [android/](android/) | 1.3.28-plc3, versionCode 32 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.15-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -596,3 +596,17 @@ Send test text, una lectura completa con TCP activo, una lectura con un campo
 ausente y la reconexión tras un reinicio. Verifica el texto en el terminal y la
 trama V2 en el servidor. Si el receptor aún conserva la definición GATT antigua
 del PLC operativo, olvida esa vinculación en el terminal y vuelve a emparejarlo.
+
+
+### Sesiones de mantenimiento compartidas
+
+Desde el firmware 3.0.15-rc1, el PLC libera la sesión de mantenimiento tras
+60 segundos sin recibir comandos. La app 1.3.28 envía una señal cada 15 segundos
+mientras está visible, incluso con la actualización automática de estado
+desactivada. Durante OTA se suspende el plazo. El receptor HID y el
+emparejamiento Bluetooth conservan su configuración. Las apps anteriores
+pueden perder la sesión tras un minuto sin enviar comandos.
+
+Después de una conexión confirmada, la app guarda localmente el último PLC.
+Puedes seleccionarlo como **Last PLC** y pulsar **Connect** aunque no aparezca
+en el escaneo.
