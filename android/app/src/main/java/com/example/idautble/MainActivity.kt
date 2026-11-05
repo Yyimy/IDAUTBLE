@@ -213,9 +213,10 @@ class MainActivity : ComponentActivity() {
         val targetAddr = lastConnectedAddress ?: return
         if (!hasScanPermission()) return
 
-        log(LogLevel.INFO, "OTA scan before reconnect...")
-
+        initBluetooth()
         val tempScanner = scanner ?: return
+
+        log(LogLevel.INFO, "OTA scan before reconnect...")
 
         val cb =
             object : ScanCallback() {
@@ -501,19 +502,28 @@ class MainActivity : ComponentActivity() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun initBluetooth() {
-        if (!hasScanPermission() || !hasConnectPermission()) return
-        try {
-            val bm = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-            val adapter = bm.adapter
+    private fun enabledBluetoothAdapter(): BluetoothAdapter? {
+        if (!hasConnectPermission()) return null
+        return try {
+            val adapter = getSystemService(BluetoothManager::class.java)?.adapter
             if (adapter == null || !adapter.isEnabled) {
-                scanner = null
                 log(LogLevel.WARN, "Enable Bluetooth in Android settings")
-                return
-            }
+                null
+            } else adapter
+        } catch (_: SecurityException) {
+            log(LogLevel.WARN, "Bluetooth permission is pending")
+            null
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun initBluetooth() {
+        scanner = null
+        if (!hasScanPermission()) return
+        val adapter = enabledBluetoothAdapter() ?: return
+        try {
             scanner = adapter.bluetoothLeScanner
         } catch (_: SecurityException) {
-            scanner = null
             log(LogLevel.WARN, "Bluetooth permission is pending")
         }
     }
@@ -585,11 +595,9 @@ class MainActivity : ComponentActivity() {
             requestBlePermissions()
             return
         }
-        if (scanner == null) initBluetooth()
-        if (scanner == null) {
-            log(LogLevel.WARN, "Bluetooth is unavailable; check settings and permissions")
-            return
-        }
+        if (!ensureConnectPermissionOrRequest()) return
+        initBluetooth()
+        if (scanner == null) return
         scanning = true
         uiScanning.value = true
         scanStartMs = System.currentTimeMillis()
@@ -641,6 +649,7 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("MissingPermission")
     private fun connectSelected() {
         if (!ensureConnectPermissionOrRequest()) return
+        val adapter = enabledBluetoothAdapter() ?: return
 
         val d =
             uiSelected.value
@@ -659,10 +668,9 @@ class MainActivity : ComponentActivity() {
         bleChannelReady = false
         streamDecoder.clear()
 
-        val bm = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val remote =
             try {
-                bm.adapter.getRemoteDevice(d.address)
+                adapter.getRemoteDevice(d.address)
             } catch (_: Exception) {
                 log(LogLevel.ERR, "Invalid MAC address")
                 return
@@ -688,6 +696,7 @@ class MainActivity : ComponentActivity() {
         if (!ensureConnectPermissionOrRequest()) return
 
         val addr = lastConnectedAddress ?: return
+        val adapter = enabledBluetoothAdapter() ?: return
 
         // 🔴 Forzar limpieza absoluta
         gatt?.let { closeGattSafely(it) }
@@ -702,10 +711,9 @@ class MainActivity : ComponentActivity() {
         bleChannelReady = false
         streamDecoder.clear()
 
-        val bm = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val remote =
             try {
-                bm.adapter.getRemoteDevice(addr)
+                adapter.getRemoteDevice(addr)
             } catch (_: Exception) {
                 log(LogLevel.ERR, "Invalid MAC for reconnect")
                 return
