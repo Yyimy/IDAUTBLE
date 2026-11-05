@@ -1,6 +1,15 @@
 package com.example.idautble
 
-/** ASCII payload, with key tokens decoded before transport; no delimiter injection. */
+/** Separator tokens are encoded as individual bytes in SEPHEX. */
+internal val hidArrowTokens = mapOf(
+    "{RIGHT}" to '\u0080',
+    "{LEFT}" to '\u0081',
+    "{DOWN}" to '\u0082',
+    "{UP}" to '\u0083',
+)
+private val hidSeparatorTokens = mapOf("{TAB}" to '\t', "{ENTER}" to '\n', "{SPACE}" to ' ') + hidArrowTokens
+private val hidTokensByByte = hidSeparatorTokens.entries.associate { (token, byte) -> byte to token }
+
 data class HidOutputConfig(
     val fields: String = "PU",
     val separator: String = "\t",
@@ -9,7 +18,7 @@ data class HidOutputConfig(
 ) {
     fun wire(): String {
         require(fields in setOf("P", "U", "PU") && ending in setOf("ENTER", "TAB", "NONE") && layout in setOf("US", "ES"))
-        require(separator.length <= 32 && separator.all(::hidOutputCharacter))
+        require(separator.length <= 32 && separator.all { hidOutputCharacter(it) || it in hidTokensByByte })
         val hex = if (separator.isEmpty()) "-" else separator.map { "%02X".format(it.code) }.joinToString("")
         return "HIDCFG=1;FIELDS=$fields;SEPHEX=$hex;END=$ending;LAYOUT=$layout"
     }
@@ -27,16 +36,19 @@ data class HidOutputState(
     val busy: Boolean = false,
     val message: String = "",
     val revision: Long = 0,
+    val arrowSeparators: Boolean = false,
 )
 
 private fun hidOutputCharacter(c: Char) = c == '\t' || c == '\n' || c.code in 32..126
 
 fun hidSeparatorPattern(bytes: String): String = buildString {
-    bytes.forEach { append(when (it) { '\t' -> "{TAB}"; '\n' -> "{ENTER}"; ' ' -> "{SPACE}"; '{' -> "{{"; else -> it.toString() }) }
+    bytes.forEach { byte ->
+        append(if (byte == '{') "{{" else hidTokensByByte[byte] ?: byte.toString())
+    }
 }
 
 /** null means invalid: never silently truncate or strip an unrecognised token. */
-fun decodeHidSeparator(pattern: String): String? {
+fun decodeHidSeparator(pattern: String, allowArrows: Boolean = true): String? {
     if (pattern.length > 224) return null
     val out = StringBuilder()
     var i = 0
@@ -48,7 +60,9 @@ fun decodeHidSeparator(pattern: String): String? {
         else {
             val end = pattern.indexOf('}', i)
             if (end < 0) return null
-            out.append(when (pattern.substring(i, end + 1)) { "{TAB}" -> '\t'; "{ENTER}" -> '\n'; "{SPACE}" -> ' '; else -> return null })
+            val token = pattern.substring(i, end + 1)
+            if (!allowArrows && token in hidArrowTokens) return null
+            out.append(hidSeparatorTokens[token] ?: return null)
             i = end + 1
         }
         if (out.length > 32) return null

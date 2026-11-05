@@ -22,7 +22,7 @@ int main(){
  CHECK(parseOutputFormat(cfg,f));CHECK(outputWire(f)==cfg);
  CHECK(formatReading(f,"A","B",text));CHECK(text=="A\n\n;=\t|B\t");
  for(auto suffix:{";",";END=NONE",";X=1"}){auto old=outputWire(f);CHECK(!parseOutputFormat(cfg+suffix,f));CHECK(outputWire(f)==old);}
- for(auto hex:{"00","0D","7F","80","0a","1","","41414141414141414141414141414141414141414141414141414141414141414141"})
+ for(auto hex:{"00","0D","7F","84","0a","1","","41414141414141414141414141414141414141414141414141414141414141414141"})
   CHECK(!parseOutputFormat(std::string("HIDCFG=1;FIELDS=PU;SEPHEX=")+hex+";END=NONE;LAYOUT=US",f));
  CHECK(parseOutputFormat("HIDCFG=1;FIELDS=PU;SEPHEX=-;END=NONE;LAYOUT=US",f));
  CHECK(formatReading(f,"A","B",text));CHECK(text=="AB");
@@ -46,13 +46,27 @@ int main(){
  CHECK(k.startText(hid,{},true,2000,s,"\t\n",KeyLayout::US));k.tick(2000,s,[](Token,const uint8_t(&)[8]){return SendResult::Accepted;});
  k.tick(2030,s,[](Token,const uint8_t(&)[8]){return SendResult::Accepted;});k.cancel();
  k.tick(2060,s,[](Token,const uint8_t(&r)[8]){CHECK(!r[2]);return SendResult::Accepted;});CHECK(k.takeResult()==TypingResult::Cancelled);
+ const std::string arrows="HIDCFG=1;FIELDS=PU;SEPHEX=8081828309;END=ENTER;LAYOUT=ES";
+ CHECK(parseOutputFormat(arrows,f));CHECK(outputWire(f)==arrows);
+ CHECK(formatReading(f,"A","B",text));CHECK(text=="A\x80\x81\x82\x83\tB\n");
+ CHECK(k.startText(hid,{},true,3000,s,text.c_str(),f.layout));
+ keys.clear();
+ for(unsigned now=3000;now<4000;now+=30)k.tick(now,s,[&](Token,const uint8_t(&r)[8]){
+   keys.push_back(r[2]);
+   if(r[2]>=0x4f&&r[2]<=0x52)CHECK(r[0]==0);
+   return SendResult::Accepted;
+ });
+ CHECK(k.takeResult()==TypingResult::Done);
+ CHECK(keys==std::vector<unsigned>({0,4,0,0x4f,0,0x50,0,0x51,0,0x52,0,43,0,5,0,40,0}));
+ CHECK(!formatReading(f,"\x82","B",text));CHECK(text.empty()); // Barcode bytes are never interpreted as arrows.
  printf("PASS: %u HID format/payload/report assertions\n",checks);
 }
 '''
-with tempfile.TemporaryDirectory(prefix='hid_format_') as tmp:
- cpp=Path(tmp)/'test.cpp';exe=Path(tmp)/'test';cpp.write_text(code)
- subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(root),str(cpp),'-o',str(exe)],check=True)
- subprocess.run([str(exe)],check=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0',UBSAN_OPTIONS='halt_on_error=1'))
+for sketch in (root, root.parent / 'PLC_Scanner_v3'):
+ with tempfile.TemporaryDirectory(prefix='hid_format_') as tmp:
+  cpp=Path(tmp)/'test.cpp';exe=Path(tmp)/'test';cpp.write_text(code)
+  subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(sketch),str(cpp),'-o',str(exe)],check=True)
+  subprocess.run([str(exe)],check=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0',UBSAN_OPTIONS='halt_on_error=1'))
 # The firmware routes the setter after the maintenance gate and refuses mid-text updates.
 s=(root/'HID_Coexistence_Probe.ino').read_text()
 process=s[s.index('static void processCommand'):s.index('static void serialTick')]

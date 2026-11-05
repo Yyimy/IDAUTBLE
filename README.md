@@ -4,8 +4,8 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.25-plc3, versionCode 29 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.13-rc1 |
+| App Android | [android/](android/) | 1.3.26-plc3, versionCode 30 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.14-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -575,7 +575,9 @@ de validar el nuevo formato. [Opciones y secuencia de prueba](firmware/HID_Coexi
 En la app 1.3.25, abre **HID RECEIVER** y autoriza los cambios desde **PIN / ACCESS**.
 Pulsa **Assign receiver** y conecta desde los ajustes Bluetooth del terminal que
 recibirá los códigos. Tras asignarlo, configura en **HID OUTPUT** los campos,
-el separador, la tecla final y el idioma del teclado. La asignación y el formato
+el separador, la tecla final y el idioma del teclado. Desde la app 1.3.26 con
+firmware 3.0.14-rc1, el separador admite también `{UP}`, `{DOWN}`, `{LEFT}`
+y `{RIGHT}`. Puedes combinarlas con texto, Tab y Enter. La asignación y el formato
 del PLC operativo se guardan por separado de los del prototipo. Usa el nombre
 Bluetooth del PLC operativo para vincularlo.
 

@@ -12,6 +12,9 @@ struct OutputFormat {
   KeyLayout layout=KeyLayout::US;
 };
 inline bool validOutputByte(unsigned char c) {return c=='\t'||c=='\n'||(c>=32&&c<=126);}
+// SEPHEX reserves 80..83 for Right, Left, Down and Up, in USB HID usage order.
+inline bool isArrowSeparator(unsigned char c) { return c >= 0x80 && c <= 0x83; }
+inline bool validSeparatorByte(unsigned char c) { return validOutputByte(c) || isArrowSeparator(c); }
 inline int outputHex(char c) {return c>='0'&&c<='9'?c-'0':c>='A'&&c<='F'?c-'A'+10:-1;}
 inline std::string outputWire(const OutputFormat &f) {
   std::string s="HIDCFG=1;FIELDS=";s+=f.fields==1?"P":f.fields==2?"U":"PU";s+=";SEPHEX=";
@@ -31,7 +34,7 @@ inline bool parseOutputFormat(const std::string &s,OutputFormat &out) {
     else if(key=="SEPHEX") {bit=2;f.separatorLength=0;if(value!="-") {
       if(value.empty()||value.size()%2||value.size()>64)return false;
       for(size_t i=0;i<value.size();i+=2){int a=outputHex(value[i]),b=outputHex(value[i+1]);if(a<0||b<0)return false;
-        auto c=uint8_t(a*16+b);if(!validOutputByte(c))return false;f.separator[f.separatorLength++]=c;}
+        auto c=uint8_t(a*16+b);if(!validSeparatorByte(c))return false;f.separator[f.separatorLength++]=c;}
     }}
     else if(key=="END") {bit=4;if(value=="ENTER")f.ending='\n';else if(value=="TAB")f.ending='\t';else if(value=="NONE")f.ending=0;else return false;}
     else if(key=="LAYOUT") {bit=8;if(value=="US")f.layout=KeyLayout::US;else if(value=="ES")f.layout=KeyLayout::ES;else return false;}
@@ -50,16 +53,21 @@ inline bool formatReading(const OutputFormat &f,const char *pallet,const char *l
   if(f.fields<1||f.fields>3||f.separatorLength>32||
       (f.ending && f.ending!='\n' && f.ending!='\t')||
       (f.layout!=KeyLayout::US && f.layout!=KeyLayout::ES))return false;
-  for(unsigned i=0;i<f.separatorLength;++i)if(!validOutputByte(f.separator[i]))return false;
-  const auto missing=[](const char *p){return !p||!*p||!std::strcmp(p,"-");};
-  if(((f.fields&1)&&missing(pallet))||((f.fields&2)&&missing(location)))return false;
+  for(unsigned i=0;i<f.separatorLength;++i)if(!validSeparatorByte(f.separator[i]))return false;
+  const auto validCode = [](const char *code) {
+    if (!code || !*code || !std::strcmp(code, "-")) return false;
+    for (const char *p = code; *p; ++p) {
+      if (!validOutputByte(static_cast<unsigned char>(*p))) return false;
+    }
+    return true;
+  };
+  if (((f.fields & 1) && !validCode(pallet)) || ((f.fields & 2) && !validCode(location))) return false;
   std::string text;
   if(f.fields&1)text+=pallet;
   if(f.fields==3)text.append((const char*)f.separator,f.separatorLength);
   if(f.fields&2)text+=location;
   if(f.ending)text+=f.ending;
   if(text.size()>512)return false;
-  for(unsigned char c:text)if(!validOutputByte(c))return false;
   out=text;return true;
 }
 } // namespace probe
