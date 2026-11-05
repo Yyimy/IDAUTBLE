@@ -502,7 +502,23 @@ static void pairTick() {
 }
 
 
+// A secure maintenance peer can release its own link without unlocking settings.
+static const char *releaseMaintenanceLink(uint32_t session) {
+  if (gOtaTaskHandle || gOtaState != OTA_IDLE) return "ERR=MAINT_RELEASE_OTA";
+  const auto state = snapshot();
+  const auto owner = state.role(probe::Role::Maintenance);
+  if (owner.generation != session || !state.uartReady(owner)) return "ERR=MAINT_RELEASE";
+  uint8_t address[6];
+  memcpy(address, state.find(owner)->address, sizeof(address));
+  return esp_ble_gap_disconnect(address) == ESP_OK ? nullptr : "ERR=MAINT_RELEASE";
+}
+
 static bool handle(const String &text, uint8_t source) {
+  if (text == "MAINTBYE") {
+    const char *error = source == 0 ? releaseMaintenanceLink(gReplyContext.session) : "ERR=AUTH_REQUIRED";
+    if (error) replyLine(false, error);
+    return true;
+  }
   const bool getter = text == "HIDRECEIVER?" || text == "HIDCFG?";
   if (!getter && !text.startsWith("HIDCFG=") && text != "HIDPAIR=1" &&
       text != "HIDPAIR=0" && text != "HIDFORGET=1" && text != "HIDTYPE=TEST") return false;

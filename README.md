@@ -4,8 +4,8 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.29-plc3, versionCode 33 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.16-rc1 |
+| App Android | [android/](android/) | 1.3.31-plc3, versionCode 35 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.17-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -614,3 +614,9 @@ pueden perder la sesión tras un minuto sin enviar comandos.
 Después de una conexión confirmada, la app guarda localmente el último PLC.
 Puedes seleccionarlo como **Last PLC** y pulsar **Connect** aunque no aparezca
 en el escaneo.
+
+
+Con app 1.3.31 y PLC 3.0.17-rc1, **Disconnect** pide al propio PLC cerrar
+el enlace Bluetooth de la tablet de mantenimiento. Esto libera la plaza para
+el relevo incluso si Android mantiene abierto el enlace físico al cerrar GATT.
+La orden se rechaza durante OTA. El respaldo por inactividad sigue disponible.
