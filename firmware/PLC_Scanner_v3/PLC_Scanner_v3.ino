@@ -490,7 +490,7 @@ static void handleIdentityCommand(const String &s, uint8_t source);
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.16-rc1"
+#define FIRMWARE_VERSION "3.0.17-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static uint32_t gTxDropped = 0, gEventOverflow = 0, gScanOverflow = 0;
@@ -2105,7 +2105,7 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
              rxTrim.startsWith("ACKMODE=") ||
              rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" ||
              rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
-             rxTrim.startsWith("ID=") || rxTrim.startsWith("HID")) {
+             rxTrim.startsWith("ID=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
     cmd.type = BLECMD_TEXT;
     strlcpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload));
   } else {
@@ -3244,7 +3244,7 @@ static void handleTextCommand(const BleCmd &cmd) {
     replyLine(true, "FW=" FIRMWARE_VERSION ";PROTO=V2;ACKMODE=" +
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
-                        (cmd.source == 0 ? ";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDRECEIVER=1;MAINTLEASE=1" : ""));
+                        (cmd.source == 0 ? ";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1" : ""));
     return;
   }
   if (s == "STATUS?") {

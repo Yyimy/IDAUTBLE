@@ -8,6 +8,7 @@ source = (sketch / 'PlcHid.h').read_text()
 staging = source[source.index('struct PreparedWrite {'):source.index('static probe::Sessions snapshot()')]
 dispatcher = source[source.index('static void gattEvent('):source.index('static uint8_t reportMap[]')]
 lease = source[source.index('static void maintenanceLeaseTick()'):source.index('static void tick()')]
+release = source[source.index('static const char *releaseMaintenanceLink('):source.index('static bool handle(')]
 shim = r'''
 #include "ProbeSessions.h"
 #include <algorithm>
@@ -19,7 +20,7 @@ using std::max;
 using esp_gatt_if_t = int;
 enum esp_gatts_cb_event_t { ESP_GATTS_REG_EVT, ESP_GATTS_MTU_EVT,
   ESP_GATTS_CONGEST_EVT, ESP_GATTS_EXEC_WRITE_EVT, ESP_GATTS_WRITE_EVT };
-constexpr int ESP_GATT_OK=0, ESP_GATT_PREP_WRITE_EXEC=1;
+constexpr int ESP_OK=0, ESP_GATT_OK=0, ESP_GATT_PREP_WRITE_EXEC=1;
 struct esp_ble_gatts_cb_param_t {
   struct { int status; } reg;
   struct { uint16_t conn_id, mtu; } mtu;
@@ -32,6 +33,7 @@ struct Char { uint16_t getHandle() const { return 20; } } uart, *pCharacteristic
 std::atomic<esp_gatt_if_t> gattInterface{0};
 uint16_t uartCccd=21,inputCccd=31,bootCccd=32,outputHandle=33,bootOutputHandle=34,protocolHandle=35,controlHandle=36;
 probe::Sessions peers;
+probe::Sessions snapshot(){return peers;}
 uint32_t gBleSession=0;
 uint32_t nowMs=0;
 uint32_t millis(){return nowMs;}
@@ -39,7 +41,7 @@ bool gOtaTaskHandle=false;
 constexpr int OTA_IDLE=0;
 int gOtaState=OTA_IDLE;
 std::vector<uint8_t> disconnected;
-void esp_ble_gap_disconnect(const uint8_t* address){disconnected.push_back(address[0]);}
+int esp_ble_gap_disconnect(const uint8_t* address){disconnected.push_back(address[0]);return ESP_OK;}
 bool deviceConnected=false;
 #define portENTER_CRITICAL(x) ((void)0)
 #define portEXIT_CRITICAL(x) ((void)0)
@@ -111,6 +113,16 @@ int main() {
   exec(0);
   assert(messages.size()==3 && messages.back().first==replacement.generation);
   assert(peers.keyboardReady(hid));
+  assert(releaseMaintenanceLink(app.generation) != nullptr);
+  assert(releaseMaintenanceLink(hid.generation) != nullptr);
+  gOtaTaskHandle=true;
+  assert(std::string(releaseMaintenanceLink(replacement.generation))=="ERR=MAINT_RELEASE_OTA");
+  assert(disconnected.empty());
+  gOtaTaskHandle=false;
+  assert(releaseMaintenanceLink(replacement.generation)==nullptr);
+  assert(disconnected==std::vector<uint8_t>{appAddress[0]});
+  assert(peers.keyboardReady(hid));
+  disconnected.clear();
   nowMs=50000;
   write(0,20,"MAINTPING\r\n");
   assert(messages.size()==3 && peers.find(replacement)->maintenanceActivityMs==50000);
@@ -137,7 +149,7 @@ int main() {
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
     cpp, exe = Path(tmp) / 'test.cpp', Path(tmp) / 'test'
-    cpp.write_text(shim + staging + dispatcher + lease + cases)
+    cpp.write_text(shim + staging + dispatcher + lease + release + cases)
     subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I',
                     str(sketch), str(cpp), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)

@@ -365,11 +365,17 @@ class MainActivity : ComponentActivity() {
 
     private var appInForeground = false
     private var maintenanceLeaseSupported = false
+    private var maintenanceReleaseSupported = false
+    private var maintenanceReleasePending = false
+    private var maintenanceReleaseRequest = 0L
     private var nextMaintenancePing = 0L
     private val statusRefreshTick =
         object : Runnable {
             override fun run() {
-                if (!appInForeground) return
+                if (!appInForeground || maintenanceReleasePending) {
+                    if (appInForeground) mainHandler.postDelayed(this, 1000)
+                    return
+                }
                 val now = SystemClock.elapsedRealtime()
                 if (maintenanceLeaseSupported && bleChannelReady && now >= nextMaintenancePing) {
                     nextMaintenancePing = now + 15000L
@@ -741,6 +747,36 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestMaintenanceDisconnect() {
+        if (maintenanceReleasePending) return
+        if (uiOtaActive.value || statusRefresh.otaActive) {
+            log(LogLevel.WARN, "Finish or cancel the OTA update before disconnecting")
+            return
+        }
+        val connection = gatt
+        if (connection == null || !bleChannelReady || !maintenanceReleaseSupported) {
+            disconnectGatt()
+            uiSelected.value = null
+            return
+        }
+
+        maintenanceReleasePending = true
+        val request = ++maintenanceReleaseRequest
+        writeQueue.clear()
+        log(LogLevel.INFO, "Releasing maintenance connection…")
+        if (!enqueueWrite(PendingWrite("MAINTBYE\r\n".toByteArray(Charsets.US_ASCII), "MAINTBYE"))) {
+            maintenanceReleasePending = false
+            return
+        }
+        mainHandler.postDelayed({
+            if (gatt === connection && maintenanceReleasePending && request == maintenanceReleaseRequest) {
+                log(LogLevel.WARN, "PLC release timed out. Closing the app connection.")
+                disconnectGatt()
+                uiSelected.value = null
+            }
+        }, 3000L)
+    }
+
     private fun disconnectGatt(silentLog: Boolean = false, keepBleLinkState: Boolean = false) {
         resetSecureTransport()
         if (!keepBleLinkState) {
@@ -984,6 +1020,8 @@ class MainActivity : ComponentActivity() {
 
     private fun resetSecureTransport() {
         maintenanceLeaseSupported = false
+        maintenanceReleaseSupported = false
+        maintenanceReleasePending = false
         nextMaintenancePing = 0L
         hidOutputRequest++; hidOutputExpected = null
         uiHidOutput.value = HidOutputState()
@@ -1117,6 +1155,10 @@ class MainActivity : ComponentActivity() {
 
     @SuppressLint("MissingPermission")
     private fun sendBytes(data: ByteArray, tag: String, networkId: Long? = null) {
+        if (maintenanceReleasePending) {
+            networkId?.let { networkSession.sendFailed(it, "Bluetooth is disconnecting.") }
+            return
+        }
         if (!ensureConnectPermissionOrRequest()) {
             networkId?.let { networkSession.sendFailed(it, "Bluetooth permission is required.") }
             return
@@ -1377,7 +1419,15 @@ class MainActivity : ComponentActivity() {
     private fun handleProtocolControl(message: PlcMessage) {
         val text = message.text
         if (message.acknowledged && text.startsWith("FW=")) {
-            maintenanceLeaseSupported = "MAINTLEASE=1" in text.split(';')
+            val capabilities = text.split(';')
+            maintenanceLeaseSupported = "MAINTLEASE=1" in capabilities
+            maintenanceReleaseSupported = "MAINTRELEASE=1" in capabilities
+        }
+        if (maintenanceReleasePending && message.rejected && text.startsWith("ERR=MAINT_RELEASE")) {
+            maintenanceReleasePending = false
+            log(LogLevel.WARN, if (text == "ERR=MAINT_RELEASE_OTA") "Finish or cancel the OTA update before disconnecting"
+                else "The PLC could not release the connection. Try Disconnect again.")
+            return
         }
         handleHidReceiverMessage(message)
         handleHidOutputMessage(message)
@@ -1824,6 +1874,7 @@ class MainActivity : ComponentActivity() {
                         newState == BluetoothProfile.STATE_DISCONNECTED ||
                             status != BluetoothGatt.GATT_SUCCESS
                     ) {
+                        if (maintenanceReleasePending) uiSelected.value = null
                         val shouldReconnect = otaRebootExpected
                         otaSession.disconnected(lastConnectedAddress)
                         log(LogLevel.INFO, "BLE disconnected (status=$status)")
@@ -2155,10 +2206,7 @@ class MainActivity : ComponentActivity() {
                     onSelectDevice = { uiSelected.value = it },
                     onScan5s = { startScan(5000) },
                     onConnect = { connectSelected() },
-                    onDisconnect = {
-                        disconnectGatt()
-                        uiSelected.value = null
-                    },
+                    onDisconnect = ::requestMaintenanceDisconnect,
                     onCmd = { c -> sendEscCmd(c) },
                     altState = uiAltState.value,
                     altKnown = uiAltKnown.value,
