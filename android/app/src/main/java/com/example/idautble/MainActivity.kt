@@ -49,8 +49,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
@@ -448,8 +448,7 @@ class MainActivity : ComponentActivity() {
     private val uiPfxP = mutableStateOf("")
     private val uiPfxU = mutableStateOf("")
     private val uiRtcIso = mutableStateOf(nowIso())
-    private val uiManualText = mutableStateOf(TextFieldValue(""))
-    private val uiManualHex = mutableStateOf("1B 4C 0D 0A")
+    private val uiManualLines = mutableStateListOf(ManualLine(), ManualLine(), ManualLine())
     private val uiTxtAddCrlf = mutableStateOf(true)
 
     private fun log(lvl: LogLevel, msg: String) {
@@ -826,17 +825,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun sendText(text: String, addCrlf: Boolean) {
-        val payload =
-            if (addCrlf) {
-                // Si el usuario ya puso CRLF, no lo dupliques
-                if (text.endsWith("\r\n")) text else "$text\r\n"
-            } else {
-                // Envío RAW (sin CRLF)
-                // Si el usuario escribió \r o \n manualmente, se respeta tal cual
-                text
-            }
-        val bytes = expandTokens(payload)
-        sendBytes(bytes, "TXT")
+        val bytes = expandTokens(text)
+        val endsInCrlf = bytes.size >= 2 && bytes[bytes.lastIndex - 1] == CR && bytes.last() == LF
+        val payload = if (addCrlf && !endsInCrlf) bytes + byteArrayOf(CR, LF) else bytes
+        sendBytes(payload, "TXT")
     }
 
     private fun sendHexString(hex: String) {
@@ -2113,8 +2105,7 @@ class MainActivity : ComponentActivity() {
                     pfxP = uiPfxP.value,
                     pfxU = uiPfxU.value,
                     rtcIso = uiRtcIso.value,
-                    manualText = uiManualText.value,
-                    manualHex = uiManualHex.value,
+                    manualLines = uiManualLines,
                     txtAddCrlf = uiTxtAddCrlf.value,
                     onTxtAddCrlfChanged = { uiTxtAddCrlf.value = it },
                     onSelectDevice = { uiSelected.value = it },
@@ -2145,10 +2136,11 @@ class MainActivity : ComponentActivity() {
                     },
                     onSetRtc = { sendText("RTC=${uiRtcIso.value}", addCrlf = true) },
                     onRefreshRtc = { uiRtcIso.value = nowIso() },
-                    onManualTextChanged = { uiManualText.value = it },
-                    onManualHexChanged = { uiManualHex.value = it },
+                    onManualEdit = { index, line -> uiManualLines[index] = line },
+                    onManualAdd = { if (uiManualLines.size < MANUAL_LINE_LIMIT) uiManualLines.add(ManualLine()) },
+                    onManualRemoveLast = { if (uiManualLines.size > 1) uiManualLines.removeAt(uiManualLines.lastIndex) },
                     onSendText = { text -> sendText(text, addCrlf = true) },
-                    onSendHex = { sendHexString(uiManualHex.value) },
+                    onSendHex = ::sendHexString,
                     onPfxPChanged = { uiPfxP.value = it },
                     onPfxUChanged = { uiPfxU.value = it },
                     onRtcIsoChanged = { uiRtcIso.value = it },
@@ -2268,7 +2260,7 @@ private fun PlcBleTesterLandscape(
     pfxP: String,
     pfxU: String,
     rtcIso: String,
-    manualHex: String,
+    manualLines: List<ManualLine>,
     txtAddCrlf: Boolean,
     altState: Boolean?,
     altKnown: Boolean,
@@ -2284,11 +2276,11 @@ private fun PlcBleTesterLandscape(
     onSetCfg: () -> Unit,
     onSetRtc: () -> Unit,
     onRefreshRtc: () -> Unit,
-    manualText: TextFieldValue,
-    onManualTextChanged: (TextFieldValue) -> Unit,
-    onManualHexChanged: (String) -> Unit,
+    onManualEdit: (Int, ManualLine) -> Unit,
+    onManualAdd: () -> Unit,
+    onManualRemoveLast: () -> Unit,
     onSendText: (String) -> Unit,
-    onSendHex: () -> Unit,
+    onSendHex: (String) -> Unit,
     onTxtAddCrlfChanged: (Boolean) -> Unit,
     onPfxPChanged: (String) -> Unit,
     onPfxUChanged: (String) -> Unit,
@@ -2313,7 +2305,6 @@ private fun PlcBleTesterLandscape(
     var connectionSectionExpanded by rememberSaveable { mutableStateOf(true) }
     var heightSectionExpanded by rememberSaveable { mutableStateOf(false) }
     var textSectionExpanded by rememberSaveable { mutableStateOf(false) }
-    var manualSectionExpanded by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(connected) {
         if (connected) {
@@ -2324,35 +2315,7 @@ private fun PlcBleTesterLandscape(
     var selectedTab by remember { mutableStateOf(0) }
     var showPrefixDialogFor by remember { mutableStateOf<String?>(null) }
 
-    var manualMode by remember { mutableStateOf("TXT") }
-
     val leftScroll = rememberScrollState()
-
-    fun insertToken(token: String) {
-
-        val current = manualText
-        val start = current.selection.start
-        val end = current.selection.end
-
-        val newText = current.text.replaceRange(start, end, token)
-
-        onManualTextChanged(
-            TextFieldValue(
-                text = newText,
-                selection = androidx.compose.ui.text.TextRange(start + token.length),
-            )
-        )
-    }
-
-    fun appendHex(byte: String) {
-        val newValue =
-            if (manualHex.isBlank()) {
-                byte
-            } else {
-                "$manualHex $byte"
-            }
-        onManualHexChanged(newValue)
-    }
 
     // TopBar eliminado + sin insets reservados
     Scaffold(
@@ -2940,137 +2903,15 @@ private fun PlcBleTesterLandscape(
                                     }
                                 }
 
-                                CollapsibleSettingsSection(
-                                    title = "MANUAL TERMINAL",
-                                    summary = "Send TXT / HEX commands",
-                                    expanded = manualSectionExpanded,
-                                    onToggle = { manualSectionExpanded = !manualSectionExpanded },
-                                ) {
-
-                                    // --- MODE SELECTOR ---
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.Center,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        ModeBtn(label = "TXT", selected = manualMode == "TXT") {
-                                            manualMode = "TXT"
-                                        }
-
-                                        Spacer(Modifier.width(10.dp))
-
-                                        ModeBtn(label = "HEX", selected = manualMode == "HEX") {
-                                            manualMode = "HEX"
-                                        }
-                                    }
-
-                                    // --- INPUT FIELD ---
-                                    if (manualMode == "TXT") {
-
-                                        Column(
-                                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                                            modifier = Modifier.fillMaxWidth(),
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement =
-                                                    Arrangement.spacedBy(
-                                                        6.dp,
-                                                        Alignment.CenterHorizontally,
-                                                    ),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                            ) {
-                                                SmallTokenBtn("<ESC>") { insertToken("<ESC>") }
-                                                SmallTokenBtn("<CR>") { insertToken("<CR>") }
-                                                SmallTokenBtn("<LF>") { insertToken("<LF>") }
-                                                SmallTokenBtn("<STX>") { insertToken("<STX>") }
-                                                SmallTokenBtn("<ETX>") { insertToken("<ETX>") }
-                                            }
-
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement =
-                                                    Arrangement.spacedBy(
-                                                        6.dp,
-                                                        Alignment.CenterHorizontally,
-                                                    ),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                            ) {
-                                                SmallTokenBtn("<ACK>") { insertToken("<ACK>") }
-                                                SmallTokenBtn("<NAK>") { insertToken("<NAK>") }
-                                            }
-                                        }
-
-                                        CompactOutlinedFieldTFV(
-                                            value = manualText,
-                                            onValueChange = onManualTextChanged,
-                                            modifier = Modifier.fillMaxWidth(),
-                                        )
-                                    } else {
-                                        Column(
-                                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                                            modifier = Modifier.fillMaxWidth(),
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement =
-                                                    Arrangement.spacedBy(
-                                                        6.dp,
-                                                        Alignment.CenterHorizontally,
-                                                    ),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                            ) {
-                                                SmallHexBtn("1B - ESC") { appendHex("1B") }
-                                                SmallHexBtn("0D - CR") { appendHex("0D") }
-                                                SmallHexBtn("0A - LF") { appendHex("0A") }
-                                                SmallHexBtn("02 - STX") { appendHex("02") }
-                                                SmallHexBtn("03 - ETX") { appendHex("03") }
-                                            }
-
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement =
-                                                    Arrangement.spacedBy(
-                                                        6.dp,
-                                                        Alignment.CenterHorizontally,
-                                                    ),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                            ) {
-                                                SmallHexBtn("06 - ACK") { appendHex("06") }
-                                                SmallHexBtn("15 - NAK") { appendHex("15") }
-                                            }
-                                        }
-
-                                        CompactOutlinedField(
-                                            value = manualHex,
-                                            onValueChange = onManualHexChanged,
-                                            modifier = Modifier.fillMaxWidth(),
-                                        )
-                                    }
-
-                                    // --- SEND BUTTON ---
-                                    Button(
-                                        shape = RoundedCornerShape(6.dp),
-                                        onClick = {
-                                            if (manualMode == "TXT") {
-                                                onSendText(manualText.text)
-                                            } else {
-                                                onSendHex()
-                                            }
-                                        },
-                                        modifier =
-                                            Modifier.align(Alignment.CenterHorizontally)
-                                                .width(160.dp),
-                                        contentPadding = PaddingValues(10.dp, 8.dp),
-                                        colors =
-                                            ButtonDefaults.buttonColors(
-                                                containerColor = Color(0xFF2E7D32),
-                                                contentColor = Color.White,
-                                            ),
-                                    ) {
-                                        Text("SEND", fontSize = 11.sp)
-                                    }
-                                }
+                                ManualTerminalSection(
+                                    lines = manualLines,
+                                    onEdit = onManualEdit,
+                                    onAdd = onManualAdd,
+                                    onRemoveLast = onManualRemoveLast,
+                                    connected = connected,
+                                    onSendText = onSendText,
+                                    onSendHex = onSendHex,
+                                )
 
                                 Spacer(Modifier.height(60.dp))
                             }
@@ -3293,70 +3134,13 @@ private fun CmdBtn(label: String, onClick: () -> Unit) {
     }
 }
 
-@Composable
-private fun SmallTokenBtn(label: String, onClick: () -> Unit) {
-    OutlinedButton(
-        shape = RoundedCornerShape(6.dp),
-        onClick = onClick,
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-        modifier = Modifier.height(30.dp),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF6A1B9A)),
-    ) {
-        Text(label, fontSize = 11.sp, lineHeight = 13.sp, fontFamily = FontFamily.Monospace)
-    }
-}
-
-@Composable
-private fun SmallHexBtn(label: String, onClick: () -> Unit) {
-    OutlinedButton(
-        shape = RoundedCornerShape(6.dp),
-        onClick = onClick,
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-        modifier = Modifier.height(30.dp),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF6C00)),
-    ) {
-        Text(label, fontSize = 11.sp, lineHeight = 13.sp, fontFamily = FontFamily.Monospace)
-    }
-}
-
-@Composable
-private fun ModeBtn(label: String, selected: Boolean, onClick: () -> Unit) {
-    val disabledContainer = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-
-    val disabledText = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-
-    Button(
-        shape = RoundedCornerShape(6.dp),
-        onClick = onClick,
-        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
-        elevation =
-            ButtonDefaults.buttonElevation(
-                defaultElevation = 0.dp,
-                pressedElevation = 0.dp,
-                focusedElevation = 0.dp,
-                hoveredElevation = 0.dp,
-            ),
-        colors =
-            ButtonDefaults.buttonColors(
-                containerColor =
-                    if (selected) Color(0xFF1976D2)
-                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
-                contentColor =
-                    if (selected) Color.White
-                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-            ),
-    ) {
-        Text(text = label, fontSize = 11.sp, lineHeight = 13.sp, letterSpacing = 0.sp)
-    }
-}
-
 /**
  * Campo compacto con:
  * - alto fijo 40dp
  * - padding interno pequeño
  */
 @Composable
-private fun CompactOutlinedFieldTFV(
+internal fun CompactOutlinedFieldTFV(
     value: TextFieldValue,
     onValueChange: (TextFieldValue) -> Unit,
     modifier: Modifier = Modifier,
