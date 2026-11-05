@@ -9,7 +9,12 @@ enum class TypingResult : uint8_t { None, Done, Cancelled, Failed };
 
 inline bool asciiReport(char c, bool capsLock, uint8_t (&report)[8], KeyLayout layout=KeyLayout::US) {
   std::memset(report, 0, sizeof(report));
-  if (!validOutputByte(static_cast<unsigned char>(c))) return false;
+  const auto byte = static_cast<unsigned char>(c);
+  if (isArrowSeparator(byte)) {
+    report[2] = 0x4f + (byte - 0x80); // Keyboard Right Arrow through Keyboard Up Arrow.
+    return true;
+  }
+  if (!validOutputByte(byte)) return false;
   if (c >= 'A' && c <= 'Z') {
     report[0] = capsLock ? 0 : 0x02;
     report[2] = 4 + c - 'A';

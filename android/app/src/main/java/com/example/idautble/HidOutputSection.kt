@@ -21,7 +21,7 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
     LaunchedEffect(state.revision) {
         state.config?.let { fields = it.fields; pattern = hidSeparatorPattern(it.separator); ending = it.ending; layout = it.layout }
     }
-    val separator = decodeHidSeparator(pattern)
+    val separator = decodeHidSeparator(pattern, allowArrows = state.arrowSeparators)
     val draft = separator?.let { HidOutputConfig(fields, it, ending, layout) }
     val enabled = connected && !state.busy
     CollapsibleSettingsSection(if (production) "HID OUTPUT" else "HID OUTPUT · PROTOTYPE", "Pallet / location · keyboard format", expanded, { expanded = !expanded }) {
@@ -34,6 +34,18 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
                 TextButton(onClick = { pattern += token }, enabled = enabled && fields == "PU") { Text(token, fontSize = 10.sp) }
             }
             TextButton(onClick = { pattern = "" }, enabled = enabled && fields == "PU") { Text("Clear", fontSize = 10.sp) }
+        }
+        if (state.arrowSeparators) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf("{UP}", "{DOWN}", "{LEFT}", "{RIGHT}").forEach { token ->
+                    TextButton(
+                        onClick = { pattern += token },
+                        modifier = Modifier.weight(1f),
+                        enabled = enabled && fields == "PU",
+                        contentPadding = PaddingValues(0.dp),
+                    ) { Text(token, fontSize = 10.sp) }
+                }
+            }
         }
         Text("Combine keys and ASCII text, e.g. {ENTER}{ENTER}. Max 32 characters/keys. Use {{ for a literal {.", fontSize = 11.sp)
         Text("Final key", fontSize = 11.sp)

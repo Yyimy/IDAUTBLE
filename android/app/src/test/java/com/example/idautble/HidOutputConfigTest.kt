@@ -4,6 +4,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HidOutputConfigTest {
+    @Test fun arrowsRoundTripAndRequireFirmwareSupport() {
+        val pattern = "{RIGHT}{LEFT}{DOWN}{UP}{TAB}"
+        val separator = decodeHidSeparator(pattern)!!
+        val config = HidOutputConfig(separator = separator)
+        assertEquals("HIDCFG=1;FIELDS=PU;SEPHEX=8081828309;END=ENTER;LAYOUT=US", config.wire())
+        assertEquals(config, parseHidOutputConfig(config.wire()))
+        assertEquals("PALLET123${pattern}LOC01{ENTER}", config.preview())
+        assertNull(decodeHidSeparator(pattern, allowArrows = false))
+        assertNull(decodeHidSeparator("\u0080"))
+        assertEquals("\t", decodeHidSeparator("{TAB}", allowArrows = false))
+    }
+
     @Test fun defaultRoundTrip() {
         val cfg = HidOutputConfig()
         assertEquals("HIDCFG=1;FIELDS=PU;SEPHEX=09;END=ENTER;LAYOUT=US", cfg.wire())

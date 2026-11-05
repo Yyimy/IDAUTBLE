@@ -1,4 +1,4 @@
-// IDAUT HID coexistence probe 0.3.0 — BENCH TEST ONLY, not the PLC controller.
+// IDAUT HID coexistence probe 0.3.1 — BENCH TEST ONLY, not the PLC controller.
 // ESP32-S3 / Arduino-ESP32 3.0.7. No GPIO/I2C/RS485/relay/battery supervision.
 #include <Arduino.h>
 #include <atomic>
@@ -19,7 +19,7 @@
 struct Command;
 struct Reply;
 
-static constexpr char PROBE_VERSION[] = "HID-PROBE-0.3.0";
+static constexpr char PROBE_VERSION[] = "HID-PROBE-0.3.1";
 // Diagnostic A/B: 0 = neutral BLE advertisement (first test), 1 = HID advertisement.
 // Both modes keep exactly the same GATT services, PIN, bonding and MITM gates.
 #ifndef PROBE_ADVERTISE_HID
@@ -529,7 +529,7 @@ static void processCommand(const Command &command) {
   if (command.length == 4 && command.data[0] == 0x1b && command.data[1] == 'C' && command.data[2] == 13 && command.data[3] == 10) {
     reply(command.source, command.usb, true, "CONECTADO"); return;
   }
-  if (text == "INFO?") { reply(command.source, command.usb, true, "FW=" + String(PROBE_VERSION) + ";PROTO=V2;ACKMODE=0;HEARTBEAT=0;HIDFORMAT=1"); return; }
+  if (text == "INFO?") { reply(command.source, command.usb, true, "FW=" + String(PROBE_VERSION) + ";PROTO=V2;ACKMODE=0;HEARTBEAT=0;HIDFORMAT=1;HIDARROWS=1"); return; }
   if (text == "HIDCFG?") { reply(command.source, command.usb, true, probe::outputWire(outputFormat).c_str()); return; }
   if (text == "HIDRECEIVER?") { reply(command.source, command.usb, true, receiverText()); return; }
   if (text == "HIDTEST?" || text == "status") {
@@ -678,7 +678,7 @@ static uint16_t cccdHandle(BLECharacteristic *c) {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("BENCH ONLY: HID-PROBE-0.3.0. Not the PLC controller.");
+  Serial.println("BENCH ONLY: HID-PROBE-0.3.1. Not the PLC controller.");
   Serial.printf("BLE DIAGNOSTIC mode=%s name=%s\n",
       PROBE_HID_ADVERTISEMENT ? "HID_ADVERTISEMENT" : "NEUTRAL_ADVERTISEMENT", PROBE_NAME);
   Serial.println("Same GATT services, fixed PIN and SC/MITM security in both modes.");

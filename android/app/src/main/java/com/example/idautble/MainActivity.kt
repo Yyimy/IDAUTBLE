@@ -887,7 +887,10 @@ class MainActivity : ComponentActivity() {
         val text = message.text
         if (message.acknowledged && text.startsWith("FW=")) {
             val supported = text.split(';').count { it == "HIDFORMAT=1" } == 1
-            uiHidOutput.value = HidOutputState(supported = supported)
+            uiHidOutput.value = HidOutputState(
+                supported = supported,
+                arrowSeparators = "HIDARROWS=1" in text.split(';'),
+            )
             hidOutputRequest++; hidOutputExpected = null
             if (supported) requestHidOutput(null)
         } else if (message.acknowledged && text.startsWith("HIDCFG=")) {
