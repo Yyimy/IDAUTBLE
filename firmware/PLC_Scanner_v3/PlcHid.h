@@ -212,6 +212,12 @@ static void receiverTick() {
   }
 }
 
+static const char *roleName(probe::Role role) {
+  if (role == probe::Role::Maintenance) return "MAINTENANCE";
+  if (role == probe::Role::Keyboard) return "KEYBOARD";
+  return "UNASSIGNED";
+}
+
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *, esp_ble_gatts_cb_param_t *param) override {
     portENTER_CRITICAL(&peerMux);
@@ -219,12 +225,19 @@ class ServerCallbacks : public BLEServerCallbacks {
     portEXIT_CRITICAL(&peerMux);
     isAdvertising = false;
     advertisePending = false;
-    if (token.id == probe::kNoConnection) esp_ble_gap_disconnect(param->connect.remote_bda);
+    const auto *address = param->connect.remote_bda;
+    const bool tracked = token.id != probe::kNoConnection;
+    Serial.printf("BLE LINK OPEN id=%u generation=%lu peer=%02X:%02X:%02X:%02X:%02X:%02X tracked=%u\n",
+        param->connect.conn_id, (unsigned long)token.generation,
+        address[0], address[1], address[2], address[3], address[4], address[5], tracked);
+    if (!tracked) esp_ble_gap_disconnect(param->connect.remote_bda);
   }
 
   void onDisconnect(BLEServer *, esp_ble_gatts_cb_param_t *param) override {
     portENTER_CRITICAL(&peerMux);
     const auto *peer = peers.byId(param->disconnect.conn_id);
+    const unsigned long generation = peer ? peer->token.generation : 0;
+    const char *role = peer ? roleName(peer->role) : "UNKNOWN";
     if (peer && peer->role == probe::Role::Maintenance) {
       deviceConnected = false;
       gBleSession = 0;
@@ -234,6 +247,8 @@ class ServerCallbacks : public BLEServerCallbacks {
     portEXIT_CRITICAL(&peerMux);
     isAdvertising = false;
     advertisePending = false;
+    Serial.printf("BLE LINK CLOSE id=%u generation=%lu role=%s reason=0x%02X\n",
+        param->disconnect.conn_id, generation, role, (unsigned)param->disconnect.reason);
   }
 };
 
@@ -470,12 +485,9 @@ static void pairTick() {
         (unsigned long)elapsed, ownerAuthorized, pairingBlocked, (unsigned)s.count());
     for (const auto &p : s.peers) {
       if (!p.used) continue;
-      const char *role = "UNASSIGNED";
-      if (p.role == probe::Role::Maintenance) role = "MAINTENANCE";
-      if (p.role == probe::Role::Keyboard) role = "KEYBOARD";
       Serial.printf("HID pairing peer: id=%u generation=%lu role=%s secure=%u identity=%u protocol=%s "
                     "report_seen=%u report_notify=%u boot_seen=%u boot_notify=%u\n",
-          p.token.id, (unsigned long)p.token.generation, role, p.secure, p.identity.valid,
+          p.token.id, (unsigned long)p.token.generation, roleName(p.role), p.secure, p.identity.valid,
           p.reportProtocol ? "REPORT" : "BOOT", p.reportSeen, p.reportNotify, p.bootSeen, p.bootNotify);
     }
     if (ownerAuthorized) {
@@ -525,6 +537,7 @@ static const char *releaseMaintenanceLink(uint32_t session) {
   if (owner.generation != session || !state.uartReady(owner)) return "ERR=MAINT_RELEASE";
   uint8_t address[6];
   memcpy(address, state.find(owner)->address, sizeof(address));
+  Serial.printf("BLE MAINTBYE id=%u generation=%lu\n", owner.id, (unsigned long)owner.generation);
   return esp_ble_gap_disconnect(address) == ESP_OK ? nullptr : "ERR=MAINT_RELEASE";
 }
 
