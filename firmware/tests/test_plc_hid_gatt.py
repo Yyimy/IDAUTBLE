@@ -33,6 +33,7 @@ struct Char { uint16_t getHandle() const { return 20; } } uart, *pCharacteristic
 std::atomic<esp_gatt_if_t> gattInterface{0};
 uint16_t uartCccd=21,inputCccd=31,bootCccd=32,outputHandle=33,bootOutputHandle=34,protocolHandle=35,controlHandle=36;
 probe::Sessions peers;
+probe::ReceiverIdentity savedReceiver;
 probe::Sessions snapshot(){return peers;}
 uint32_t gBleSession=0;
 uint32_t nowMs=0;
