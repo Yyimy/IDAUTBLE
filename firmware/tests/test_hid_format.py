@@ -22,7 +22,7 @@ int main(){
  CHECK(parseOutputFormat(cfg,f));CHECK(outputWire(f)==cfg);
  CHECK(formatReading(f,"A","B",text));CHECK(text=="A\n\n;=\t|B\t");
  for(auto suffix:{";",";END=NONE",";X=1"}){auto old=outputWire(f);CHECK(!parseOutputFormat(cfg+suffix,f));CHECK(outputWire(f)==old);}
- for(auto hex:{"00","0D","7F","84","0a","1","","41414141414141414141414141414141414141414141414141414141414141414141"})
+ for(auto hex:{"00","0D","7F","98","0a","1","","41414141414141414141414141414141414141414141414141414141414141414141"})
   CHECK(!parseOutputFormat(std::string("HIDCFG=1;FIELDS=PU;SEPHEX=")+hex+";END=NONE;LAYOUT=US",f));
  CHECK(parseOutputFormat("HIDCFG=1;FIELDS=PU;SEPHEX=-;END=NONE;LAYOUT=US",f));
  CHECK(formatReading(f,"A","B",text));CHECK(text=="AB");
@@ -59,6 +59,16 @@ int main(){
  CHECK(k.takeResult()==TypingResult::Done);
  CHECK(keys==std::vector<unsigned>({0,4,0,0x4f,0,0x50,0,0x51,0,0x52,0,43,0,5,0,40,0}));
  CHECK(!formatReading(f,"\x82","B",text));CHECK(text.empty()); // Barcode bytes are never interpreted as arrows.
+ const std::string extended="HIDCFG=1;FIELDS=PU;SEPHEX=8485868788898A8B8C97;END=PAGEDOWN;LAYOUT=US";
+ CHECK(parseOutputFormat(extended,f));CHECK(outputWire(f)==extended);
+ CHECK(formatReading(f,"P","U",text));
+ const std::vector<unsigned> expected={19,0x29,0x2a,0x4c,0x49,0x4a,0x4d,0x4b,0x4e,0x3a,0x45,24,0x4e};
+ CHECK(text.size()==expected.size());
+ for(size_t i=0;i<text.size();++i) {
+   CHECK(asciiReport(text[i],false,report));CHECK(report[2]==expected[i]);
+ }
+ CHECK(!formatReading(f,"\x84","U",text));
+ CHECK(!parseOutputFormat("HIDCFG=1;FIELDS=P;SEPHEX=-;END=F13;LAYOUT=US",f));
  printf("PASS: %u HID format/payload/report assertions\n",checks);
 }
 '''

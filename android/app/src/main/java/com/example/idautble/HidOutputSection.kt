@@ -1,6 +1,7 @@
 package com.example.idautble
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -12,7 +13,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 private val hidFields = mapOf("P" to "Pallet", "U" to "Location", "PU" to "Both")
-private val hidEndings = mapOf("ENTER" to "Enter", "TAB" to "Tab", "NONE" to "None")
 private val hidLayouts = mapOf("US" to "US", "ES" to "Spanish")
 
 @Composable
@@ -32,7 +32,8 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
             layout = it.layout
         }
     }
-    val draft = decodeHidSeparator(pattern, allowArrows = state.arrowSeparators)
+    val endings = hidEndingOptions(state.extendedKeys)
+    val draft = decodeHidSeparator(pattern, allowArrows = state.arrowSeparators || state.extendedKeys, extended = state.extendedKeys)
         ?.let { HidOutputConfig(fields, it, ending, layout) }
     val enabled = connected && !state.busy
     CollapsibleSettingsSection(
@@ -43,7 +44,7 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
         HidSettingRow("Separator") {
             HidPickerButton(pattern.ifEmpty { "None" }, enabled && fields == "PU") { editSeparator = true }
         }
-        HidSettingRow("Final key") { HidValueMenu(hidEndings, ending, enabled) { ending = it } }
+        HidSettingRow("Final key") { HidValueMenu(endings, ending, enabled) { ending = it } }
         HidSettingRow("Keyboard layout") { HidValueMenu(hidLayouts, layout, enabled) { layout = it } }
         Text("Preview: ${draft?.preview() ?: "Invalid separator"}", fontFamily = FontFamily.Monospace,
             fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -57,7 +58,8 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
     }
     if (editSeparator && enabled) HidSeparatorDialog(
         initial = pattern,
-        allowArrows = state.arrowSeparators,
+        allowArrows = state.arrowSeparators || state.extendedKeys,
+        extended = state.extendedKeys,
         onDismiss = { editSeparator = false },
         onApply = { pattern = it; editSeparator = false },
     )
@@ -73,7 +75,7 @@ private fun HidSettingRow(label: String, content: @Composable () -> Unit) {
 
 @Composable
 private fun HidPickerButton(label: String, enabled: Boolean, onClick: () -> Unit) {
-    OutlinedButton(onClick, Modifier.fillMaxWidth(), enabled = enabled,
+    OutlinedButton(onClick, Modifier.fillMaxWidth(), enabled = enabled, shape = RoundedCornerShape(6.dp),
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
         Text(label, Modifier.weight(1f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text("▾", fontSize = 12.sp)
@@ -84,8 +86,8 @@ private fun HidPickerButton(label: String, enabled: Boolean, onClick: () -> Unit
 private fun HidValueMenu(options: Map<String, String>, value: String, enabled: Boolean, onSelect: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
-        HidPickerButton(options.getValue(value), enabled) { open = true }
-        DropdownMenu(expanded = open && enabled, onDismissRequest = { open = false }) {
+        HidPickerButton(options[value] ?: value, enabled) { open = true }
+        DropdownMenu(expanded = open && enabled, onDismissRequest = { open = false }, modifier = Modifier.heightIn(max = 280.dp)) {
             options.forEach { (key, label) ->
                 DropdownMenuItem(text = { Text(label) }, onClick = { onSelect(key); open = false })
             }
@@ -94,12 +96,11 @@ private fun HidValueMenu(options: Map<String, String>, value: String, enabled: B
 }
 
 @Composable
-private fun HidSeparatorDialog(initial: String, allowArrows: Boolean, onDismiss: () -> Unit, onApply: (String) -> Unit) {
+private fun HidSeparatorDialog(initial: String, allowArrows: Boolean, extended: Boolean, onDismiss: () -> Unit, onApply: (String) -> Unit) {
     var draft by remember { mutableStateOf(initial) }
     var open by remember { mutableStateOf(false) }
-    val decoded = decodeHidSeparator(draft, allowArrows)
-    val keys = listOf("{TAB}", "{ENTER}", "{SPACE}") +
-        if (allowArrows) listOf("{UP}", "{DOWN}", "{LEFT}", "{RIGHT}") else emptyList()
+    val decoded = decodeHidSeparator(draft, allowArrows, extended)
+    val keys = hidSeparatorOptions(allowArrows, extended)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Separator between fields") },
@@ -117,7 +118,7 @@ private fun HidSeparatorDialog(initial: String, allowArrows: Boolean, onDismiss:
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) {
                         HidPickerButton("Add key", decoded != null && decoded.length < HID_SEPARATOR_LIMIT) { open = true }
-                        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.heightIn(max = 280.dp)) {
                             keys.forEach { key ->
                                 DropdownMenuItem(text = { Text(key) }, onClick = { draft += key; open = false })
                             }

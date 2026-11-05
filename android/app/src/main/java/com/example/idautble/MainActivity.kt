@@ -910,6 +910,7 @@ class MainActivity : ComponentActivity() {
             uiHidOutput.value = HidOutputState(
                 supported = supported,
                 arrowSeparators = "HIDARROWS=1" in text.split(';'),
+                extendedKeys = "HIDKEYS=1" in text.split(';'),
             )
             hidOutputRequest++; hidOutputExpected = null
             if (supported) requestHidOutput(null)

@@ -4,6 +4,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HidOutputConfigTest {
+    @Test fun extendedKeysCanSeparateOrTerminate() {
+        val pattern = "{ESC}{BACKSPACE}{DELETE}{INSERT}{HOME}{END}{PAGEUP}{PAGEDOWN}{F1}{F12}"
+        val separator = decodeHidSeparator(pattern)!!
+        val config = HidOutputConfig(separator = separator, ending = "PAGEDOWN")
+        assertEquals("HIDCFG=1;FIELDS=PU;SEPHEX=8485868788898A8B8C97;END=PAGEDOWN;LAYOUT=US", config.wire())
+        assertEquals(config, parseHidOutputConfig(config.wire()))
+        assertEquals("PALLET123${pattern}LOC01{PAGEDOWN}", config.preview())
+        assertNull(decodeHidSeparator(pattern, extended = false))
+        assertEquals(32, decodeHidSeparator("{BACKSPACE}".repeat(32))?.length)
+        assertNull(decodeHidSeparator("{BACKSPACE}".repeat(33)))
+        assertFalse("PAGEDOWN" in hidEndingOptions(extended = false))
+    }
+
     @Test fun arrowsRoundTripAndRequireFirmwareSupport() {
         val pattern = "{RIGHT}{LEFT}{DOWN}{UP}{TAB}"
         val separator = decodeHidSeparator(pattern)!!
@@ -37,7 +50,7 @@ class HidOutputConfigTest {
         assertEquals(HidOutputConfig(separator = ""), parseHidOutputConfig(HidOutputConfig(separator = "").wire()))
     }
     @Test fun invalidPatternsAreNotSilentlyChanged() {
-        listOf("{ESC}", "{enter}", "{", "é", "\r", "\u0000", "x".repeat(33), "{ENTER}".repeat(33)).forEach { assertNull(it, decodeHidSeparator(it)) }
+        listOf("{F13}", "{enter}", "{", "é", "\r", "\u0000", "x".repeat(33), "{ENTER}".repeat(33)).forEach { assertNull(it, decodeHidSeparator(it)) }
         assertEquals("\n".repeat(32), decodeHidSeparator("{ENTER}".repeat(32)))
     }
     @Test fun strictWireValidation() {
@@ -45,7 +58,7 @@ class HidOutputConfigTest {
         listOf(valid + ";", valid + ";END=NONE", valid.replace("SEPHEX=09", "SEPHEX=00"),
             valid.replace("SEPHEX=09", "SEPHEX=0A0"), valid.replace("SEPHEX=09", "SEPHEX=0a"),
             valid.replace("FIELDS=PU", "FIELDS=UP"), valid.replace("LAYOUT=US", "LAYOUT=UK"),
-            valid.replace("END=ENTER", "END=ESC"), valid.replace(";END=ENTER", ""),
+            valid.replace("END=ENTER", "END=F13"), valid.replace(";END=ENTER", ""),
             valid.replace("SEPHEX=09", "SEPHEX=" + "41".repeat(33))).forEach { assertNull(it, parseHidOutputConfig(it)) }
     }
     @Test fun formatRequiresMaintenanceAuthorisation() {

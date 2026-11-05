@@ -10,8 +10,8 @@ enum class TypingResult : uint8_t { None, Done, Cancelled, Failed };
 inline bool asciiReport(char c, bool capsLock, uint8_t (&report)[8], KeyLayout layout=KeyLayout::US) {
   std::memset(report, 0, sizeof(report));
   const auto byte = static_cast<unsigned char>(c);
-  if (isArrowSeparator(byte)) {
-    report[2] = 0x4f + (byte - 0x80); // Keyboard Right Arrow through Keyboard Up Arrow.
+  if (const auto *key = specialKey(byte)) {
+    report[2] = key->usage;
     return true;
   }
   if (!validOutputByte(byte)) return false;
