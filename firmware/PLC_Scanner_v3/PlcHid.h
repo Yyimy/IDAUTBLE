@@ -25,6 +25,16 @@ static probe::OutputFormat outputFormat;
 static bool receiverStorageReady, pairWindow, unbindAfterRelease;
 static uint32_t pairStarted, lastIdentityCheck;
 static probe::Token pairOwner;
+// Pairing method changes only while an explicitly authorized enrollment window
+// is open. Android shows a one-time passkey that must be entered via maintenance.
+enum class PairMethod : uint8_t { Windows, Android };
+static PairMethod pairMethod = PairMethod::Windows;
+static std::atomic<bool> androidPairingActive{false};
+static bool androidPinPending = false, androidPinNotified = false;
+static uint8_t androidPinPeer[6] = {};
+static uint32_t androidPinSinceMs = 0;
+class SecurityCallbacks;
+static SecurityCallbacks *securityCallbacks = nullptr;
 static std::atomic<bool> advertisePending{false};
 static bool ready;
 static bool testActive;
@@ -170,6 +180,14 @@ static String receiverText() {
   String text = "HIDRECEIVER=1;SAVED=" + String(savedReceiver.valid ? 1 : 0);
   text += ";READY=" + String(s.keyboardReady(s.role(probe::Role::Keyboard)) ? 1 : 0);
   text += ";WINDOW=" + String(pairWindow ? 1 : 0);
+  // Extended metadata is recognized by Android app versions supporting the
+  // dynamic Android pairing flow; Windows and legacy queries are unchanged.
+  text += ";MODE=" + String(pairWindow && pairMethod == PairMethod::Android ? "ANDROID" : "WINDOWS");
+  bool pinPending = false;
+  portENTER_CRITICAL(&peerMux);
+  pinPending = androidPinPending;
+  portEXIT_CRITICAL(&peerMux);
+  text += ";PINREQ=" + String(pinPending ? 1 : 0);
   text += ";STORE=" + String(receiverStorageReady ? "OK" : "ERROR");
   text += ";ID=";
   if (!savedReceiver.valid) text += "-";
@@ -441,7 +459,8 @@ static void begin(const String &name) {
   BLEDevice::setMTU(185);
   // Let the central initiate SMP. The core's automatic request can race Android.
   BLEDevice::setEncryptionLevel(static_cast<esp_ble_sec_act_t>(0));
-  BLEDevice::setSecurityCallbacks(new SecurityCallbacks());
+  securityCallbacks = new SecurityCallbacks();
+  BLEDevice::setSecurityCallbacks(securityCallbacks);
   BLEDevice::setCustomGapHandler(gapEvent);
   BLEDevice::setCustomGattsHandler(gattEvent);
   auto *security = new BLESecurity();
