@@ -5,7 +5,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 | Componente | Carpeta | Versión |
 |---|---|---|
 | App Android | [android/](android/) | 1.3.32-plc3, versionCode 36 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.22-rc1 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.23-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -623,3 +623,47 @@ La orden se rechaza durante OTA. El respaldo por inactividad sigue disponible.
 
 Los enlaces BLE sin rol se cierran tras 20 segundos. La ventana de asignación
 HID y la OTA suspenden este cierre mientras están activas.
+
+## Reconexión BLE HID de Windows (firmware 3.0.23-rc1)
+
+Esta versión traslada al firmware operativo el tratamiento de una autenticación
+MITM que Bluedroid puede notificar **antes** de la apertura GATT del mismo enlace.
+Una caché temporal (máximo tres segundos, dos dispositivos, una sola lectura)
+permite asociar ese resultado con la nueva sesión mediante su dirección BLE;
+una autenticación fallida elimina el resultado pendiente.
+
+Se conserva la arquitectura de **dos sesiones BLE independientes**: mantenimiento
+FFE0/FFE1 con protocolo V2 y receptor HID con permisos propios. No se cambia la
+identidad Bluetooth del PLC, no se reaprovecha la dirección especial del sketch de
+banco y no se modifica el tráfico de eventos V2, TCP ni OTA. El receptor HID solo
+recupera su papel tras confirmar su identidad y emparejamiento guardados; se
+mantiene la recuperación de suscripciones Report/Boot en NVS y las escrituras
+CCCD explícitas (incluidas las desactivaciones) tienen prioridad.
+
+### Prueba física de integración
+
+1. Compilar **toda** `firmware/PLC_Scanner_v3/` con Arduino-ESP32 3.0.7.
+   No copiar solamente el `.ino`: este firmware utiliza varios `.h`, incluido
+   el nuevo `HidEarlyAuth.h`. Usar una placa de pruebas antes de producción.
+2. Comprobar en serie que aparece `3.0.23-rc1` y verificar que la app
+   de mantenimiento conecta y permite consultar `STATUS?` y `HIDRECEIVER?`.
+3. En la app: PIN / ACCESS → HID RECEIVER → Assign receiver, si aún no hay un
+   receptor asignado. En los ajustes Bluetooth de **otro terminal**, emparejar
+   el nombre habitual del PLC, no `IS-P Keyboard Bench`. Configurar HID OUTPUT,
+   enviar Send test text y comprobar su recepción. Si ya había una asignación
+   válida, intentar primero la reconexión sin olvidarla.
+4. Apagar/encender Bluetooth en el receptor cinco veces. Debe registrarse
+   `BLE AUTH ... cached=1` seguido de `BLE LINK OPEN ... early_auth=1`
+   cuando la pila notifique la autenticación antes de CONNECT. También es válida
+   la secuencia contraria `early_auth=0` seguida de `BLE AUTH ... matched=1`.
+   Confirmar `HID RESTORED` y recepción del texto cada vez.
+5. Reiniciar físicamente el PLC y, por separado, Windows. Repetir
+   `HIDRECEIVER?` y Send test text sin volver a asignar.
+6. Generar una lectura real y verificar que se recibe una sola escritura HID,
+   la trama BLE V2 y el evento TCP, sin duplicados. Comprobar después una
+   desconexión de la app de mantenimiento, WiFi y una operación OTA de banco.
+
+**Precauciones:** la prueba de teclado aislado 0.1.2 con Windows **no valida**
+automáticamente esta compilación integrada. La asignación HID del PLC se guarda
+en `plc_hid` (distinta de la del sketch de banco). No borrar NVS ni instalar
+en carretillas en producción antes de superar las verificaciones anteriores.
