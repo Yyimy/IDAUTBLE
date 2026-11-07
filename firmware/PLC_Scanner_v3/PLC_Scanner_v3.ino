@@ -13,6 +13,8 @@
 #include <HTTPClient.h>
 #include <HardwareSerial.h>
 #include <Preferences.h>
+#include <nvs.h>
+#include <esp_err.h>
 #include <Update.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
@@ -28,6 +30,7 @@
 #include <atomic>
 
 #include "Types.h"
+#include "OutboxStorage.h"
 
 // ================= CONFIGURACION DEL PIN POR EL INSTALADOR ==================
 // Cambia este valor ANTES de compilar. Exactamente 6 cifras, entre comillas.
@@ -493,7 +496,7 @@ static void handleIdentityCommand(const String &s, uint8_t source);
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.24-rc1"
+#define FIRMWARE_VERSION "3.0.25-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static uint32_t gTxDropped = 0, gEventOverflow = 0, gScanOverflow = 0;
@@ -509,6 +512,8 @@ static bool gCutConfirmed = false;
 static uint32_t gCutRequestedMs = 0, gLastCutAttemptMs = 0;
 static char gCutReason[96] = "";
 static PersistentOutbox gOutbox = {};
+// Static storage avoids putting another 3.9 kB on the loop task stack.
+static uint8_t gOutboxEncoded[plcOutboxStorage::maxBytes] = {};
 static bool gOutboxDirty = false, gEventInFlight = false;
 static uint32_t gEventLastAttempt = 0;
 static ScanJob gScanJobs[16];
