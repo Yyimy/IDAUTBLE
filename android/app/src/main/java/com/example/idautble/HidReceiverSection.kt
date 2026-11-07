@@ -31,7 +31,7 @@ fun HidReceiverSection(state: HidReceiverState, connected: Boolean, authorised: 
         Text("The saved receiver regains its role after a secure reconnection. The receiver must connect from its own Bluetooth settings.", fontSize = 11.sp)
         if (!authorised) Text("Enter the PIN in PIN / ACCESS to make changes.", fontSize = 11.sp)
         if (info?.window == true) Text("Assignment open · connect only the intended receiver.", fontSize = 11.sp)
-        if (!saved && info?.pairMode != null && !info.window) {
+        if (!saved && state.androidPairingSupported && info?.window == false) {
             Text("New HID receiver", fontSize = 12.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = selectedPairMode == "WINDOWS", onClick = { selectedPairMode = "WINDOWS" },
@@ -66,7 +66,7 @@ fun HidReceiverSection(state: HidReceiverState, connected: Boolean, authorised: 
         if (state.message.isNotBlank()) Text(state.message, fontSize = 11.sp)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             MaintenanceActionButton("Refresh", { onAction("HIDRECEIVER?") }, MaintenanceActionTone.INFO, modifier = Modifier.weight(1f), enabled = enabled)
-            MaintenanceActionButton("Assign receiver", { onAction(if (selectedPairMode == "ANDROID" && info?.pairMode != null) "HIDPAIR=ANDROID" else "HIDPAIR=1") },
+            MaintenanceActionButton("Assign receiver", { onAction(if (selectedPairMode == "ANDROID" && state.androidPairingSupported) "HIDPAIR=ANDROID" else "HIDPAIR=1") },
                 MaintenanceActionTone.SUCCESS, modifier = Modifier.weight(1f),
                 enabled = enabled && authorised && !saved && info != null && info.storageOk && !info.window)
         }
