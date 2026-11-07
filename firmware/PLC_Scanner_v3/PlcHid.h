@@ -710,6 +710,7 @@ static bool handle(const String &text, uint8_t source) {
   }
   const bool getter = text == "HIDRECEIVER?" || text == "HIDCFG?";
   if (!getter && !text.startsWith("HIDCFG=") && text != "HIDPAIR=1" &&
+      text != "HIDPAIR=ANDROID" && !text.startsWith("HIDPIN=") &&
       text != "HIDPAIR=0" && text != "HIDFORGET=1" && text != "HIDTYPE=TEST") return false;
   if (source != 0 || (!getter && !maintenanceAuthorized())) {
     replyLine(false, "ERR=AUTH_REQUIRED");
@@ -746,15 +747,52 @@ static bool handle(const String &text, uint8_t source) {
     restoreWindowsPairing();
     replyLine(true, "HIDTEST=PAIR_CLOSED");
     replyLine(true, receiverText());
-  } else if (text == "HIDPAIR=1") {
+  } else if (text == "HIDPAIR=1" || text == "HIDPAIR=ANDROID") {
     if (savedReceiver.valid) replyLine(false, "ERR=HID_ALREADY_BOUND");
     else if (!receiverStorageReady) replyLine(false, "ERR=HID_STORAGE");
+    else if (pairWindow) replyLine(false, "ERR=HID_PAIR_ALREADY_OPEN");
+    else if (text == "HIDPAIR=ANDROID" && !configureAndroidPairing())
+      replyLine(false, "ERR=HID_SECURITY_CONFIG");
     else {
+      pairMethod = text == "HIDPAIR=ANDROID" ?
+          PairMethod::Android : PairMethod::Windows;
       pairOwner = owner;
       pairStarted = millis();
       pairWindow = true;
       replyLine(true, "HIDTEST=PAIR_WINDOW_60S");
       replyLine(true, receiverText());
+    }
+  } else if (text.startsWith("HIDPIN=")) {
+    const String pinText = text.substring(7);
+    bool syntaxOk = pinText.length() == 6;
+    for (unsigned i = 0; i < pinText.length(); ++i)
+      if (pinText[i] < '0' || pinText[i] > '9') syntaxOk = false;
+    if (!syntaxOk) {
+      replyLine(false, "ERR=HID_PIN_INVALID");
+    } else if (!pairWindow || pairMethod != PairMethod::Android ||
+               !androidPairingActive.load() || uint32_t(millis() - pairStarted) >= PAIR_WINDOW_MS) {
+      replyLine(false, "ERR=HID_PIN_NOT_REQUESTED");
+    } else {
+      uint8_t pendingAddress[6];
+      bool hasPending = false;
+      portENTER_CRITICAL(&peerMux);
+      if (androidPinPending && uint32_t(millis() - androidPinSinceMs) < 45000) {
+        memcpy(pendingAddress, androidPinPeer, sizeof(pendingAddress));
+        hasPending = true;
+        androidPinPending = false; // one response only
+      }
+      portEXIT_CRITICAL(&peerMux);
+      if (!hasPending) replyLine(false, "ERR=HID_PIN_NOT_REQUESTED");
+      else {
+        const esp_err_t rc = esp_ble_passkey_reply(pendingAddress, true, uint32_t(pinText.toInt()));
+        if (rc == ESP_OK) {
+          replyLine(true, "HIDTEST=PIN_SUBMITTED");
+          replyLine(true, receiverText());
+        } else {
+          Serial.printf("HID ANDROID PAIR: passkey reply failed: %s\n", esp_err_to_name(rc));
+          replyLine(false, "ERR=HID_PIN_REPLY_FAILED");
+        }
+      }
     }
   } else {
     std::string formatted;
@@ -874,6 +912,17 @@ static void tick() {
   } else {
     receiverTick();
     pairTick();
+    bool notifyPin = false;
+    portENTER_CRITICAL(&peerMux);
+    if (androidPinPending && !androidPinNotified && pairWindow) {
+      androidPinNotified = true;
+      notifyPin = true;
+    }
+    portEXIT_CRITICAL(&peerMux);
+    if (notifyPin) {
+      peerReply(pairOwner, true, "HIDTEST=PIN_REQUIRED");
+      peerReply(pairOwner, true, receiverText());
+    }
     unassignedLeaseTick();
     const auto state = snapshot();
     if (pendingCount && !state.keyboardReady(pending[pendingHead].receiver)) {
