@@ -3138,17 +3138,34 @@ static void runtimeLoad() {
   size_t stored = p.getBytesLength("outbox");
   bool valid = false;
   if (stored == sizeof(gOutbox)) {
-    p.getBytes("outbox", &gOutbox, sizeof(gOutbox));
-    valid = gOutbox.magic == 0x33504C43 && gOutbox.count <= OUTBOX_CAPACITY &&
-            gOutbox.nextId > 0;
-    for (unsigned i = 0; valid && i < gOutbox.count; ++i)
-      valid = gOutbox.items[i].len > 0 &&
-              gOutbox.items[i].len <= sizeof(gOutbox.items[i].frame) &&
-              gOutbox.items[i].id > 0;
+    // Load the legacy 3.9-kB structure, preserving all outstanding events.
+    valid = p.getBytes("outbox", &gOutbox, sizeof(gOutbox)) == sizeof(gOutbox) &&
+            gOutbox.magic == plcOutboxStorage::legacyMagic &&
+            gOutbox.count <= OUTBOX_CAPACITY && gOutbox.nextId > 0;
+    uint32_t previousId = 0;
+    for (unsigned i = 0; valid && i < gOutbox.count; ++i) {
+      const auto &entry = gOutbox.items[i];
+      valid = entry.len > 0 && entry.len <= sizeof(entry.frame) &&
+              entry.id > previousId && entry.id < gOutbox.nextId;
+      previousId = entry.id;
+    }
+    if (valid) {
+      gOutboxDirty = true; // Block event dispatch until migration is durable.
+      Serial.printf("OUTBOX: legacy record loaded count=%u; migration pending\n",
+                    unsigned(gOutbox.count));
+    }
+  } else if (stored >= plcOutboxStorage::headerBytes &&
+             stored <= sizeof(gOutboxEncoded)) {
+    valid = p.getBytes("outbox", gOutboxEncoded, sizeof(gOutboxEncoded)) == stored &&
+            plcOutboxStorage::decode(gOutboxEncoded, stored, gOutbox);
+    if (valid) Serial.printf("OUTBOX: compact record loaded count=%u bytes=%u\n",
+                             unsigned(gOutbox.count), unsigned(stored));
   }
   if (!valid) {
+    if (stored) Serial.printf("WARN: invalid outbox record (%u bytes); preserving no events\n",
+                               unsigned(stored));
     memset(&gOutbox, 0, sizeof(gOutbox));
-    gOutbox.magic = 0x33504C43;
+    gOutbox.magic = plcOutboxStorage::legacyMagic;
     gOutbox.nextId = 1;
   }
   p.end();
