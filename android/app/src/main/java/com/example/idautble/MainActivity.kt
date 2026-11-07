@@ -921,7 +921,9 @@ class MainActivity : ComponentActivity() {
             !Regex("HIDPIN=[0-9]{6}").matches(command)) return
         val request = ++hidReceiverRequest
         uiHidReceiver.value = uiHidReceiver.value.copy(busy = true, message = "Waiting for the PLC...")
-        sendText(command, true)
+        val wireCommand = if (command == "HIDRECEIVER?" && uiHidReceiver.value.androidPairingSupported)
+            "HIDRECEIVER2?" else command
+        sendText(wireCommand, true)
         mainHandler.postDelayed({
             if (request == hidReceiverRequest && uiHidReceiver.value.busy) {
                 uiHidReceiver.value = uiHidReceiver.value.copy(busy = false,
@@ -984,7 +986,11 @@ class MainActivity : ComponentActivity() {
         val text = message.text
         if (message.acknowledged && text.startsWith("FW=")) {
             val supported = supportsPersistentHidReceiver(text)
-            uiHidReceiver.value = HidReceiverState(supported = supported, production = "HIDRECEIVER=1" in text.split(';'))
+            uiHidReceiver.value = HidReceiverState(
+                supported = supported,
+                production = "HIDRECEIVER=1" in text.split(';'),
+                androidPairingSupported = supportsAndroidHidPairing(text),
+            )
             if (supported) requestHidReceiverAction("HIDRECEIVER?")
             return
         }
