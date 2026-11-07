@@ -1272,10 +1272,14 @@ class MainActivity : ComponentActivity() {
         activeWrite = packet
         activeReliableWrite = packet.data.size > negotiatedMtu - 3
         if (packet.tag != "MAINTPING") {
-            val secret = hasProtocolSecret(packet.data)
+            // The Android HID one-time SMP code must not leak into the
+            // maintenance traffic history (neither ASCII nor hexadecimal).
+            val hidPairCode = packet.data.size >= 7 &&
+                String(packet.data, 0, 7, Charsets.US_ASCII) == "HIDPIN="
+            val secret = hasProtocolSecret(packet.data) || hidPairCode
             logTraffic(
                 LogLevel.TX,
-                redactProtocolText(asciiPretty(packet.data)),
+                if (hidPairCode) "HIDPIN=[redacted]" else redactProtocolText(asciiPretty(packet.data)),
                 if (secret) "[sensitive content hidden]" else bytesToHex(packet.data),
                 packet.data.size,
             )
