@@ -12,6 +12,7 @@ data class HidReceiverInfo(
 data class HidReceiverState(
     val supported: Boolean = false,
     val production: Boolean = false,
+    val androidPairingSupported: Boolean = false,
     val info: HidReceiverInfo? = null,
     val busy: Boolean = false,
     val message: String = "",
@@ -25,6 +26,15 @@ fun supportsPersistentHidReceiver(text: String): Boolean {
     val major = match.groupValues[1].toIntOrNull() ?: return false
     val minor = match.groupValues[2].toIntOrNull() ?: return false
     return major > 0 || minor >= 2
+}
+
+fun supportsAndroidHidPairing(text: String): Boolean {
+    val version = text.substringAfter("FW=", "").substringBefore(";")
+    val match = Regex("^(\\d+)\\.(\\d+)\\.(\\d+)(?:-rc\\d+)?$").matchEntire(version) ?: return false
+    val major = match.groupValues[1].toIntOrNull() ?: return false
+    val minor = match.groupValues[2].toIntOrNull() ?: return false
+    val patch = match.groupValues[3].toIntOrNull() ?: return false
+    return major > 3 || (major == 3 && (minor > 0 || patch >= 26))
 }
 
 fun parseHidReceiver(text: String): HidReceiverInfo? {
