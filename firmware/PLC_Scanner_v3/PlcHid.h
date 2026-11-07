@@ -4,6 +4,7 @@
 #include <BLEHIDDevice.h>
 #include <mbedtls/aes.h>
 #include "ProbeKeyboard.h"
+#include "HidEarlyAuth.h"
 
 static void replyLine(bool ok, const String &text);
 static bool maintenanceAuthorized();
@@ -11,6 +12,7 @@ static bool maintenanceAuthorized();
 namespace plcHid {
 static constexpr uint32_t PAIR_WINDOW_MS = 60000;
 static probe::Sessions peers;
+static probe::HidEarlyAuth earlyAuth;
 static portMUX_TYPE peerMux = portMUX_INITIALIZER_UNLOCKED;
 static std::atomic<esp_gatt_if_t> gattInterface{ESP_GATT_IF_NONE};
 static BLECharacteristic *inputChar, *bootInputChar, *batteryChar;
@@ -221,16 +223,30 @@ static const char *roleName(probe::Role role) {
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *, esp_ble_gatts_cb_param_t *param) override {
     const uint32_t now = millis();
+    uint8_t earlyAddressType = 0xff;
+    bool usedEarlyAuth = false;
     portENTER_CRITICAL(&peerMux);
     const auto token = peers.connect(param->connect.conn_id, param->connect.remote_bda, now);
+    if (auto *peer = peers.find(token)) {
+      // GAP authentication can arrive just before GATT CONNECT on Windows.
+      // Accept only a fresh, matching MITM result; receiverTick still requires
+      // a matching bonded identity before assigning the keyboard role.
+      usedEarlyAuth = earlyAuth.take(param->connect.remote_bda, now, earlyAddressType);
+      if (usedEarlyAuth) {
+        peer->secure = true;
+        peer->addressType = earlyAddressType;
+        peer->identity = {};
+      }
+    }
     portEXIT_CRITICAL(&peerMux);
     isAdvertising = false;
     advertisePending = false;
     const auto *address = param->connect.remote_bda;
     const bool tracked = token.id != probe::kNoConnection;
-    Serial.printf("BLE LINK OPEN id=%u generation=%lu peer=%02X:%02X:%02X:%02X:%02X:%02X tracked=%u\n",
+    Serial.printf("BLE LINK OPEN id=%u generation=%lu peer=%02X:%02X:%02X:%02X:%02X:%02X tracked=%u early_auth=%u\n",
         param->connect.conn_id, (unsigned long)token.generation,
-        address[0], address[1], address[2], address[3], address[4], address[5], tracked);
+        address[0], address[1], address[2], address[3], address[4], address[5],
+        tracked, usedEarlyAuth);
     if (!tracked) esp_ble_gap_disconnect(param->connect.remote_bda);
   }
 
@@ -245,6 +261,9 @@ class ServerCallbacks : public BLEServerCallbacks {
       prepared.active = false;
     }
     peers.disconnect(param->disconnect.conn_id);
+    // Do not discard an unmatched early authentication here: a reconnect's
+    // GAP AUTH may precede the previous GATT CLOSE. Cache entries are one-shot
+    // and expire after three seconds.
     portEXIT_CRITICAL(&peerMux);
     isAdvertising = false;
     advertisePending = false;
@@ -276,9 +295,12 @@ class SecurityCallbacks : public BLESecurityCallbacks {
         prepared.active = false;
       }
     }
+    if (!matched && secure) earlyAuth.remember(result.bd_addr, result.addr_type, millis());
+    else if (!secure) earlyAuth.discard(result.bd_addr);
+    const bool cached = !matched && secure;
     portEXIT_CRITICAL(&peerMux);
-    Serial.printf("BLE AUTH id=%u generation=%lu matched=%u success=%u secure=%u mode=0x%02X reason=0x%02X\n",
-        token.id, (unsigned long)token.generation, matched, result.success, secure,
+    Serial.printf("BLE AUTH id=%u generation=%lu matched=%u success=%u secure=%u cached=%u mode=0x%02X reason=0x%02X\n",
+        token.id, (unsigned long)token.generation, matched, result.success, secure, cached,
         (unsigned)result.auth_mode, (unsigned)result.fail_reason);
     if (matched && !secure) esp_ble_gap_disconnect(result.bd_addr);
   }
