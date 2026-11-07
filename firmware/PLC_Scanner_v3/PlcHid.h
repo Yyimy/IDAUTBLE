@@ -176,19 +176,21 @@ static bool forgetReceiver() {
   savedReceiver = {};
   return true;
 }
-static String receiverText() {
+static String receiverText(bool extended = false) {
   auto s = snapshot();
   String text = "HIDRECEIVER=1;SAVED=" + String(savedReceiver.valid ? 1 : 0);
   text += ";READY=" + String(s.keyboardReady(s.role(probe::Role::Keyboard)) ? 1 : 0);
   text += ";WINDOW=" + String(pairWindow ? 1 : 0);
-  // Extended metadata is recognized by Android app versions supporting the
-  // dynamic Android pairing flow; Windows and legacy queries are unchanged.
-  text += ";MODE=" + String(pairWindow && pairMethod == PairMethod::Android ? "ANDROID" : "WINDOWS");
-  bool pinPending = false;
-  portENTER_CRITICAL(&peerMux);
-  pinPending = androidPinPending;
-  portEXIT_CRITICAL(&peerMux);
-  text += ";PINREQ=" + String(pinPending ? 1 : 0);
+  // Legacy HIDRECEIVER? responses must remain byte-for-byte compatible with
+  // deployed Android apps. Only the opt-in V2 query and Android flow extend it.
+  if (extended) {
+    text += ";MODE=" + String(pairWindow && pairMethod == PairMethod::Android ? "ANDROID" : "WINDOWS");
+    bool pinPending = false;
+    portENTER_CRITICAL(&peerMux);
+    pinPending = androidPinPending;
+    portEXIT_CRITICAL(&peerMux);
+    text += ";PINREQ=" + String(pinPending ? 1 : 0);
+  }
   text += ";STORE=" + String(receiverStorageReady ? "OK" : "ERROR");
   text += ";ID=";
   if (!savedReceiver.valid) text += "-";
@@ -709,7 +711,7 @@ static bool handle(const String &text, uint8_t source) {
     if (error) replyLine(false, error);
     return true;
   }
-  const bool getter = text == "HIDRECEIVER?" || text == "HIDCFG?";
+  const bool getter = text == "HIDRECEIVER?" || text == "HIDRECEIVER2?" || text == "HIDCFG?";
   if (!getter && !text.startsWith("HIDCFG=") && text != "HIDPAIR=1" &&
       text != "HIDPAIR=ANDROID" && !text.startsWith("HIDPIN=") &&
       text != "HIDPAIR=0" && text != "HIDFORGET=1" && text != "HIDTYPE=TEST") return false;
@@ -720,7 +722,8 @@ static bool handle(const String &text, uint8_t source) {
   const auto state = snapshot();
   const auto owner = state.role(probe::Role::Maintenance);
   if (!state.uartReady(owner) || owner.generation != gReplyContext.session) return true;
-  if (text == "HIDRECEIVER?") replyLine(true, receiverText());
+  if (text == "HIDRECEIVER?" || text == "HIDRECEIVER2?")
+    replyLine(true, receiverText(text == "HIDRECEIVER2?"));
   else if (text == "HIDCFG?") replyLine(true, probe::outputWire(outputFormat).c_str());
   else if (blocked()) replyLine(false, "ERR=BUSY");
   else if (text.startsWith("HIDCFG=")) {
@@ -761,7 +764,7 @@ static bool handle(const String &text, uint8_t source) {
       pairStarted = millis();
       pairWindow = true;
       replyLine(true, "HIDTEST=PAIR_WINDOW_60S");
-      replyLine(true, receiverText());
+      replyLine(true, receiverText(pairMethod == PairMethod::Android));
     }
   } else if (text.startsWith("HIDPIN=")) {
     const String pinText = text.substring(7);
@@ -788,7 +791,7 @@ static bool handle(const String &text, uint8_t source) {
         const esp_err_t rc = esp_ble_passkey_reply(pendingAddress, true, uint32_t(pinText.toInt()));
         if (rc == ESP_OK) {
           replyLine(true, "HIDTEST=PIN_SUBMITTED");
-          replyLine(true, receiverText());
+          replyLine(true, receiverText(true));
         } else {
           Serial.printf("HID ANDROID PAIR: passkey reply failed: %s\n", esp_err_to_name(rc));
           replyLine(false, "ERR=HID_PIN_REPLY_FAILED");
@@ -922,7 +925,7 @@ static void tick() {
     portEXIT_CRITICAL(&peerMux);
     if (notifyPin) {
       peerReply(pairOwner, true, "HIDTEST=PIN_REQUIRED");
-      peerReply(pairOwner, true, receiverText());
+      peerReply(pairOwner, true, receiverText(true));
     }
     unassignedLeaseTick();
     const auto state = snapshot();
