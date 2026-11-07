@@ -152,7 +152,7 @@ static void sendTest() {
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(100);
-  Serial.println("HID KEYBOARD BENCH — commands: status, test");
+  Serial.println("HID KEYBOARD BENCH 0.1.1 — commands: status, test");
   uint8_t base[6];
   if (esp_efuse_mac_get_default(base) != ESP_OK) { Serial.println("Cannot read MAC"); return; }
   base[0] = (base[0] | 0x02) & 0xfe;
@@ -174,7 +174,9 @@ void setup() {
   hid->manufacturer()->setValue("IDAUT");
   hid->pnp(0x02, 0xffff, 0x0101, 0x0101);
   hid->hidInfo(0, 0x02);
-  hid->setBatteryLevel(100);
+  // Initialize the value without notifying before the battery service starts.
+  uint8_t batteryLevel = 100;
+  hid->batteryService()->getCharacteristic(BLEUUID(uint16_t(0x2a19)))->setValue(&batteryLevel, 1);
   auto *report = hid->inputReport(1);
   auto *boot = hid->bootInput();
   auto *output = hid->outputReport(1);
