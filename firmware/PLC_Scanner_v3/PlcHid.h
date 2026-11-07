@@ -22,7 +22,8 @@ static probe::Keyboard keyboard;
 static Preferences receiverPreferences;
 static probe::ReceiverIdentity savedReceiver;
 static probe::OutputFormat outputFormat;
-static bool receiverStorageReady, pairWindow, unbindAfterRelease;
+static bool receiverStorageReady, unbindAfterRelease;
+static std::atomic<bool> pairWindow{false};
 static uint32_t pairStarted, lastIdentityCheck;
 static probe::Token pairOwner;
 // Pairing method changes only while an explicitly authorized enrollment window
