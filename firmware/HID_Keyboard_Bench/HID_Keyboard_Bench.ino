@@ -4,6 +4,7 @@
 #include <BLEHIDDevice.h>
 #include <BLE2902.h>
 #include <esp_mac.h>
+#include <Preferences.h>
 
 static constexpr char NAME[] = "IS-P Keyboard Bench";
 static constexpr uint32_t PIN = 123456;
@@ -26,6 +27,65 @@ static esp_gatt_if_t gattInterface = ESP_GATT_IF_NONE;
 static uint16_t reportHandle, bootHandle, reportCccd, bootCccd, protocolHandle;
 static bool ready;
 
+// A successful GAP authentication can precede the GATT onConnect callback.
+// Associate it with the peer address, and use it only for the immediately
+// following connection (never as a substitute for BLE link encryption).
+struct EarlySecurity {
+  bool valid = false;
+  uint8_t address[6] = {};
+  uint32_t atMs = 0;
+};
+static EarlySecurity earlySecurity;
+static constexpr uint32_t EARLY_SECURITY_MAX_AGE_MS = 3000;
+
+// A bonded HID client is allowed to retain its CCCD subscriptions.
+// Bluedroid's write callback is not repeated on every reconnect; remember
+// the last explicitly written subscriptions for this one-peer bench.
+// Store only the peer address + CCCD flags; BLE bond keys remain in the stack.
+struct CccdCache {
+  bool valid = false;
+  uint8_t address[6] = {};
+  bool reportNotify = false;
+  bool bootNotify = false;
+};
+static CccdCache cccdCache;
+static bool cccdDirty;
+static Preferences preferences;
+static bool preferencesReady;
+
+static void loadCccdCache() {
+  preferencesReady = preferences.begin("hidbench", false);
+  if (!preferencesReady) {
+    Serial.println("WARN: CCCD Preferences unavailable (RAM-only cache)");
+    return;
+  }
+  uint8_t saved[8] = {};
+  if (preferences.getBytes("cccd", saved, sizeof(saved)) != sizeof(saved) || saved[0] != 0xa1) return;
+  cccdCache.valid = true;
+  memcpy(cccdCache.address, saved + 1, sizeof(cccdCache.address));
+  cccdCache.reportNotify = (saved[7] & 0x01) != 0;
+  cccdCache.bootNotify = (saved[7] & 0x02) != 0;
+  Serial.printf("CCCD CACHE loaded report=%u boot=%u\n",
+      cccdCache.reportNotify, cccdCache.bootNotify);
+}
+
+// Flash writes are kept outside the BLE callbacks.
+static void flushCccdCache() {
+  CccdCache copy;
+  portENTER_CRITICAL(&linkMux);
+  const bool dirty = cccdDirty;
+  copy = cccdCache;
+  cccdDirty = false;
+  portEXIT_CRITICAL(&linkMux);
+  if (!dirty || !preferencesReady || !copy.valid) return;
+  uint8_t saved[8] = {0xa1, 0, 0, 0, 0, 0, 0, 0};
+  memcpy(saved + 1, copy.address, sizeof(copy.address));
+  saved[7] = (copy.reportNotify ? 0x01 : 0) | (copy.bootNotify ? 0x02 : 0);
+  if (preferences.putBytes("cccd", saved, sizeof(saved)) != sizeof(saved)) {
+    Serial.println("WARN: could not persist CCCD cache");
+  }
+}
+
 static Link snapshot() {
   portENTER_CRITICAL(&linkMux);
   const Link copy = activeLink;
@@ -43,22 +103,45 @@ class ConnectionCallbacks : public BLEServerCallbacks {
       activeLink.generation = ++nextGeneration;
       memcpy(activeLink.address, connected.remote_bda, sizeof(activeLink.address));
     }
+    bool usedEarlySecurity = false;
+    bool restoredCccd = false;
+    if (available) {
+      usedEarlySecurity = earlySecurity.valid &&
+          !memcmp(earlySecurity.address, connected.remote_bda, 6) &&
+          uint32_t(millis() - earlySecurity.atMs) <= EARLY_SECURITY_MAX_AGE_MS;
+      earlySecurity.valid = false;
+      activeLink.secure = usedEarlySecurity;
+      restoredCccd = cccdCache.valid &&
+          !memcmp(cccdCache.address, connected.remote_bda, 6);
+      if (restoredCccd) {
+        activeLink.reportNotify = cccdCache.reportNotify;
+        activeLink.bootNotify = cccdCache.bootNotify;
+      }
+    }
     const auto generation = activeLink.generation;
     portEXIT_CRITICAL(&linkMux);
     if (!available) {
       esp_ble_gap_disconnect(connected.remote_bda);
       return;
     }
-    Serial.printf("OPEN id=%u generation=%lu\n", connected.conn_id, (unsigned long)generation);
-    const auto rc = esp_ble_set_encryption(connected.remote_bda, ESP_BLE_SEC_ENCRYPT_MITM);
-    Serial.printf("SECURITY_REQUEST result=%d\n", int(rc));
+    Serial.printf("OPEN id=%u generation=%lu early_auth=%u cccd_restored=%u\n",
+        connected.conn_id, (unsigned long)generation, usedEarlySecurity, restoredCccd);
+    if (usedEarlySecurity) {
+      Serial.println("SECURITY_REQUEST skipped: link already authenticated");
+    } else {
+      const auto rc = esp_ble_set_encryption(connected.remote_bda, ESP_BLE_SEC_ENCRYPT_MITM);
+      Serial.printf("SECURITY_REQUEST result=%d\n", int(rc));
+    }
   }
 
   void onDisconnect(BLEServer *, esp_ble_gatts_cb_param_t *event) override {
     portENTER_CRITICAL(&linkMux);
     const bool matches = activeLink.id == event->disconnect.conn_id;
     const auto generation = activeLink.generation;
-    if (matches) activeLink = {};
+    if (matches) {
+      activeLink = {};
+      earlySecurity.valid = false;
+    }
     portEXIT_CRITICAL(&linkMux);
     Serial.printf("CLOSE id=%u generation=%lu reason=0x%02X\n", event->disconnect.conn_id,
         (unsigned long)(matches ? generation : 0), (unsigned)event->disconnect.reason);
@@ -75,11 +158,19 @@ class SecurityCallbacks : public BLESecurityCallbacks {
     const bool secure = result.success && (result.auth_mode & ESP_LE_AUTH_REQ_MITM);
     portENTER_CRITICAL(&linkMux);
     const bool matches = activeLink.id != NO_CONNECTION && !memcmp(activeLink.address, result.bd_addr, 6);
-    if (matches) activeLink.secure = secure;
+    if (matches) {
+      activeLink.secure = secure;
+    } else if (secure) {
+      earlySecurity.valid = true;
+      memcpy(earlySecurity.address, result.bd_addr, sizeof(earlySecurity.address));
+      earlySecurity.atMs = millis();
+    }
     const auto generation = matches ? activeLink.generation : 0;
+    const bool cached = !matches && secure;
     portEXIT_CRITICAL(&linkMux);
-    Serial.printf("AUTH generation=%lu matched=%u secure=%u reason=0x%02X\n",
-        (unsigned long)generation, matches, secure, result.success ? 0u : unsigned(result.fail_reason));
+    Serial.printf("AUTH generation=%lu matched=%u secure=%u cached=%u reason=0x%02X\n",
+        (unsigned long)generation, matches, secure, cached,
+        result.success ? 0u : unsigned(result.fail_reason));
     if (matches && !secure) esp_ble_gap_disconnect(result.bd_addr);
   }
 };
@@ -100,6 +191,13 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
   if (matches && subscription) {
     if (report) activeLink.reportNotify = enabled;
     if (boot) activeLink.bootNotify = enabled;
+    // The CCCD is writable only over an authenticated link (ENC_MITM).
+    // Preserve explicit enables AND disables for the same bonded peer.
+    cccdCache.valid = true;
+    memcpy(cccdCache.address, activeLink.address, sizeof(cccdCache.address));
+    cccdCache.reportNotify = activeLink.reportNotify;
+    cccdCache.bootNotify = activeLink.bootNotify;
+    cccdDirty = true;
   }
   if (matches && write.handle == protocolHandle && write.len == 1 && write.value[0] <= 1)
     activeLink.reportProtocol = write.value[0] == 1;
@@ -152,13 +250,14 @@ static void sendTest() {
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(100);
-  Serial.println("HID KEYBOARD BENCH 0.1.1 — commands: status, test");
+  Serial.println("HID KEYBOARD BENCH 0.1.2 — commands: status, test");
   uint8_t base[6];
   if (esp_efuse_mac_get_default(base) != ESP_OK) { Serial.println("Cannot read MAC"); return; }
   base[0] = (base[0] | 0x02) & 0xfe;
   base[5] ^= 0x40;
   if (esp_base_mac_addr_set(base) != ESP_OK) { Serial.println("Cannot set bench MAC"); return; }
 
+  loadCccdCache();
   BLEDevice::init(NAME);
   BLEDevice::setCustomGattsHandler(gattEvent);
   BLEDevice::setSecurityCallbacks(new SecurityCallbacks());
@@ -214,6 +313,7 @@ void setup() {
 }
 
 void loop() {
+  flushCccdCache();
   if (ready && Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
