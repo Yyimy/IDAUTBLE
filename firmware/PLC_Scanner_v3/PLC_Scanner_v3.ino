@@ -3335,17 +3335,42 @@ static void handleTextCommand(const BleCmd &cmd) {
 static void outboxSaveIfNeeded() {
   if (!gOutboxDirty) return;
   static uint32_t lastFailure = 0;
-  if (lastFailure && millis() - lastFailure < 1000) return;
-  Preferences p;
-  p.begin("runtime3", false);
-  bool ok = p.putBytes("outbox", &gOutbox, sizeof(gOutbox)) == sizeof(gOutbox);
-  p.end();
-  if (ok)
-    gOutboxDirty = false;
-  else {
+  if (lastFailure && uint32_t(millis() - lastFailure) < 1000) return;
+
+  const size_t bytes = plcOutboxStorage::encode(
+      gOutbox, gOutboxEncoded, sizeof(gOutboxEncoded));
+  if (!bytes) {
+    // Keep dirty so the queue cannot be sent or silently discarded.
     lastFailure = millis();
-    logLine("ERROR: no se ha podido persistir outbox; se conserva en RAM");
+    logLine("ERROR: outbox invalid; se conserva en RAM");
+    return;
   }
+
+  // Use IDF NVS directly to report the exact failing operation/error code.
+  // Updating the same key is atomic: the previous blob remains until commit.
+  nvs_handle_t handle;
+  esp_err_t err = nvs_open("runtime3", NVS_READWRITE, &handle);
+  if (err == ESP_OK) {
+    err = nvs_set_blob(handle, "outbox", gOutboxEncoded, bytes);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+  }
+  if (err == ESP_OK) {
+    gOutboxDirty = false;
+    lastFailure = 0;
+    return;
+  }
+
+  lastFailure = millis();
+  nvs_stats_t stats = {};
+  const esp_err_t statsErr = nvs_get_stats("nvs", &stats);
+  Serial.printf("ERROR: outbox NVS write failed: %s (0x%X); bytes=%u count=%u "
+                "free=%u available=%u used=%u stats=%s; se conserva en RAM\n",
+      esp_err_to_name(err), unsigned(err), unsigned(bytes), unsigned(gOutbox.count),
+      statsErr == ESP_OK ? unsigned(stats.free_entries) : 0,
+      statsErr == ESP_OK ? unsigned(stats.available_entries) : 0,
+      statsErr == ESP_OK ? unsigned(stats.used_entries) : 0,
+      esp_err_to_name(statsErr));
 }
 static void outboxPop() {
   if (!gOutbox.count) return;
