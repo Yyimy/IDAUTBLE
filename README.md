@@ -725,7 +725,8 @@ envían los eventos sin persistir.
    Arduino-ESP32 3.0.7 (el nuevo archivo `OutboxStorage.h` es obligatorio).
 2. Cargar el firmware en la placa de pruebas **sin activar Erase All Flash**.
    Comprobar `PLC Scanner 3.0.25-rc1` en serie y, si corresponde,
-   `OUTBOX: legacy record loaded ...; migration pending`.
+   `OUTBOX: legacy record loaded ...; migration pending` y después
+   `OUTBOX: compact persisted bytes=... count=...`.
 3. Con Android y Windows conectados, probar `Send test text` y una lectura
    real. Verificar la trama V2, el teclado HID y TCP si está configurado.
 4. Provocar una lectura de fotocélula que genere un evento y comprobar que
@@ -741,3 +742,9 @@ envían los eventos sin persistir.
 **Pendiente:** compilación del firmware completo y validación física.
 Las pruebas de C++ de `firmware/tests/test_outbox_storage.py` comprueban
 serialización, recuperación y corrupción, pero no simulan el driver NVS físico.
+
+**Advertencia sobre rollback:** el firmware 3.0.24 y anteriores no saben leer
+el nuevo formato compacto. Si se vuelve a una versión anterior, podría
+reiniciar el historial de IDs del outbox y no recuperar eventos pendientes.
+No realizar ese downgrade con eventos pendientes sin una estrategia de
+migración/recuperación y una copia de seguridad.
