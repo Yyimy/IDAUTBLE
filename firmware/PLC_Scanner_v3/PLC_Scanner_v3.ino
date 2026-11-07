@@ -13,6 +13,8 @@
 #include <HTTPClient.h>
 #include <HardwareSerial.h>
 #include <Preferences.h>
+#include <nvs.h>
+#include <esp_err.h>
 #include <Update.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
@@ -28,6 +30,7 @@
 #include <atomic>
 
 #include "Types.h"
+#include "OutboxStorage.h"
 
 // ================= CONFIGURACION DEL PIN POR EL INSTALADOR ==================
 // Cambia este valor ANTES de compilar. Exactamente 6 cifras, entre comillas.
@@ -493,7 +496,7 @@ static void handleIdentityCommand(const String &s, uint8_t source);
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.24-rc1"
+#define FIRMWARE_VERSION "3.0.25-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static uint32_t gTxDropped = 0, gEventOverflow = 0, gScanOverflow = 0;
@@ -509,6 +512,8 @@ static bool gCutConfirmed = false;
 static uint32_t gCutRequestedMs = 0, gLastCutAttemptMs = 0;
 static char gCutReason[96] = "";
 static PersistentOutbox gOutbox = {};
+// Static storage avoids putting another 3.9 kB on the loop task stack.
+static uint8_t gOutboxEncoded[plcOutboxStorage::maxBytes] = {};
 static bool gOutboxDirty = false, gEventInFlight = false;
 static uint32_t gEventLastAttempt = 0;
 static ScanJob gScanJobs[16];
@@ -3133,17 +3138,34 @@ static void runtimeLoad() {
   size_t stored = p.getBytesLength("outbox");
   bool valid = false;
   if (stored == sizeof(gOutbox)) {
-    p.getBytes("outbox", &gOutbox, sizeof(gOutbox));
-    valid = gOutbox.magic == 0x33504C43 && gOutbox.count <= OUTBOX_CAPACITY &&
-            gOutbox.nextId > 0;
-    for (unsigned i = 0; valid && i < gOutbox.count; ++i)
-      valid = gOutbox.items[i].len > 0 &&
-              gOutbox.items[i].len <= sizeof(gOutbox.items[i].frame) &&
-              gOutbox.items[i].id > 0;
+    // Load the legacy 3.9-kB structure, preserving all outstanding events.
+    valid = p.getBytes("outbox", &gOutbox, sizeof(gOutbox)) == sizeof(gOutbox) &&
+            gOutbox.magic == plcOutboxStorage::legacyMagic &&
+            gOutbox.count <= OUTBOX_CAPACITY && gOutbox.nextId > 0;
+    uint32_t previousId = 0;
+    for (unsigned i = 0; valid && i < gOutbox.count; ++i) {
+      const auto &entry = gOutbox.items[i];
+      valid = entry.len > 0 && entry.len <= sizeof(entry.frame) &&
+              entry.id > previousId && entry.id < gOutbox.nextId;
+      previousId = entry.id;
+    }
+    if (valid) {
+      gOutboxDirty = true; // Block event dispatch until migration is durable.
+      Serial.printf("OUTBOX: legacy record loaded count=%u; migration pending\n",
+                    unsigned(gOutbox.count));
+    }
+  } else if (stored >= plcOutboxStorage::headerBytes &&
+             stored <= sizeof(gOutboxEncoded)) {
+    valid = p.getBytes("outbox", gOutboxEncoded, sizeof(gOutboxEncoded)) == stored &&
+            plcOutboxStorage::decode(gOutboxEncoded, stored, gOutbox);
+    if (valid) Serial.printf("OUTBOX: compact record loaded count=%u bytes=%u\n",
+                             unsigned(gOutbox.count), unsigned(stored));
   }
   if (!valid) {
+    if (stored) Serial.printf("WARN: invalid outbox record (%u bytes); preserving no events\n",
+                               unsigned(stored));
     memset(&gOutbox, 0, sizeof(gOutbox));
-    gOutbox.magic = 0x33504C43;
+    gOutbox.magic = plcOutboxStorage::legacyMagic;
     gOutbox.nextId = 1;
   }
   p.end();
@@ -3313,17 +3335,48 @@ static void handleTextCommand(const BleCmd &cmd) {
 static void outboxSaveIfNeeded() {
   if (!gOutboxDirty) return;
   static uint32_t lastFailure = 0;
-  if (lastFailure && millis() - lastFailure < 1000) return;
-  Preferences p;
-  p.begin("runtime3", false);
-  bool ok = p.putBytes("outbox", &gOutbox, sizeof(gOutbox)) == sizeof(gOutbox);
-  p.end();
-  if (ok)
-    gOutboxDirty = false;
-  else {
+  if (lastFailure && uint32_t(millis() - lastFailure) < 1000) return;
+
+  const size_t bytes = plcOutboxStorage::encode(
+      gOutbox, gOutboxEncoded, sizeof(gOutboxEncoded));
+  if (!bytes) {
+    // Keep dirty so the queue cannot be sent or silently discarded.
     lastFailure = millis();
-    logLine("ERROR: no se ha podido persistir outbox; se conserva en RAM");
+    logLine("ERROR: outbox invalid; se conserva en RAM");
+    return;
   }
+
+  // Use IDF NVS directly to report the exact failing operation/error code.
+  // Updating the same key is atomic: the previous blob remains until commit.
+  nvs_handle_t handle;
+  esp_err_t err = nvs_open("runtime3", NVS_READWRITE, &handle);
+  if (err == ESP_OK) {
+    err = nvs_set_blob(handle, "outbox", gOutboxEncoded, bytes);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+  }
+  if (err == ESP_OK) {
+    gOutboxDirty = false;
+    lastFailure = 0;
+    static bool firstSuccessLogged = false;
+    if (!firstSuccessLogged) {
+      Serial.printf("OUTBOX: compact persisted bytes=%u count=%u\n",
+                    unsigned(bytes), unsigned(gOutbox.count));
+      firstSuccessLogged = true;
+    }
+    return;
+  }
+
+  lastFailure = millis();
+  nvs_stats_t stats = {};
+  const esp_err_t statsErr = nvs_get_stats("nvs", &stats);
+  Serial.printf("ERROR: outbox NVS write failed: %s (0x%X); bytes=%u count=%u "
+                "free=%u total=%u used=%u stats=%s; se conserva en RAM\n",
+      esp_err_to_name(err), unsigned(err), unsigned(bytes), unsigned(gOutbox.count),
+      statsErr == ESP_OK ? unsigned(stats.free_entries) : 0,
+      statsErr == ESP_OK ? unsigned(stats.total_entries) : 0,
+      statsErr == ESP_OK ? unsigned(stats.used_entries) : 0,
+      esp_err_to_name(statsErr));
 }
 static void outboxPop() {
   if (!gOutbox.count) return;

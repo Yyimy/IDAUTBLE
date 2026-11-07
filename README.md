@@ -5,7 +5,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 | Componente | Carpeta | Versión |
 |---|---|---|
 | App Android | [android/](android/) | 1.3.32-plc3, versionCode 36 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.24-rc1 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.25-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -696,3 +696,55 @@ habilita **Send test text**. Mantener también el diagnóstico del outbox
 Si Windows conserva una definición GATT anterior incompatible, olvidar solo
 `IS-P` en Windows y repetir el emparejamiento tras activar la ventana.
 No olvidar `IS-P Keyboard Bench`: ese es otro dispositivo de pruebas.
+
+## Persistencia compacta del outbox (firmware 3.0.25-rc1)
+
+Corrige un problema de escala del almacenamiento NVS de eventos: el firmware
+anterior escribía siempre `sizeof(PersistentOutbox)` (aprox. 3916 bytes),
+aunque no hubiera eventos. Estas actualizaciones grandes podían fallar por
+falta de entradas disponibles/fragmentación de NVS.
+
+El nuevo registro `runtime3/outbox` utiliza **el mismo nombre de clave**, con
+formato versionado y checksum FNV-1a; solo persiste los registros pendientes y
+los bytes de trama realmente utilizados. La estructura en RAM, los límites de
+ocho eventos, el contador `nextId`, y el comportamiento de ACK/outbox no cambian.
+El firmware detecta y lee el registro antiguo sin descartar sus eventos válidos;
+antes de volver a transmitirlos, intenta migrarlo atómicamente al formato nuevo.
+No borra ni reformatéa la partición NVS, los vínculos BLE, la asignación HID
+ni los ajustes de red.
+
+Los errores de escritura pasan a registrar el código de ESP-IDF
+(`ESP_ERR_NVS_NOT_ENOUGH_SPACE`, etc.) y estadísticas `free`, `total`,
+`used` de la partición. Si el guardado falla, la cola sigue en RAM y no se
+envían los eventos sin persistir.
+
+### Prueba en hardware
+
+1. Guardar cualquier registro de trazabilidad importante y mantener una copia
+   del firmware anterior. Compilar **toda** la carpeta `PLC_Scanner_v3` con
+   Arduino-ESP32 3.0.7 (el nuevo archivo `OutboxStorage.h` es obligatorio).
+2. Cargar el firmware en la placa de pruebas **sin activar Erase All Flash**.
+   Comprobar `PLC Scanner 3.0.25-rc1` en serie y, si corresponde,
+   `OUTBOX: legacy record loaded ...; migration pending` y después
+   `OUTBOX: compact persisted bytes=... count=...`.
+3. Con Android y Windows conectados, probar `Send test text` y una lectura
+   real. Verificar la trama V2, el teclado HID y TCP si está configurado.
+4. Provocar una lectura de fotocélula que genere un evento y comprobar que
+   no aparece el error de outbox. Consultar `COUNTERS?` para verificar la
+   cantidad de eventos pendientes. No borrar eventos para forzar el resultado.
+5. Reiniciar el PLC y verificar que las asignaciones HID, los contadores y
+   los eventos pendientes conservan el estado. Repetir una lectura/evento.
+6. Si vuelve a fallar, guardar **toda** la línea
+   `ERROR: outbox NVS write failed: ...` con código y estadísticas NVS.
+   No borrar NVS ni forzar un reseteo de fábrica: el fallo podría afectar a
+   otros ajustes o a eventos pendientes.
+
+**Pendiente:** compilación del firmware completo y validación física.
+Las pruebas de C++ de `firmware/tests/test_outbox_storage.py` comprueban
+serialización, recuperación y corrupción, pero no simulan el driver NVS físico.
+
+**Advertencia sobre rollback:** el firmware 3.0.24 y anteriores no saben leer
+el nuevo formato compacto. Si se vuelve a una versión anterior, podría
+reiniciar el historial de IDs del outbox y no recuperar eventos pendientes.
+No realizar ese downgrade con eventos pendientes sin una estrategia de
+migración/recuperación y una copia de seguridad.
