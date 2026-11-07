@@ -917,7 +917,8 @@ class MainActivity : ComponentActivity() {
             showIdentityAuthorizationMessage()
             return
         }
-        if (command !in setOf("HIDRECEIVER?", "HIDPAIR=1", "HIDPAIR=0", "HIDFORGET=1", "HIDTYPE=TEST")) return
+        if (command !in setOf("HIDRECEIVER?", "HIDPAIR=1", "HIDPAIR=ANDROID", "HIDPAIR=0", "HIDFORGET=1", "HIDTYPE=TEST") &&
+            !Regex("HIDPIN=[0-9]{6}").matches(command)) return
         val request = ++hidReceiverRequest
         uiHidReceiver.value = uiHidReceiver.value.copy(busy = true, message = "Waiting for the PLC...")
         sendText(command, true)
@@ -998,6 +999,8 @@ class MainActivity : ComponentActivity() {
                 text == "HIDTEST=BOUND" -> "Receiver saved and ready."
                 text == "HIDTEST=FORGOTTEN" -> "Receiver assignment forgotten."
                 text == "HIDTEST=PAIR_WINDOW_60S" -> "Assignment open for 60 seconds. Connect the intended receiver."
+                text == "HIDTEST=PIN_REQUIRED" -> "Android is requesting its pairing code. Enter the six digits shown on the new terminal."
+                text == "HIDTEST=PIN_SUBMITTED" -> "Pairing code submitted. Waiting for secure HID connection."
                 text == "HIDTEST=PAIR_CLOSED" -> "Assignment cancelled."
                 text == "HIDTEST=PAIR_TIMEOUT" -> "No bonded HID receiver found within 60 seconds."
                 text == "HIDTEST=QUEUED" -> "Sending test text..."
@@ -1020,6 +1023,11 @@ class MainActivity : ComponentActivity() {
                 "ERR=HID_ALREADY_BOUND" -> "Forget the current receiver assignment before replacing it."
                 "ERR=HID_STORAGE" -> "The PLC could not save the assignment. Refresh before retrying."
                 "ERR=HID_AMBIGUOUS" -> "More than one receiver is available. Connect only the intended receiver."
+                "ERR=HID_PIN_INVALID" -> "Enter exactly six digits from the new Android terminal."
+                "ERR=HID_PIN_NOT_REQUESTED" -> "No current Android pairing code request. Retry pairing within the 60-second window."
+                "ERR=HID_PIN_REPLY_FAILED" -> "The Bluetooth stack rejected the pairing response. Retry from the receiver."
+                "ERR=HID_SECURITY_CONFIG" -> "The PLC could not enable Android pairing mode. Windows pairing remains unchanged."
+                "ERR=HID_PAIR_ALREADY_OPEN" -> "Cancel the current assignment before opening another."
                 "ERR=HID_NOT_READY_OR_BUSY" -> "The receiver is not ready or a test is already running."
                 else -> text
             })
