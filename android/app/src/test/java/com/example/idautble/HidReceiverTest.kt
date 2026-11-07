@@ -14,6 +14,30 @@ class HidReceiverTest {
         assertTrue(info.storageOk)
     }
 
+    @Test fun parsesAndroidPairingWindowAndPasskeyRequest() {
+        val text = "HIDRECEIVER=1;SAVED=0;READY=0;WINDOW=1;MODE=ANDROID;PINREQ=1;STORE=OK;ID=-"
+        val info = requireNotNull(parseHidReceiver(text))
+        assertNull(info.identity)
+        assertEquals("ANDROID", info.pairMode)
+        assertTrue(info.pinRequired)
+        assertTrue(info.window)
+    }
+
+    @Test fun keepsLegacyWindowsReceiverRepliesCompatible() {
+        val info = requireNotNull(parseHidReceiver(saved))
+        assertNull(info.pairMode)
+        assertFalse(info.pinRequired)
+    }
+
+    @Test fun rejectsForgedOrInconsistentAndroidStatus() {
+        val base = "HIDRECEIVER=1;SAVED=0;READY=0;WINDOW=1;MODE=ANDROID;PINREQ=1;STORE=OK;ID=-"
+        assertNull(parseHidReceiver(base.replace("MODE=ANDROID", "MODE=UNKNOWN")))
+        assertNull(parseHidReceiver(base.replace("PINREQ=1", "PINREQ=2")))
+        assertNull(parseHidReceiver(base.replace("WINDOW=1", "WINDOW=0")))
+        assertNull(parseHidReceiver(base + ";PINREQ=1"))
+        assertNull(parseHidReceiver(base + ";PASSWORD=123456"))
+    }
+
     @Test fun supportsSavedReceiverWaitingForConnection() {
         assertFalse(requireNotNull(parseHidReceiver(saved.replace("READY=1", "READY=0"))).ready)
     }
