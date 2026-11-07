@@ -88,6 +88,9 @@ static uint32_t gLecturasFallidas = 0;
 #define DEBUG_FOTO 0  // 1 = trazas masivas fotocélula (si las añades)
 
 // TEST / DEBUG GENERAL
+// Diagnostic A/B: 1 advertises HID keyboard + maintenance (Windows test).
+// Set to 0 to restore the neutral legacy advertisement if needed.
+#define PLC_ADVERTISE_HID 1
 #define ENABLE_ADS_READS 1  // 0 = no leer ADS1115, 1 = leer ADS1115
 #define ENABLE_POWER_CUT \
   1  // 0 = no cortar relé en pruebas, 1 = corte real activado
@@ -490,7 +493,7 @@ static void handleIdentityCommand(const String &s, uint8_t source);
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.23-rc1"
+#define FIRMWARE_VERSION "3.0.24-rc1"
 
 static QueueHandle_t gTxQueue = nullptr;
 static uint32_t gTxDropped = 0, gEventOverflow = 0, gScanOverflow = 0;
