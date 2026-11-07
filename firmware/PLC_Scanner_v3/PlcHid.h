@@ -366,10 +366,10 @@ static void restoreWindowsPairing() {
   portEXIT_CRITICAL(&peerMux);
   if (pending) esp_ble_passkey_reply(pendingAddress, false, 0);
   // Reinstate the same static PIN + DisplayOnly settings validated by Windows.
-  const uint32_t fixedPin = uint32_t(gMaintenancePin.toInt());
+  uint32_t fixedPin = uint32_t(gMaintenancePin.toInt());
   uint8_t windowsIo = ESP_IO_CAP_OUT;
   const esp_err_t pinRc = esp_ble_gap_set_security_param(
-      ESP_BLE_SM_SET_STATIC_PASSKEY, const_cast<uint32_t *>(&fixedPin), sizeof(fixedPin));
+      ESP_BLE_SM_SET_STATIC_PASSKEY, &fixedPin, sizeof(fixedPin));
   const esp_err_t ioRc = esp_ble_gap_set_security_param(
       ESP_BLE_SM_IOCAP_MODE, &windowsIo, sizeof(windowsIo));
   BLEDevice::setSecurityCallbacks(securityCallbacks);
@@ -638,6 +638,7 @@ static void pairTick() {
   const bool pairingBlocked = blocked();
   if (elapsed >= PAIR_WINDOW_MS || !ownerAuthorized || pairingBlocked) {
     pairWindow = false;
+    restoreWindowsPairing();
     Serial.printf("HID binding window closed: elapsed_ms=%lu owner_authorized=%u blocked=%u peers=%u\n",
         (unsigned long)elapsed, ownerAuthorized, pairingBlocked, (unsigned)s.count());
     for (const auto &p : s.peers) {
@@ -662,6 +663,7 @@ static void pairTick() {
   }
   if (candidates > 1) {
     pairWindow = false;
+    restoreWindowsPairing();
     peerReply(pairOwner, false, "ERR=HID_AMBIGUOUS"); return;
   }
   if (!candidates) return; // A transient/private address alone is not a persistent identity.
@@ -672,12 +674,14 @@ static void pairTick() {
   selectedIdentity.subscriptions = (p->reportNotify ? 1 : 0) | (p->bootNotify ? 2 : 0);
   if (!saveReceiver(selectedIdentity)) {
     pairWindow = false;
+    restoreWindowsPairing();
     peerReply(pairOwner, false, "ERR=HID_STORAGE"); return;
   }
   portENTER_CRITICAL(&peerMux);
   const bool bound = peers.bindKeyboard(candidate);
   portEXIT_CRITICAL(&peerMux);
   pairWindow = false;
+  restoreWindowsPairing();
   if (bound) {
     Serial.printf("HID BOUND id=%u generation=%lu (saved receiver)\n", candidate.id, (unsigned long)candidate.generation);
     peerReply(pairOwner, true, "HIDTEST=BOUND");
@@ -727,6 +731,7 @@ static bool handle(const String &text, uint8_t source) {
     if (!forgetReceiver()) replyLine(false, "ERR=HID_STORAGE");
     else {
       pairWindow = false;
+      restoreWindowsPairing();
       keyboard.cancel();
       clearReadings();
       portENTER_CRITICAL(&peerMux);
@@ -738,6 +743,7 @@ static bool handle(const String &text, uint8_t source) {
     }
   } else if (text == "HIDPAIR=0") {
     pairWindow = false;
+    restoreWindowsPairing();
     replyLine(true, "HIDTEST=PAIR_CLOSED");
     replyLine(true, receiverText());
   } else if (text == "HIDPAIR=1") {
