@@ -431,6 +431,9 @@ static uint16_t cccdHandle(BLECharacteristic *c) {
   return d ? d->getHandle() : 0;
 }
 
+static_assert(PLC_ADVERTISE_HID == 0 || PLC_ADVERTISE_HID == 1,
+    "PLC_ADVERTISE_HID must be 0 or 1");
+
 static void begin(const String &name) {
   loadReceiver();
   BLEDevice::init(name);
@@ -488,8 +491,14 @@ static void begin(const String &name) {
   protocolHandle = hid->protocolMode()->getHandle(); controlHandle = hid->hidControl()->getHandle();
 
   auto *adv = BLEDevice::getAdvertising();
-  adv->setAppearance(0);
+  // Keep maintenance discoverability while letting Windows detect BLE HID.
+  // The HID service exists in both modes; this A/B flag changes only adverts.
+  adv->setAppearance(PLC_ADVERTISE_HID ? HID_KEYBOARD : 0);
+  if (PLC_ADVERTISE_HID) adv->addServiceUUID(BLEUUID(uint16_t(0x1812)));
   adv->addServiceUUID(BLEUUID(uint16_t(0xffe0)));
+  Serial.printf("BLE ADVERTISEMENT mode=%s; services=%s,FFE0\n",
+      PLC_ADVERTISE_HID ? "HID+MAINT" : "NEUTRAL+MAINT",
+      PLC_ADVERTISE_HID ? "1812" : "-");
   adv->setScanResponse(true);
   BLEAdvertisementData scan;
   scan.setName(name.c_str());
