@@ -4,8 +4,8 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 
 | Componente | Carpeta | Versión |
 |---|---|---|
-| App Android | [android/](android/) | 1.3.32-plc3, versionCode 36 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.25-rc1 |
+| App Android | [android/](android/) | 1.3.33-plc3, versionCode 37 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.26-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -748,3 +748,68 @@ el nuevo formato compacto. Si se vuelve a una versión anterior, podría
 reiniciar el historial de IDs del outbox y no recuperar eventos pendientes.
 No realizar ese downgrade con eventos pendientes sin una estrategia de
 migración/recuperación y una copia de seguridad.
+
+## Receptor HID Windows o Android (versión experimental 3.0.26-rc1)
+
+La app 1.3.33-plc3 añade un selector **Windows PC / Android terminal** en
+**HID RECEIVER**, visible solamente si el firmware declara versión 3.0.26 o
+posterior. Se aplica al **emparejamiento inicial**, no a la salida HID ni a
+las lecturas: una vez vinculados, ambos tipos de receptor usan el mismo perfil
+HID y las mismas comprobaciones de rol, identidad y bonding.
+
+**Windows PC** utiliza `HIDPAIR=1`, con autenticación MITM y PIN estático ya
+validada en la versión 3.0.25. No se modifica su modo predeterminado.
+
+**Android terminal** utiliza `HIDPAIR=ANDROID`: durante una ventana autorizada
+de 60 segundos, el firmware cambia temporalmente su capacidad SMP a
+`ESP_IO_CAP_IN` y deshabilita el PIN estático. Cuando el nuevo terminal
+muestra un código aleatorio de seis cifras para escribir desde el teclado
+Bluetooth, el técnico introduce ese código en la **app de mantenimiento
+existente**. La app envía `HIDPIN=NNNNNN` por la conexión BLE de mantenimiento
+ya autenticada. El ESP32 responde una sola vez a la solicitud SMP con
+`esp_ble_passkey_reply`, sin registrar ni almacenar el código. Se conservan
+`ESP_LE_AUTH_REQ_SC_MITM_BOND` y el filtro de identidad del receptor. Si
+el emparejamiento no utiliza Passkey Entry, la variante Android lo rechaza.
+
+Se restaura el emparejamiento Windows (PIN fijo y `ESP_IO_CAP_OUT`) cuando
+la vinculación termina, expira o se cancela. La configuración Android no se
+guarda en NVS; los bonos BLE y la asignación HID guardada conservan sus
+funciones actuales. La operación `Forget receiver` no elimina bonds ni
+restablece NVS.
+
+### Prueba guiada con un segundo terminal Android
+
+1. Mantener el firmware de referencia 3.0.25 disponible. Descargar **toda**
+   la carpeta `firmware/PLC_Scanner_v3` de esta rama (3.0.26) y actualizar la
+   app Android a 1.3.33-plc3 desde **la misma rama**. No fusionar en producción.
+2. Desactivar Bluetooth del receptor Windows antiguo. En la app Android de
+   mantenimiento: autorizar PIN, **Forget receiver**, **Refresh** y seleccionar
+   **Android terminal**.
+3. Pulsar **Assign receiver**. Debe aparecer
+   `HID PAIR MODE ANDROID: dynamic passkey input armed` por serie.
+4. En el **nuevo Android**, abrir Ajustes → Bluetooth → IS-P. Al mostrar un
+   código de seis cifras (p. ej. 206208), escribirlo en **Android pairing
+   code**, en la **tablet de mantenimiento**, y pulsar **Submit pairing code**
+   antes de que expire la ventana de 60 segundos.
+5. Buscar `HID ANDROID PAIR: passkey requested from maintenance app`,
+   `HIDTEST=PIN_REQUIRED`, `HIDTEST=PIN_SUBMITTED`, autenticación
+   `secure=1`, `HID CCCD enabled=1` y `HID BOUND`. Consultar
+   `HIDRECEIVER?` / `HIDRECEIVER2?` y confirmar `READY=1`.
+6. En el nuevo Android, abrir un campo de texto; ejecutar **Send test text**,
+   lectura real por fotocélula y reinicio del PLC. Comprobar que recibe los
+   códigos tras reconectar.
+7. Verificar regresión: olvidar el receptor Android desde la app, emparejar
+   después un Windows con el modo **Windows PC**, y comprobar que el PIN
+   fijo y el envío HID siguen funcionando.
+
+**Compatibilidad de protocolo:** `HIDRECEIVER?` conserva exactamente los
+cinco campos previos para aplicaciones existentes. `HIDRECEIVER2?` opta por
+los campos adicionales `MODE` y `PINREQ`. El firmware no envía el código
+SMP a la app: solo señala que está pendiente y acepta la respuesta por BLE
+autenticado.
+
+**Estado:** pendiente de compilación del sketch completo y prueba física con
+el segundo Android. Este es un cambio de seguridad del emparejamiento y
+debe mantenerse en PR de borrador hasta verificar también Windows y Android
+de mantenimiento. Si Android sigue mostrando error `0x51`, registrar toda
+la secuencia de eventos BLE; no desactivar MITM para solucionarlo.

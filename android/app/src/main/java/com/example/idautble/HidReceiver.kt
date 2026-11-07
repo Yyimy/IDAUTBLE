@@ -5,11 +5,14 @@ data class HidReceiverInfo(
     val ready: Boolean,
     val window: Boolean,
     val storageOk: Boolean,
+    val pairMode: String? = null,
+    val pinRequired: Boolean = false,
 )
 
 data class HidReceiverState(
     val supported: Boolean = false,
     val production: Boolean = false,
+    val androidPairingSupported: Boolean = false,
     val info: HidReceiverInfo? = null,
     val busy: Boolean = false,
     val message: String = "",
@@ -25,6 +28,15 @@ fun supportsPersistentHidReceiver(text: String): Boolean {
     return major > 0 || minor >= 2
 }
 
+fun supportsAndroidHidPairing(text: String): Boolean {
+    val version = text.substringAfter("FW=", "").substringBefore(";")
+    val match = Regex("^(\\d+)\\.(\\d+)\\.(\\d+)(?:-rc\\d+)?$").matchEntire(version) ?: return false
+    val major = match.groupValues[1].toIntOrNull() ?: return false
+    val minor = match.groupValues[2].toIntOrNull() ?: return false
+    val patch = match.groupValues[3].toIntOrNull() ?: return false
+    return major > 3 || (major == 3 && (minor > 0 || patch >= 26))
+}
+
 fun parseHidReceiver(text: String): HidReceiverInfo? {
     if (text.length > 200 || !text.startsWith("HIDRECEIVER=1;")) return null
     val fields = linkedMapOf<String, String>()
@@ -32,7 +44,9 @@ fun parseHidReceiver(text: String): HidReceiverInfo? {
         val parts = field.split('=', limit = 2)
         if (parts.size != 2 || fields.put(parts[0], parts[1]) != null) return null
     }
-    if (fields.keys != setOf("SAVED", "READY", "WINDOW", "STORE", "ID")) return null
+    val legacy = setOf("SAVED", "READY", "WINDOW", "STORE", "ID")
+    val extended = legacy + setOf("MODE", "PINREQ")
+    if (fields.keys != legacy && fields.keys != extended) return null
     fun flag(key: String): Boolean? = when (fields[key]) { "1" -> true; "0" -> false; else -> null }
     val saved = flag("SAVED") ?: return null
     val ready = flag("READY") ?: return null
@@ -41,5 +55,8 @@ fun parseHidReceiver(text: String): HidReceiverInfo? {
     val identity = fields["ID"] ?: return null
     if (saved && !Regex("(?:[0-9A-F]{2}:){5}[0-9A-F]{2}").matches(identity)) return null
     if (!saved && identity != "-") return null
-    return HidReceiverInfo(if (saved) identity else null, ready, window, storageOk)
+    val mode = if (fields.keys == extended) fields["MODE"]?.takeIf { it in setOf("WINDOWS", "ANDROID") } ?: return null else null
+    val pinRequired = if (fields.keys == extended) flag("PINREQ") ?: return null else false
+    if (pinRequired && (!window || mode != "ANDROID")) return null
+    return HidReceiverInfo(if (saved) identity else null, ready, window, storageOk, mode, pinRequired)
 }

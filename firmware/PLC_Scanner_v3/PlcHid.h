@@ -22,9 +22,20 @@ static probe::Keyboard keyboard;
 static Preferences receiverPreferences;
 static probe::ReceiverIdentity savedReceiver;
 static probe::OutputFormat outputFormat;
-static bool receiverStorageReady, pairWindow, unbindAfterRelease;
+static bool receiverStorageReady, unbindAfterRelease;
+static std::atomic<bool> pairWindow{false};
 static uint32_t pairStarted, lastIdentityCheck;
 static probe::Token pairOwner;
+// Pairing method changes only while an explicitly authorized enrollment window
+// is open. Android shows a one-time passkey that must be entered via maintenance.
+enum class PairMethod : uint8_t { Windows, Android };
+static PairMethod pairMethod = PairMethod::Windows;
+static std::atomic<bool> androidPairingActive{false};
+static bool androidPinPending = false, androidPinNotified = false;
+static uint8_t androidPinPeer[6] = {};
+static uint32_t androidPinSinceMs = 0;
+class SecurityCallbacks;
+static SecurityCallbacks *securityCallbacks = nullptr;
 static std::atomic<bool> advertisePending{false};
 static bool ready;
 static bool testActive;
@@ -165,11 +176,21 @@ static bool forgetReceiver() {
   savedReceiver = {};
   return true;
 }
-static String receiverText() {
+static String receiverText(bool extended = false) {
   auto s = snapshot();
   String text = "HIDRECEIVER=1;SAVED=" + String(savedReceiver.valid ? 1 : 0);
   text += ";READY=" + String(s.keyboardReady(s.role(probe::Role::Keyboard)) ? 1 : 0);
   text += ";WINDOW=" + String(pairWindow ? 1 : 0);
+  // Legacy HIDRECEIVER? responses must remain byte-for-byte compatible with
+  // deployed Android apps. Only the opt-in V2 query and Android flow extend it.
+  if (extended) {
+    text += ";MODE=" + String(pairWindow && pairMethod == PairMethod::Android ? "ANDROID" : "WINDOWS");
+    bool pinPending = false;
+    portENTER_CRITICAL(&peerMux);
+    pinPending = androidPinPending;
+    portEXIT_CRITICAL(&peerMux);
+    text += ";PINREQ=" + String(pinPending ? 1 : 0);
+  }
   text += ";STORE=" + String(receiverStorageReady ? "OK" : "ERROR");
   text += ";ID=";
   if (!savedReceiver.valid) text += "-";
@@ -306,6 +327,61 @@ class SecurityCallbacks : public BLESecurityCallbacks {
   }
 };
 
+// Arduino-ESP32 3.0.7 automatically responds to GAP PASSKEY_REQ when a
+// SecurityCallbacks object is installed. During Android enrollment we remove
+// that automatic callback temporarily; the custom GAP handler will answer the
+// one-time passkey only after an authorized maintenance command arrives.
+static bool configureAndroidPairing() {
+  const esp_err_t clearRc =
+      esp_ble_gap_set_security_param(ESP_BLE_SM_CLEAR_STATIC_PASSKEY, nullptr, 0);
+  uint8_t capability = ESP_IO_CAP_IN; // KeyboardOnly (PIN entry via maintenance)
+  const esp_err_t ioRc = clearRc == ESP_OK ?
+      esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE,
+                                     &capability, sizeof(capability)) : clearRc;
+  if (ioRc != ESP_OK) {
+    Serial.printf("HID ANDROID PAIR setup failed: %s\n", esp_err_to_name(ioRc));
+    // Fail closed, and restore the validated Windows PIN pairing behavior.
+    uint32_t fixedPin = uint32_t(gMaintenancePin.toInt());
+    uint8_t windowsIo = ESP_IO_CAP_OUT;
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY, &fixedPin, sizeof(fixedPin));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &windowsIo, sizeof(windowsIo));
+    return false;
+  }
+  portENTER_CRITICAL(&peerMux);
+  androidPinPending = false;
+  androidPinNotified = false;
+  portEXIT_CRITICAL(&peerMux);
+  androidPairingActive = true;
+  BLEDevice::setSecurityCallbacks(nullptr);
+  Serial.println("HID PAIR MODE ANDROID: dynamic passkey input armed");
+  return true;
+}
+
+static void restoreWindowsPairing() {
+  if (!androidPairingActive.exchange(false)) return;
+  uint8_t pendingAddress[6];
+  bool pending = false;
+  portENTER_CRITICAL(&peerMux);
+  pending = androidPinPending;
+  if (pending) memcpy(pendingAddress, androidPinPeer, sizeof(pendingAddress));
+  androidPinPending = false;
+  androidPinNotified = false;
+  portEXIT_CRITICAL(&peerMux);
+  if (pending) esp_ble_passkey_reply(pendingAddress, false, 0);
+  // Reinstate the same static PIN + DisplayOnly settings validated by Windows.
+  uint32_t fixedPin = uint32_t(gMaintenancePin.toInt());
+  uint8_t windowsIo = ESP_IO_CAP_OUT;
+  const esp_err_t pinRc = esp_ble_gap_set_security_param(
+      ESP_BLE_SM_SET_STATIC_PASSKEY, &fixedPin, sizeof(fixedPin));
+  const esp_err_t ioRc = esp_ble_gap_set_security_param(
+      ESP_BLE_SM_IOCAP_MODE, &windowsIo, sizeof(windowsIo));
+  BLEDevice::setSecurityCallbacks(securityCallbacks);
+  if (pinRc != ESP_OK || ioRc != ESP_OK)
+    Serial.printf("HID WINDOWS PAIR restore failed pin=%s io=%s\n",
+                  esp_err_to_name(pinRc), esp_err_to_name(ioRc));
+  else Serial.println("HID PAIR MODE WINDOWS: static passkey restored");
+}
+
 static void gapEvent(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
   if (event == ESP_GAP_BLE_ADV_START_COMPLETE_EVT) {
     isAdvertising = param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS;
@@ -313,6 +389,45 @@ static void gapEvent(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param
   } else if (event == ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT) {
     isAdvertising = false;
     advertisePending = false;
+  }
+  if (!androidPairingActive.load()) return;
+  if (event == ESP_GAP_BLE_PASSKEY_REQ_EVT) {
+    // Never request a code from the management tablet itself, and allow only
+    // one Android candidate at a time in the authorized 60-second window.
+    const auto *address = param->ble_security.ble_req.bd_addr;
+    bool permitted = false;
+    portENTER_CRITICAL(&peerMux);
+    const auto owner = peers.role(probe::Role::Maintenance);
+    const auto *maintenance = peers.find(owner);
+    const bool isMaintenance = maintenance &&
+        memcmp(maintenance->address, address, 6) == 0;
+    if (pairWindow && !isMaintenance &&
+        (!androidPinPending || memcmp(androidPinPeer, address, 6) == 0)) {
+      memcpy(androidPinPeer, address, sizeof(androidPinPeer));
+      androidPinPending = true;
+      androidPinNotified = false;
+      androidPinSinceMs = millis();
+      permitted = true;
+    }
+    portEXIT_CRITICAL(&peerMux);
+    if (!permitted) {
+      esp_ble_passkey_reply(param->ble_security.ble_req.bd_addr, false, 0);
+      Serial.println("HID ANDROID PAIR: unauthorized/ambiguous passkey request denied");
+    } else Serial.println("HID ANDROID PAIR: passkey requested from maintenance app");
+  } else if (event == ESP_GAP_BLE_NC_REQ_EVT) {
+    // Android enrollment requires passkey entry, not uncontrolled confirmation.
+    esp_ble_confirm_reply(param->ble_security.ble_req.bd_addr, false);
+    Serial.println("HID ANDROID PAIR: unexpected numeric comparison rejected");
+  } else if (event == ESP_GAP_BLE_AUTH_CMPL_EVT) {
+    if (securityCallbacks)
+      securityCallbacks->onAuthenticationComplete(param->ble_security.auth_cmpl);
+    portENTER_CRITICAL(&peerMux);
+    if (androidPinPending &&
+        memcmp(androidPinPeer, param->ble_security.auth_cmpl.bd_addr, 6) == 0) {
+      androidPinPending = false;
+      androidPinNotified = false;
+    }
+    portEXIT_CRITICAL(&peerMux);
   }
 }
 
@@ -441,7 +556,8 @@ static void begin(const String &name) {
   BLEDevice::setMTU(185);
   // Let the central initiate SMP. The core's automatic request can race Android.
   BLEDevice::setEncryptionLevel(static_cast<esp_ble_sec_act_t>(0));
-  BLEDevice::setSecurityCallbacks(new SecurityCallbacks());
+  securityCallbacks = new SecurityCallbacks();
+  BLEDevice::setSecurityCallbacks(securityCallbacks);
   BLEDevice::setCustomGapHandler(gapEvent);
   BLEDevice::setCustomGattsHandler(gattEvent);
   auto *security = new BLESecurity();
@@ -525,6 +641,7 @@ static void pairTick() {
   const bool pairingBlocked = blocked();
   if (elapsed >= PAIR_WINDOW_MS || !ownerAuthorized || pairingBlocked) {
     pairWindow = false;
+    restoreWindowsPairing();
     Serial.printf("HID binding window closed: elapsed_ms=%lu owner_authorized=%u blocked=%u peers=%u\n",
         (unsigned long)elapsed, ownerAuthorized, pairingBlocked, (unsigned)s.count());
     for (const auto &p : s.peers) {
@@ -549,6 +666,7 @@ static void pairTick() {
   }
   if (candidates > 1) {
     pairWindow = false;
+    restoreWindowsPairing();
     peerReply(pairOwner, false, "ERR=HID_AMBIGUOUS"); return;
   }
   if (!candidates) return; // A transient/private address alone is not a persistent identity.
@@ -559,12 +677,14 @@ static void pairTick() {
   selectedIdentity.subscriptions = (p->reportNotify ? 1 : 0) | (p->bootNotify ? 2 : 0);
   if (!saveReceiver(selectedIdentity)) {
     pairWindow = false;
+    restoreWindowsPairing();
     peerReply(pairOwner, false, "ERR=HID_STORAGE"); return;
   }
   portENTER_CRITICAL(&peerMux);
   const bool bound = peers.bindKeyboard(candidate);
   portEXIT_CRITICAL(&peerMux);
   pairWindow = false;
+  restoreWindowsPairing();
   if (bound) {
     Serial.printf("HID BOUND id=%u generation=%lu (saved receiver)\n", candidate.id, (unsigned long)candidate.generation);
     peerReply(pairOwner, true, "HIDTEST=BOUND");
@@ -591,8 +711,9 @@ static bool handle(const String &text, uint8_t source) {
     if (error) replyLine(false, error);
     return true;
   }
-  const bool getter = text == "HIDRECEIVER?" || text == "HIDCFG?";
+  const bool getter = text == "HIDRECEIVER?" || text == "HIDRECEIVER2?" || text == "HIDCFG?";
   if (!getter && !text.startsWith("HIDCFG=") && text != "HIDPAIR=1" &&
+      text != "HIDPAIR=ANDROID" && !text.startsWith("HIDPIN=") &&
       text != "HIDPAIR=0" && text != "HIDFORGET=1" && text != "HIDTYPE=TEST") return false;
   if (source != 0 || (!getter && !maintenanceAuthorized())) {
     replyLine(false, "ERR=AUTH_REQUIRED");
@@ -601,7 +722,8 @@ static bool handle(const String &text, uint8_t source) {
   const auto state = snapshot();
   const auto owner = state.role(probe::Role::Maintenance);
   if (!state.uartReady(owner) || owner.generation != gReplyContext.session) return true;
-  if (text == "HIDRECEIVER?") replyLine(true, receiverText());
+  if (text == "HIDRECEIVER?" || text == "HIDRECEIVER2?")
+    replyLine(true, receiverText(text == "HIDRECEIVER2?"));
   else if (text == "HIDCFG?") replyLine(true, probe::outputWire(outputFormat).c_str());
   else if (blocked()) replyLine(false, "ERR=BUSY");
   else if (text.startsWith("HIDCFG=")) {
@@ -614,6 +736,7 @@ static bool handle(const String &text, uint8_t source) {
     if (!forgetReceiver()) replyLine(false, "ERR=HID_STORAGE");
     else {
       pairWindow = false;
+      restoreWindowsPairing();
       keyboard.cancel();
       clearReadings();
       portENTER_CRITICAL(&peerMux);
@@ -625,17 +748,55 @@ static bool handle(const String &text, uint8_t source) {
     }
   } else if (text == "HIDPAIR=0") {
     pairWindow = false;
+    restoreWindowsPairing();
     replyLine(true, "HIDTEST=PAIR_CLOSED");
     replyLine(true, receiverText());
-  } else if (text == "HIDPAIR=1") {
+  } else if (text == "HIDPAIR=1" || text == "HIDPAIR=ANDROID") {
     if (savedReceiver.valid) replyLine(false, "ERR=HID_ALREADY_BOUND");
     else if (!receiverStorageReady) replyLine(false, "ERR=HID_STORAGE");
+    else if (pairWindow) replyLine(false, "ERR=HID_PAIR_ALREADY_OPEN");
+    else if (text == "HIDPAIR=ANDROID" && !configureAndroidPairing())
+      replyLine(false, "ERR=HID_SECURITY_CONFIG");
     else {
+      pairMethod = text == "HIDPAIR=ANDROID" ?
+          PairMethod::Android : PairMethod::Windows;
       pairOwner = owner;
       pairStarted = millis();
       pairWindow = true;
       replyLine(true, "HIDTEST=PAIR_WINDOW_60S");
-      replyLine(true, receiverText());
+      replyLine(true, receiverText(pairMethod == PairMethod::Android));
+    }
+  } else if (text.startsWith("HIDPIN=")) {
+    const String pinText = text.substring(7);
+    bool syntaxOk = pinText.length() == 6;
+    for (unsigned i = 0; i < pinText.length(); ++i)
+      if (pinText[i] < '0' || pinText[i] > '9') syntaxOk = false;
+    if (!syntaxOk) {
+      replyLine(false, "ERR=HID_PIN_INVALID");
+    } else if (!pairWindow || pairMethod != PairMethod::Android ||
+               !androidPairingActive.load() || uint32_t(millis() - pairStarted) >= PAIR_WINDOW_MS) {
+      replyLine(false, "ERR=HID_PIN_NOT_REQUESTED");
+    } else {
+      uint8_t pendingAddress[6];
+      bool hasPending = false;
+      portENTER_CRITICAL(&peerMux);
+      if (androidPinPending && uint32_t(millis() - androidPinSinceMs) < 45000) {
+        memcpy(pendingAddress, androidPinPeer, sizeof(pendingAddress));
+        hasPending = true;
+        androidPinPending = false; // one response only
+      }
+      portEXIT_CRITICAL(&peerMux);
+      if (!hasPending) replyLine(false, "ERR=HID_PIN_NOT_REQUESTED");
+      else {
+        const esp_err_t rc = esp_ble_passkey_reply(pendingAddress, true, uint32_t(pinText.toInt()));
+        if (rc == ESP_OK) {
+          replyLine(true, "HIDTEST=PIN_SUBMITTED");
+          replyLine(true, receiverText(true));
+        } else {
+          Serial.printf("HID ANDROID PAIR: passkey reply failed: %s\n", esp_err_to_name(rc));
+          replyLine(false, "ERR=HID_PIN_REPLY_FAILED");
+        }
+      }
     }
   } else {
     std::string formatted;
@@ -755,6 +916,17 @@ static void tick() {
   } else {
     receiverTick();
     pairTick();
+    bool notifyPin = false;
+    portENTER_CRITICAL(&peerMux);
+    if (androidPinPending && !androidPinNotified && pairWindow) {
+      androidPinNotified = true;
+      notifyPin = true;
+    }
+    portEXIT_CRITICAL(&peerMux);
+    if (notifyPin) {
+      peerReply(pairOwner, true, "HIDTEST=PIN_REQUIRED");
+      peerReply(pairOwner, true, receiverText(true));
+    }
     unassignedLeaseTick();
     const auto state = snapshot();
     if (pendingCount && !state.keyboardReady(pending[pendingHead].receiver)) {
