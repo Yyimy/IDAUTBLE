@@ -63,6 +63,14 @@ class HidReceiverTest {
         )) assertNull(text, parseHidReceiver(text))
     }
 
+    @Test fun androidEnrollmentRequiresNewFirmware() {
+        assertFalse(supportsAndroidHidPairing("FW=3.0.25-rc1;PROTO=V2;HIDRECEIVER=1"))
+        assertTrue(supportsAndroidHidPairing("FW=3.0.26-rc1;PROTO=V2;HIDRECEIVER=1"))
+        assertTrue(supportsAndroidHidPairing("FW=3.1.0-rc1;PROTO=V2"))
+        assertFalse(supportsAndroidHidPairing("FW=HID-PROBE-0.3.2;PROTO=V2"))
+        assertFalse(supportsAndroidHidPairing("FW=3.0.26-rcX;PROTO=V2"))
+    }
+
     @Test fun capabilityRequiresCompatibleProbeVersion() {
         assertTrue(supportsPersistentHidReceiver("FW=HID-PROBE-0.2.0;PROTO=V2;ACKMODE=0"))
         assertTrue(supportsPersistentHidReceiver("FW=HID-PROBE-1.0.0;PROTO=V2"))
