@@ -324,6 +324,61 @@ class SecurityCallbacks : public BLESecurityCallbacks {
   }
 };
 
+// Arduino-ESP32 3.0.7 automatically responds to GAP PASSKEY_REQ when a
+// SecurityCallbacks object is installed. During Android enrollment we remove
+// that automatic callback temporarily; the custom GAP handler will answer the
+// one-time passkey only after an authorized maintenance command arrives.
+static bool configureAndroidPairing() {
+  const esp_err_t clearRc =
+      esp_ble_gap_set_security_param(ESP_BLE_SM_CLEAR_STATIC_PASSKEY, nullptr, 0);
+  uint8_t capability = ESP_IO_CAP_IN; // KeyboardOnly (PIN entry via maintenance)
+  const esp_err_t ioRc = clearRc == ESP_OK ?
+      esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE,
+                                     &capability, sizeof(capability)) : clearRc;
+  if (ioRc != ESP_OK) {
+    Serial.printf("HID ANDROID PAIR setup failed: %s\n", esp_err_to_name(ioRc));
+    // Fail closed, and restore the validated Windows PIN pairing behavior.
+    uint32_t fixedPin = uint32_t(gMaintenancePin.toInt());
+    uint8_t windowsIo = ESP_IO_CAP_OUT;
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY, &fixedPin, sizeof(fixedPin));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &windowsIo, sizeof(windowsIo));
+    return false;
+  }
+  portENTER_CRITICAL(&peerMux);
+  androidPinPending = false;
+  androidPinNotified = false;
+  portEXIT_CRITICAL(&peerMux);
+  androidPairingActive = true;
+  BLEDevice::setSecurityCallbacks(nullptr);
+  Serial.println("HID PAIR MODE ANDROID: dynamic passkey input armed");
+  return true;
+}
+
+static void restoreWindowsPairing() {
+  if (!androidPairingActive.exchange(false)) return;
+  uint8_t pendingAddress[6];
+  bool pending = false;
+  portENTER_CRITICAL(&peerMux);
+  pending = androidPinPending;
+  if (pending) memcpy(pendingAddress, androidPinPeer, sizeof(pendingAddress));
+  androidPinPending = false;
+  androidPinNotified = false;
+  portEXIT_CRITICAL(&peerMux);
+  if (pending) esp_ble_passkey_reply(pendingAddress, false, 0);
+  // Reinstate the same static PIN + DisplayOnly settings validated by Windows.
+  const uint32_t fixedPin = uint32_t(gMaintenancePin.toInt());
+  uint8_t windowsIo = ESP_IO_CAP_OUT;
+  const esp_err_t pinRc = esp_ble_gap_set_security_param(
+      ESP_BLE_SM_SET_STATIC_PASSKEY, const_cast<uint32_t *>(&fixedPin), sizeof(fixedPin));
+  const esp_err_t ioRc = esp_ble_gap_set_security_param(
+      ESP_BLE_SM_IOCAP_MODE, &windowsIo, sizeof(windowsIo));
+  BLEDevice::setSecurityCallbacks(securityCallbacks);
+  if (pinRc != ESP_OK || ioRc != ESP_OK)
+    Serial.printf("HID WINDOWS PAIR restore failed pin=%s io=%s\n",
+                  esp_err_to_name(pinRc), esp_err_to_name(ioRc));
+  else Serial.println("HID PAIR MODE WINDOWS: static passkey restored");
+}
+
 static void gapEvent(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
   if (event == ESP_GAP_BLE_ADV_START_COMPLETE_EVT) {
     isAdvertising = param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS;
@@ -331,6 +386,45 @@ static void gapEvent(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param
   } else if (event == ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT) {
     isAdvertising = false;
     advertisePending = false;
+  }
+  if (!androidPairingActive.load()) return;
+  if (event == ESP_GAP_BLE_PASSKEY_REQ_EVT) {
+    // Never request a code from the management tablet itself, and allow only
+    // one Android candidate at a time in the authorized 60-second window.
+    const auto *address = param->ble_security.ble_req.bd_addr;
+    bool permitted = false;
+    portENTER_CRITICAL(&peerMux);
+    const auto owner = peers.role(probe::Role::Maintenance);
+    const auto *maintenance = peers.find(owner);
+    const bool isMaintenance = maintenance &&
+        memcmp(maintenance->address, address, 6) == 0;
+    if (pairWindow && !isMaintenance &&
+        (!androidPinPending || memcmp(androidPinPeer, address, 6) == 0)) {
+      memcpy(androidPinPeer, address, sizeof(androidPinPeer));
+      androidPinPending = true;
+      androidPinNotified = false;
+      androidPinSinceMs = millis();
+      permitted = true;
+    }
+    portEXIT_CRITICAL(&peerMux);
+    if (!permitted) {
+      esp_ble_passkey_reply(param->ble_security.ble_req.bd_addr, false, 0);
+      Serial.println("HID ANDROID PAIR: unauthorized/ambiguous passkey request denied");
+    } else Serial.println("HID ANDROID PAIR: passkey requested from maintenance app");
+  } else if (event == ESP_GAP_BLE_NC_REQ_EVT) {
+    // Android enrollment requires passkey entry, not uncontrolled confirmation.
+    esp_ble_confirm_reply(param->ble_security.ble_req.bd_addr, false);
+    Serial.println("HID ANDROID PAIR: unexpected numeric comparison rejected");
+  } else if (event == ESP_GAP_BLE_AUTH_CMPL_EVT) {
+    if (securityCallbacks)
+      securityCallbacks->onAuthenticationComplete(param->ble_security.auth_cmpl);
+    portENTER_CRITICAL(&peerMux);
+    if (androidPinPending &&
+        memcmp(androidPinPeer, param->ble_security.auth_cmpl.bd_addr, 6) == 0) {
+      androidPinPending = false;
+      androidPinNotified = false;
+    }
+    portEXIT_CRITICAL(&peerMux);
   }
 }
 
