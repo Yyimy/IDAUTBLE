@@ -3365,10 +3365,10 @@ static void outboxSaveIfNeeded() {
   nvs_stats_t stats = {};
   const esp_err_t statsErr = nvs_get_stats("nvs", &stats);
   Serial.printf("ERROR: outbox NVS write failed: %s (0x%X); bytes=%u count=%u "
-                "free=%u available=%u used=%u stats=%s; se conserva en RAM\n",
+                "free=%u total=%u used=%u stats=%s; se conserva en RAM\n",
       esp_err_to_name(err), unsigned(err), unsigned(bytes), unsigned(gOutbox.count),
       statsErr == ESP_OK ? unsigned(stats.free_entries) : 0,
-      statsErr == ESP_OK ? unsigned(stats.available_entries) : 0,
+      statsErr == ESP_OK ? unsigned(stats.total_entries) : 0,
       statsErr == ESP_OK ? unsigned(stats.used_entries) : 0,
       esp_err_to_name(statsErr));
 }
