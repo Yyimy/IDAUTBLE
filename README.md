@@ -5,7 +5,7 @@ Código coordinado de la app de mantenimiento y del PLC ESP32-S3.
 | Componente | Carpeta | Versión |
 |---|---|---|
 | App Android | [android/](android/) | 1.3.32-plc3, versionCode 36 |
-| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.23-rc1 |
+| Firmware PLC Scanner | [firmware/](firmware/) | 3.0.24-rc1 |
 
 ## Trabajar sin ZIP
 
@@ -667,3 +667,32 @@ CCCD explícitas (incluidas las desactivaciones) tienen prioridad.
 automáticamente esta compilación integrada. La asignación HID del PLC se guarda
 en `plc_hid` (distinta de la del sketch de banco). No borrar NVS ni instalar
 en carretillas en producción antes de superar las verificaciones anteriores.
+
+### Anuncio HID para receptores Windows (3.0.24-rc1, A/B)
+
+El firmware 3.0.23-rc1 anunciaba solo el servicio de mantenimiento `0xFFE0`
+y apariencia BLE neutra. Windows podía mostrar el vínculo como conectado sin
+suscribirse a los informes HID, dejando `HIDRECEIVER ... READY=0` y el
+botón **Send test text** desactivado. Este cambio anuncia **ambos servicios**
+(`0x1812` para HID y `0xFFE0` para mantenimiento), con apariencia de teclado
+BLE, sin alterar los servicios GATT ni las autorizaciones.
+
+Para esta prueba, `PLC_ADVERTISE_HID` vale `1` en `PLC_Scanner_v3.ino`.
+El valor `0` recupera el anuncio neutro anterior sin cambiar los servicios.
+Ambas variantes necesitan comprobación física con Windows y Android: el modo
+HID no está todavía declarado validado en el firmware principal.
+
+Después de cargar en placa de pruebas, comprobar el log
+`BLE ADVERTISEMENT mode=HID+MAINT; services=1812,FFE0`.
+Con la app Android conectada, autorizar, consultar `HIDRECEIVER?` y, si hay
+una vinculación antigua, usar **Forget receiver** exclusivamente en la sección
+HID (no borrar toda la NVS). Pulsar **Assign receiver** *antes* de vincular
+Windows; confirmar `HIDTEST=PAIR_WINDOW_60S`, conectar desde Windows durante
+esa ventana, comprobar el log `HID CCCD ... enabled=1` y
+`HID BOUND`. Finalmente, consultar `HIDRECEIVER?`: `SAVED=1;READY=1`
+habilita **Send test text**. Mantener también el diagnóstico del outbox
+(`runtime3`) separado de los cambios de emparejamiento.
+
+Si Windows conserva una definición GATT anterior incompatible, olvidar solo
+`IS-P` en Windows y repetir el emparejamiento tras activar la ventana.
+No olvidar `IS-P Keyboard Bench`: ese es otro dispositivo de pruebas.
