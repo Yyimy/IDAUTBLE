@@ -3358,6 +3358,12 @@ static void outboxSaveIfNeeded() {
   if (err == ESP_OK) {
     gOutboxDirty = false;
     lastFailure = 0;
+    static bool firstSuccessLogged = false;
+    if (!firstSuccessLogged) {
+      Serial.printf("OUTBOX: compact persisted bytes=%u count=%u\n",
+                    unsigned(bytes), unsigned(gOutbox.count));
+      firstSuccessLogged = true;
+    }
     return;
   }
 
