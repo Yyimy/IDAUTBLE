@@ -48,7 +48,7 @@ static void replyLine(bool,const String&);
 void sendDeviceStatus(){replyLine(true,"STATUS=1;FW=TEST;ID=TRUCK-1");}
 void handleIdentityCommand(const String&,uint8_t){replyLine(true,"ID=TRUCK-1;HWID=AABBCCDDEEFF;NAME=TRUCK-1");}
 '''
-names = ['sendCounters','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','tcpTextCommandType','cfgSendOk','cfgSendErr','cfgSendCurrent','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','eventTick']
+names = ['sendCounters','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','tcpTextCommandType','cfgSendOk','cfgSendErr','cfgSendCurrent','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','eventTick']
 body += extra+'\n'+'\n'.join(base['function'](n).split('{',1)[0]+';' for n in names)+'\n'
 body += '\n'.join(base['function'](n) for n in names)
 body += r'''
@@ -67,7 +67,7 @@ void fresh(){drain();commands.clear();txQueue.clear();characteristic.notificatio
  gWifiEnabled=gWifiConnected=true;gAckMode=false;gHeartbeatEnabled=false;gOutbox={};gOutbox.nextId=1;gOutboxDirty=false;gEventInFlight=false;gEventLastAttempt=0;
  resetScanner();gFotoLista=true;PaletCargado=false;gRtcIso="2026-11-03T10:43:38";gId="TRUCK-1";gNivelBat4="4647";nowMs+=1000;
 }
-BleCmd cmd(BleCmdType type,uint8_t origin,const char*text=""){BleCmd c={};c.type=type;c.source=origin;c.session=origin?gTcpSession.load():gBleSession.load();c.receivedMs=nowMs;strlcpy(c.payload,text,sizeof(c.payload));return c;}
+BleCmd cmd(BleCmdType type,uint8_t origin,const char*text=""){BleCmd c={};c.type=type;c.source=origin;c.session=origin==CMD_SOURCE_CLIENT?plcHid::clientSession():origin?gTcpSession.load():gBleSession.load();c.receivedMs=nowMs;strlcpy(c.payload,text,sizeof(c.payload));return c;}
 void run(BleCmd c){commands.push_back(c);bleProcessPendingOnce();}
 int main(){
  // Both links are live: queries, handshakes and configuration ACKs stay with their requester.
@@ -113,12 +113,18 @@ int main(){
  CHECK(gTcpClient.sent.empty());CHECK(bleBytes().find("OTA=PCT=50")!=std::string::npos);CHECK(bleBytes().find("BUSY")!=std::string::npos);
  fresh();otaSendErr("TEST");++gBleSession;drain();CHECK(bleBytes().empty()&&gTcpClient.sent.empty());
  // Every V2 read, whichever channel requested it, still reaches both live links byte for byte.
- for(uint8_t origin:{0,1})for(BleCmdType t:{BLECMD_L,BLECMD_B,BLECMD_A,BLECMD_P,BLECMD_D,BLECMD_I}){
-  fresh();run(cmd(t,origin));
+ for(uint8_t origin:{0u,1u,unsigned(CMD_SOURCE_CLIENT)})for(BleCmdType t:{BLECMD_L,BLECMD_B,BLECMD_A,BLECMD_P,BLECMD_D,BLECMD_I}){
+  fresh();plcHid::clientGeneration=30;run(cmd(t,origin));
   if(t==BLECMD_L||t==BLECMD_D||t==BLECMD_I){scanTick();PLCSerial.rx="]d1PAL;]Q1LOC\n";nowMs+=10;scanTick();}
   if(t==BLECMD_A)scanTick();
-  drain();CHECK(!gTcpClient.sent.empty());CHECK(bleBytes()==gTcpClient.sent);CHECK(gTcpClient.sent.front()==char(6));CHECK(gTcpClient.sent.back()==char(3));
+  drain();CHECK(!gTcpClient.sent.empty());CHECK(bleBytes()==gTcpClient.sent);CHECK(clientBytes()==bleBytes());CHECK(gTcpClient.sent.front()==char(6));CHECK(gTcpClient.sent.back()==char(3));
  }
+ fresh();plcHid::clientGeneration=30;run(cmd(BLECMD_TEXT,CMD_SOURCE_CLIENT,"STATUS?"));
+ auto stale=cmd(BLECMD_L,CMD_SOURCE_CLIENT);++plcHid::clientGeneration;run(stale);drain();
+ CHECK(bleBytes().empty() && clientBytes().empty() && gTcpClient.sent.empty() && gScanCount==0);
+ fresh();plcHid::clientGeneration=30;gOtaState=OTA_WAIT_PARAMS;
+ run(cmd(BLECMD_L,CMD_SOURCE_CLIENT));drain();
+ CHECK(clientBytes().find("ERR=MAINTENANCE_MODE")!=std::string::npos && bleBytes().empty() && gTcpClient.sent.empty());
  // The CLIENT receives the complete reading, while STATUS stays private to maintenance.
  fresh();plcHid::clientGeneration=30;gTcpConnected=gTcpClient.up=false;
  run(cmd(BLECMD_L,0));scanTick();

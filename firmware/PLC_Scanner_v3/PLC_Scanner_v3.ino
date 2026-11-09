@@ -198,6 +198,11 @@ static inline BleCmdType cmdFromBinary4(const uint8_t rx[4]) {
   return BLECMD_NONE;
 }
 
+static bool isClientReading(BleCmdType type) {
+  return type == BLECMD_L || type == BLECMD_B || type == BLECMD_A ||
+         type == BLECMD_P || type == BLECMD_D || type == BLECMD_I;
+}
+
 // ============================================================================
 // VARIABLES DE DATOS
 // ============================================================================
@@ -1482,7 +1487,7 @@ static void logHeightTiming(const HeightTiming &timing, const char *txResult,
   logf("HEIGHT A | request_ms=%lu | source=%s | result=%s | "
        "queue_ms=%lu | sensor_ms=%lu | tx_queue_ms=%lu | tx_ms=%lu | "
        "total_ms=%lu | tx=%s\n",
-       (unsigned long)timing.receivedMs, timing.source ? "TCP" : "BLE", result,
+       (unsigned long)timing.receivedMs, timing.source == 1 ? "TCP" : "BLE", result,
        (unsigned long)(timing.sensorStartedMs - timing.receivedMs),
        (unsigned long)(timing.sensorFinishedMs - timing.sensorStartedMs),
        (unsigned long)(txStartedMs - timing.queuedMs),
@@ -1494,7 +1499,7 @@ static void logHeightRejected(const BleCmd &cmd, const char *reason) {
   if (cmd.type != BLECMD_A) return;
   logf("HEIGHT A | request_ms=%lu | source=%s | result=%s | "
        "total_ms=%lu | tx=NOT_SENT\n",
-       (unsigned long)cmd.receivedMs, cmd.source ? "TCP" : "BLE", reason,
+       (unsigned long)cmd.receivedMs, cmd.source == 1 ? "TCP" : "BLE", reason,
        (unsigned long)(millis() - cmd.receivedMs));
 }
 
@@ -1512,7 +1517,7 @@ static bool queueTargetFrame(const uint8_t *data, size_t len,
     p.heightTiming = *heightTiming;
     p.heightTiming.queuedMs = millis();
     if (!heightTiming->source) p.session = heightTiming->session;
-    else p.tcpSession = heightTiming->session;
+    else if (heightTiming->source == 1) p.tcpSession = heightTiming->session;
   }
   if (xQueueSend(gTxQueue, &p, 0) != pdTRUE) {
     ++gTxDropped;
@@ -2050,6 +2055,14 @@ void sendResponse_I() {
 // BLE CALLBACKS
 // ============================================================================
 
+static void queueBleCommand(const BleCmd &cmd) {
+  if (!gCommandQueue || xQueueSend(gCommandQueue, &cmd, 0) != pdTRUE) {
+    logHeightRejected(cmd, "COMMAND_QUEUE_FULL");
+    const uint8_t busy[] = {0x15, 'B', 'U', 'S', 'Y', 13, 10};
+    queueTargetFrame(busy, sizeof(busy), nullptr, TX_BLE_ONLY, cmd.session);
+  }
+}
+
 static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t session) {
   const uint32_t receivedMs = millis();
   String rxString(reinterpret_cast<const char *>(data), length);
@@ -2148,11 +2161,7 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
 
   cmd.source = 0;
   cmd.session = session;
-  if (!gCommandQueue || xQueueSend(gCommandQueue, &cmd, 0) != pdTRUE) {
-    logHeightRejected(cmd, "COMMAND_QUEUE_FULL");
-    const uint8_t busy[] = {0x15, 'B', 'U', 'S', 'Y', 13, 10};
-    queueTargetFrame(busy, sizeof(busy), nullptr, TX_BLE_ONLY, session);
-  }
+  queueBleCommand(cmd);
 }
 
 static void applyConfiguredPin();
@@ -2166,6 +2175,11 @@ void ensureAdvertising() { plcHid::advertise(); }
 static void bleProcessPendingOnce() {
   BleCmd cmd = {};
   if (xQueueReceive(gCommandQueue, &cmd, 0) != pdTRUE) return;
+  if (cmd.source == CMD_SOURCE_CLIENT &&
+      (!isClientReading(cmd.type) || !cmd.session || cmd.session != plcHid::clientSession())) {
+    logHeightRejected(cmd, "SESSION_EXPIRED");
+    return;
+  }
   if (cmd.source == 0 && !plcHid::canNotify(cmd.session)) {
     logHeightRejected(cmd, "SESSION_EXPIRED");
     return;
@@ -2176,7 +2190,7 @@ static void bleProcessPendingOnce() {
     return;
   }
   CommandReplyScope replies(gReplyContext,
-      cmd.source == 0 ? TX_BLE_ONLY : TX_TCP_ONLY, cmd.session);
+      cmd.source == 1 ? TX_TCP_ONLY : TX_BLE_ONLY, cmd.session);
   if (cmd.type == BLECMD_TEXT) {
     handleTextCommand(cmd);
     return;
@@ -3463,6 +3477,8 @@ static void txTick() {
     bleDone = p.target == TX_TCP_ONLY;
     // Mirror business frames only; maintenance replies stay private.
     clientSession = p.target == TX_BOTH ? plcHid::clientSession() : 0;
+    if (p.heightTiming.active && p.heightTiming.source == CMD_SOURCE_CLIENT &&
+        clientSession != p.heightTiming.session) clientSession = 0;
     clientDone = clientSession == 0;
     accepted = false;
     offset = 0;
@@ -3536,6 +3552,12 @@ static void txTick() {
       !heightTimingReported) {
     logHeightTiming(p.heightTiming,
                     offset == p.len ? "BLE_SUBMITTED" : "BLE_NOT_SENT", started);
+    heightTimingReported = true;
+  }
+  if (p.heightTiming.active && p.heightTiming.source == CMD_SOURCE_CLIENT && clientDone &&
+      !heightTimingReported) {
+    logHeightTiming(p.heightTiming,
+                    clientOffset == p.len ? "BLE_SUBMITTED" : "BLE_NOT_SENT", started);
     heightTimingReported = true;
   }
   if (tcpDone && bleDone && clientDone) {

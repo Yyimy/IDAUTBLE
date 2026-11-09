@@ -502,15 +502,17 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
     if (handle == controlHandle && data[0] <= 1) p->suspended = data[0] == 0;
     if (handle == outputHandle || handle == bootOutputHandle) p->capsLock = data[0] & 0x02;
   }
-  // The CLIENT handshake is read-only and cannot claim maintenance privileges.
+  // Registered CLIENT writes are limited to the binary reading commands.
   constexpr char clientHello[] = "CLIENT\r\n";
-  const bool isClientHello = pCharacteristic && handle == pCharacteristic->getHandle() &&
+  const bool uartWrite = pCharacteristic && handle == pCharacteristic->getHandle();
+  const bool isClientHello = uartWrite &&
       !write.is_prep && !write.offset && length == sizeof(clientHello) - 1 &&
       memcmp(data, clientHello, sizeof(clientHello) - 1) == 0;
   const bool clientClaimed = isClientHello && peers.claimClient(p->token);
-  const bool claimed = !isClientHello && pCharacteristic &&
-      handle == pCharacteristic->getHandle() && peers.claimMaintenance(p->token);
+  const bool claimed = !isClientHello && uartWrite && peers.claimMaintenance(p->token);
   const auto token = p->token;
+  const bool clientRead = uartWrite && !write.is_prep && !write.offset &&
+      length == 4 && peers.clientReady(token);
   if (claimed) {
     p->maintenanceActivityMs = millis();
     gBleSession = token.generation;
@@ -537,6 +539,17 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
       const uint8_t ok[] = {0x06, 'C','L','I','E','N','T','=','R','E','A','D','Y',13,10};
       queueTargetFrame(ok, sizeof(ok), nullptr, TX_BLE_ONLY, token.generation);
       Serial.printf("BLE CLIENT READY id=%u generation=%lu\n", token.id, (unsigned long)token.generation);
+    }
+    return;
+  }
+  if (clientRead) {
+    BleCmd cmd = {};
+    cmd.type = cmdFromBinary4(data);
+    if (isClientReading(cmd.type)) {
+      cmd.source = CMD_SOURCE_CLIENT;
+      cmd.session = token.generation;
+      cmd.receivedMs = millis();
+      queueBleCommand(cmd);
     }
     return;
   }

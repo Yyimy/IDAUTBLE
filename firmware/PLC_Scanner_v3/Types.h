@@ -41,9 +41,11 @@ enum BleCmdType : uint8_t {
 
 };
 
+constexpr uint8_t CMD_SOURCE_CLIENT = 2;
+
 struct BleCmd {
   BleCmdType type;
-  uint8_t source;  // 0=BLE, 1=TCP
+  uint8_t source;  // 0=BLE maintenance, 1=TCP, 2=BLE client
   uint32_t session;  // Generation of the originating BLE or TCP connection.
   uint32_t receivedMs;  // Complete command received by the PLC, before queueing.
   char payload[384];  // para RTC=... o CFG=...
@@ -88,7 +90,7 @@ enum HeightReadResult : uint8_t {
 // Diagnostic metadata only; never serialized into V2 or persistent event records.
 struct HeightTiming {
   bool active;
-  uint8_t source;  // 0=BLE, 1=TCP
+  uint8_t source;  // Same values as BleCmd::source.
   uint32_t session;
   uint32_t receivedMs;
   uint32_t sensorStartedMs;

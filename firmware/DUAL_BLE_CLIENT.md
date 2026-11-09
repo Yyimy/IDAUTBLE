@@ -6,9 +6,9 @@
 
 1. Subscribe to NOTIFY on service `0000FFE0-0000-1000-8000-00805F9B34FB`, characteristic `0000FFE1-0000-1000-8000-00805F9B34FB` (encrypted, authenticated BLE pairing is required).
 2. Write ASCII `CLIENT\r\n` to FFE1, NOT the maintenance command `ESC C CR LF`.
-3. Expect `ACK CLIENT=READY CR LF`; only then is the peer recognized as a read-only customer client.
+3. Expect `ACK CLIENT=READY CR LF`; only then is the peer recognized as a customer client.
 4. The client receives business TX_BOTH frames (including scanner readings). Maintenance status/configuration replies remain private to Android.
-5. Test with `ACKMODE=0`; this read-only client cannot acknowledge outbox events or request scan commands.
+5. The client can request readings with `ESC CMD CR LF` (`L` full, `B` battery, `A` height, `P` photoelectric sensor, `D` scan pallet, `I` scan location). Successful readings use the same V2 business route. Maintenance commands and outbox acknowledgements are reserved for their existing callers. Test with `ACKMODE=0`.
 
 ## Arduino IDE
 
