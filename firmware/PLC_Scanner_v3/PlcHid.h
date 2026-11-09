@@ -42,6 +42,7 @@ static uint32_t androidPinSinceMs = 0;
 class SecurityCallbacks;
 static SecurityCallbacks *securityCallbacks = nullptr;
 static std::atomic<bool> advertisePending{false};
+static bool maintenanceAdvertisement, advertisedHid;
 static bool ready;
 static bool testActive;
 struct PendingReading {
@@ -469,7 +470,7 @@ static void gapEvent(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param
     isAdvertising = param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS;
     advertisePending = false;
   } else if (event == ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT) {
-    isAdvertising = false;
+    if (param->adv_stop_cmpl.status == ESP_BT_STATUS_SUCCESS) isAdvertising = false;
     advertisePending = false;
   } else if (event == ESP_GAP_BLE_REMOVE_BOND_DEV_COMPLETE_EVT) {
     const auto &removal = param->remove_bond_dev_cmpl;
@@ -671,6 +672,30 @@ static uint16_t cccdHandle(BLECharacteristic *c) {
 static_assert(PLC_ADVERTISE_HID == 0 || PLC_ADVERTISE_HID == 1,
     "PLC_ADVERTISE_HID must be 0 or 1");
 
+static void configureHidAdvertisement(bool enabled) {
+  auto *adv = BLEDevice::getAdvertising();
+  const BLEUUID hidUuid(uint16_t(0x1812));
+  if (enabled != advertisedHid) {
+    if (enabled) adv->addServiceUUID(hidUuid);
+    else adv->removeServiceUUID(hidUuid);
+  }
+  adv->setAppearance(enabled ? HID_KEYBOARD : 0);
+  advertisedHid = enabled;
+  Serial.printf("BLE ADVERTISEMENT mode=%s; services=%s,FFE0\n",
+      enabled ? "HID+MAINT" : "NEUTRAL+MAINT", enabled ? "1812" : "-");
+}
+
+static void setMaintenanceAdvertisement(bool enabled) {
+  if (!ready || blocked() || pairWindow) {
+    Serial.println("BLE ADVERTISEMENT ERROR: unavailable during HID enrollment or OTA");
+    return;
+  }
+  maintenanceAdvertisement = enabled;
+  if (advertisedHid == (PLC_ADVERTISE_HID && !enabled)) {
+    Serial.printf("BLE ADVERTISEMENT mode=%s already active\n", advertisedHid ? "HID+MAINT" : "NEUTRAL+MAINT");
+  }
+}
+
 static void begin(const String &name) {
   loadReceiver();
   BLEDevice::init(name);
@@ -731,12 +756,8 @@ static void begin(const String &name) {
   auto *adv = BLEDevice::getAdvertising();
   // Keep maintenance discoverability while letting Windows detect BLE HID.
   // The HID service exists in both modes; this A/B flag changes only adverts.
-  adv->setAppearance(PLC_ADVERTISE_HID ? HID_KEYBOARD : 0);
-  if (PLC_ADVERTISE_HID) adv->addServiceUUID(BLEUUID(uint16_t(0x1812)));
+  configureHidAdvertisement(PLC_ADVERTISE_HID);
   adv->addServiceUUID(BLEUUID(uint16_t(0xffe0)));
-  Serial.printf("BLE ADVERTISEMENT mode=%s; services=%s,FFE0\n",
-      PLC_ADVERTISE_HID ? "HID+MAINT" : "NEUTRAL+MAINT",
-      PLC_ADVERTISE_HID ? "1812" : "-");
   adv->setScanResponse(true);
   BLEAdvertisementData scan;
   scan.setName(name.c_str());
@@ -747,12 +768,23 @@ static void begin(const String &name) {
 }
 
 static void advertise() {
-  if (!ready || isAdvertising || snapshot().count() >= probe::Sessions::capacity) return;
+  if (!ready) return;
   const uint32_t now = millis();
   if (uint32_t(now - lastAdvertiseCheck) < (advertisePending ? 5000u : 1500u)) return;
+  const bool wantHid = PLC_ADVERTISE_HID && !maintenanceAdvertisement;
+  auto *adv = BLEDevice::getAdvertising();
+  if (advertisedHid != wantHid) {
+    if (isAdvertising) {
+      lastAdvertiseCheck = now;
+      adv->stop();
+      return;
+    }
+    configureHidAdvertisement(wantHid);
+  }
+  if (isAdvertising || snapshot().count() >= probe::Sessions::capacity) return;
   lastAdvertiseCheck = now;
   advertisePending = true;
-  BLEDevice::getAdvertising()->start();
+  adv->start();
 }
 
 static void pairTick() {

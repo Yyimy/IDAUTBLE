@@ -488,7 +488,10 @@ static void rtcUpdateCacheIfNeeded();
 
 static inline void serialConsolePoll();
 static void bleProcessPendingOnce();
-namespace plcHid { static void forgetBondFromUsb(const char *text); }
+namespace plcHid {
+static void forgetBondFromUsb(const char *text);
+static void setMaintenanceAdvertisement(bool enabled);
+}
 
 static void identityLoad();
 static void handleIdentityCommand(const String &s, uint8_t source);
@@ -1373,6 +1376,8 @@ static inline void serialConsolePoll() {
         i2cRecoverBus();
       else if (cmd.startsWith("ble forget "))
         plcHid::forgetBondFromUsb(cmd.c_str() + sizeof("ble forget ") - 1);
+      else if (cmd == "ble maintenance" || cmd == "ble normal")
+        plcHid::setMaintenanceAdvertisement(cmd == "ble maintenance");
       else if (cmd == "counters help") {
         logLine("Comandos:");
         logLine("  counters");
@@ -1382,6 +1387,8 @@ static inline void serialConsolePoll() {
         logLine("  i2c");
         logLine("  i2c recover");
         logLine("  ble forget AA:BB:CC:DD:EE:FF");
+        logLine("  ble maintenance");
+        logLine("  ble normal");
       } else if (cmd == "rtc") {
         logf("RTC actual: %s\n", gRtcIso.c_str());
       }
