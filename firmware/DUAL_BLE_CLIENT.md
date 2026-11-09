@@ -21,7 +21,8 @@ Use **all** files from `firmware/PLC_Scanner_v3` on this branch, including every
 - Check identical complete business scan frames at both receivers; no Android-only replies on PC.
 - Check disconnect and reconnect for each receiver.
 - Check long fragmented frames, secure pair rejection and idle/advertising behavior.
-- Disconnect an existing HID receiver before client test. When changing from CLIENT to HID on the same PC, close or disconnect the simulator before pairing in Windows. An authorized Assign receiver releases any remaining CLIENT link and reserves the second slot for HID enrollment. The Android maintenance link remains active.
+- To alternate on the same Windows PC, enroll it as a HID receiver once and keep that assignment and Windows bond. The simulator can register CLIENT on that HID session after the current text finishes. Disconnecting from the simulator disables FFE1 notifications and lets the PLC restore the saved HID session. If the physical link closes, normal HID reconnection restores it.
+- Use Forget receiver and Assign receiver when changing the assigned HID device. An authorized Assign receiver releases any remaining CLIENT link and reserves the slot for HID enrollment.
 - Validate with hardware and compiler before release.
 
 **No claims of validated radio behavior or production readiness until bench testing succeeds.**
