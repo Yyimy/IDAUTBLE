@@ -26,6 +26,7 @@ static bool receiverStorageReady, unbindAfterRelease;
 static std::atomic<bool> pairWindow{false};
 static uint32_t pairStarted, lastIdentityCheck;
 static probe::Token pairOwner;
+static probe::Token pendingClientSwitch;
 // Pairing method changes only while an explicitly authorized enrollment window
 // is open. Android shows a one-time passkey that must be entered via maintenance.
 enum class PairMethod : uint8_t { Windows, Android };
@@ -220,7 +221,7 @@ static void receiverTick() {
   if (!savedReceiver.valid || pairWindow || unbindAfterRelease) return;
   s = snapshot();
   for (const auto &p : s.peers) {
-    if (!p.used || !p.secure || p.role == probe::Role::Maintenance || p.role == probe::Role::Client || !probe::sameIdentity(savedReceiver, p.identity)) continue;
+    if (!p.used || !p.secure || p.role == probe::Role::Maintenance || !probe::sameIdentity(savedReceiver, p.identity)) continue;
     auto updated = savedReceiver;
     if (p.reportSeen) { updated.subscriptionsKnown = true; updated.subscriptions = (updated.subscriptions & ~1u) | (p.reportNotify ? 1 : 0); }
     if (p.bootSeen) { updated.subscriptionsKnown = true; updated.subscriptions = (updated.subscriptions & ~2u) | (p.bootNotify ? 2 : 0); }
@@ -230,8 +231,12 @@ static void receiverTick() {
     portENTER_CRITICAL(&peerMux);
     peers.restoreSubscriptions(p.token, savedReceiver);
     const bool restored = p.role == probe::Role::Unassigned && peers.bindKeyboard(p.token);
+    const bool resumed = peers.resumeSavedKeyboard(p.token, savedReceiver);
     portEXIT_CRITICAL(&peerMux);
     if (restored) Serial.printf("HID RESTORED id=%u generation=%lu\n", p.token.id, (unsigned long)p.token.generation);
+    if (resumed) Serial.printf("HID RESUMED from CLIENT id=%u generation=%lu\n", p.token.id, (unsigned long)p.token.generation);
+    const auto owner = s.role(probe::Role::Maintenance);
+    if ((restored || resumed) && s.uartReady(owner)) peerReply(owner, true, receiverText());
   }
 }
 
@@ -433,6 +438,12 @@ static void gapEvent(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param
   }
 }
 
+static void sendClientReady(probe::Token token) {
+  const uint8_t ok[] = {0x06, 'C','L','I','E','N','T','=','R','E','A','D','Y',13,10};
+  queueTargetFrame(ok, sizeof(ok), nullptr, TX_BLE_ONLY, token.generation);
+  Serial.printf("BLE CLIENT READY id=%u generation=%lu\n", token.id, (unsigned long)token.generation);
+}
+
 static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_gatts_cb_param_t *param) {
   if (event == ESP_GATTS_REG_EVT && param->reg.status == ESP_GATT_OK) {
     gattInterface = iface;
@@ -511,6 +522,8 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
   const bool clientClaimed = isClientHello && !pairWindow && peers.claimClient(p->token);
   const bool claimed = !isClientHello && uartWrite && peers.claimMaintenance(p->token);
   const auto token = p->token;
+  if (isClientHello && !pairWindow && p->role == probe::Role::Keyboard && p->uartNotify)
+    pendingClientSwitch = token;
   const bool clientRead = uartWrite && !write.is_prep && !write.offset &&
       length == 4 && peers.clientReady(token);
   if (claimed) {
@@ -535,11 +548,7 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
   }
   portEXIT_CRITICAL(&peerMux);
   if (isClientHello) {
-    if (clientClaimed) {
-      const uint8_t ok[] = {0x06, 'C','L','I','E','N','T','=','R','E','A','D','Y',13,10};
-      queueTargetFrame(ok, sizeof(ok), nullptr, TX_BLE_ONLY, token.generation);
-      Serial.printf("BLE CLIENT READY id=%u generation=%lu\n", token.id, (unsigned long)token.generation);
-    }
+    if (clientClaimed) sendClientReady(token);
     return;
   }
   if (clientRead) {
@@ -963,6 +972,23 @@ static void tick() {
     keyboard.cancel();
     clearReadings();
   } else {
+    // Finish the current HID text and release its keys before changing roles.
+    if (!keyboard.busy()) {
+      portENTER_CRITICAL(&peerMux);
+      const auto target = pendingClientSwitch;
+      pendingClientSwitch = {};
+      const auto *peer = peers.find(target);
+      const bool switched = !pairWindow && peer && probe::sameIdentity(savedReceiver, peer->identity) &&
+          peers.claimClient(target, true);
+      portEXIT_CRITICAL(&peerMux);
+      if (switched) {
+        clearReadings();
+        sendClientReady(target);
+        const auto state = snapshot();
+        const auto owner = state.role(probe::Role::Maintenance);
+        if (state.uartReady(owner)) peerReply(owner, true, receiverText());
+      }
+    }
     receiverTick();
     pairTick();
     bool notifyPin = false;

@@ -106,9 +106,10 @@ class Sessions {
     return true;
   }
   // Clients must opt in explicitly. A CCCD subscription grants no role.
-  bool claimClient(Token token) {
+  bool claimClient(Token token, bool fromKeyboard = false) {
     auto *p = find(token);
-    if (!p || p->expiring || !p->secure || !p->uartNotify || p->role != Role::Unassigned) return false;
+    const auto origin = fromKeyboard ? Role::Keyboard : Role::Unassigned;
+    if (!p || p->expiring || !p->secure || !p->uartNotify || p->role != origin) return false;
     if (role(Role::Client).id != kNoConnection) return false;
     p->role = Role::Client;
     return true;
@@ -135,6 +136,15 @@ class Sessions {
     if (!p->reportSeen) p->reportNotify = (saved.subscriptions & 1) != 0;
     if (!p->bootSeen) p->bootNotify = (saved.subscriptions & 2) != 0;
     return true;
+  }
+  bool resumeSavedKeyboard(Token token, const ReceiverIdentity &saved) {
+    auto *p = find(token);
+    if (!p || p->role != Role::Client || p->uartNotify || !p->secure ||
+        !sameIdentity(p->identity, saved)) return false;
+    p->role = Role::Unassigned;
+    if (restoreSubscriptions(token, saved) && bindKeyboard(token)) return true;
+    p->role = Role::Client;
+    return false;
   }
   void unbindKeyboard() {
     for (auto &p : peers) if (p.role == Role::Keyboard) p.role = Role::Unassigned;

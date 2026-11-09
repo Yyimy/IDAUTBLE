@@ -12,7 +12,7 @@ commands = '\n'.join(re.findall(r'^const uint8_t CMD_[LBAPDICO]\[4\] = \{[^\n]+?
 for name in ('matchCommand', 'cmdFromBinary4', 'isClientReading'):
     commands += '\n' + re.search(r'^(?:static inline |static )?\w+ ' + name + r'\([^\n]*\) \{\n.*?^\}', ino, re.M | re.S).group()
 staging = source[source.index('struct PreparedWrite {'):source.index('static probe::Sessions snapshot()')]
-dispatcher = source[source.index('static void gattEvent('):source.index('static uint8_t reportMap[]')]
+dispatcher = source[source.index('static void sendClientReady('):source.index('static uint8_t reportMap[]')]
 lease = source[source.index('static void maintenanceLeaseTick()'):source.index('static void tick()')]
 release = source[source.index('static const char *releaseMaintenanceLink('):source.index('static bool handle(')]
 shim = r'''
@@ -39,6 +39,7 @@ std::atomic<esp_gatt_if_t> gattInterface{0};
 uint16_t uartCccd=21,inputCccd=31,bootCccd=32,outputHandle=33,bootOutputHandle=34,protocolHandle=35,controlHandle=36;
 probe::Sessions peers;
 probe::ReceiverIdentity savedReceiver;
+probe::Token pendingClientSwitch;
 uint32_t gBleSession=0;
 uint32_t nowMs=0;
 bool connectDuringSnapshot=false;
@@ -266,6 +267,30 @@ int main() {
   write(1,31,enabled);
   assert(peers.bindKeyboard(keyboard) && peers.keyboardReady(keyboard));
   assert(peers.uartReady(peers.role(probe::Role::Maintenance)) && gBleSession==owner);
+
+  // An existing HID receiver requests CLIENT on the same secure connection.
+  pairWindow=false;
+  savedReceiver.valid=true;
+  std::memcpy(savedReceiver.address,hidAddress,6);
+  savedReceiver.subscriptionsKnown=true;
+  savedReceiver.subscriptions=1;
+  peers.find(keyboard)->identity=savedReceiver;
+  write(1,20,"CLIENT\r\n");
+  assert(pendingClientSwitch==keyboard && peers.keyboardReady(keyboard));
+  assert(replies.size()==1); // Main loop waits for the last HID key release.
+  assert(peers.claimClient(pendingClientSwitch,true));
+  assert(peers.clientReady(keyboard) && !peers.keyboardReady(keyboard));
+  assert(!peers.resumeSavedKeyboard(keyboard,savedReceiver));
+  write(1,21,disabled);
+  assert(peers.resumeSavedKeyboard(keyboard,savedReceiver));
+  assert(peers.keyboardReady(keyboard) && peers.uartReady(maintenance));
+  assert(peers.claimClient(keyboard)==false);
+  write(1,21,enabled);
+  assert(peers.claimClient(keyboard,true));
+  write(1,31,disabled);
+  write(1,21,disabled);
+  assert(!peers.resumeSavedKeyboard(keyboard,savedReceiver)); // Explicit disable wins.
+  assert(peers.role(probe::Role::Client)==keyboard);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
