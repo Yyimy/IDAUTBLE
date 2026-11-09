@@ -21,7 +21,7 @@ Use **all** files from `firmware/PLC_Scanner_v3` on this branch, including every
 - Check identical complete business scan frames at both receivers; no Android-only replies on PC.
 - Check disconnect and reconnect for each receiver.
 - Check long fragmented frames, secure pair rejection and idle/advertising behavior.
-- Disconnect an existing HID receiver before client test.
+- Disconnect an existing HID receiver before client test. When changing from CLIENT to HID on the same PC, close or disconnect the simulator before pairing in Windows. An authorized Assign receiver releases any remaining CLIENT link and reserves the second slot for HID enrollment. The Android maintenance link remains active.
 - Validate with hardware and compiler before release.
 
 **No claims of validated radio behavior or production readiness until bench testing succeeds.**

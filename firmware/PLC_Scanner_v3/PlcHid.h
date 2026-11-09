@@ -508,7 +508,7 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
   const bool isClientHello = uartWrite &&
       !write.is_prep && !write.offset && length == sizeof(clientHello) - 1 &&
       memcmp(data, clientHello, sizeof(clientHello) - 1) == 0;
-  const bool clientClaimed = isClientHello && peers.claimClient(p->token);
+  const bool clientClaimed = isClientHello && !pairWindow && peers.claimClient(p->token);
   const bool claimed = !isClientHello && uartWrite && peers.claimMaintenance(p->token);
   const auto token = p->token;
   const bool clientRead = uartWrite && !write.is_prep && !write.offset &&
@@ -734,6 +734,20 @@ static const char *releaseMaintenanceLink(uint32_t session) {
   return esp_ble_gap_disconnect(address) == ESP_OK ? nullptr : "ERR=MAINT_RELEASE";
 }
 
+// The enrollment window reserves the second slot for a new HID link. A
+// registered CLIENT cannot change roles while its Windows link stays open.
+static bool releaseClientForHidPairing() {
+  const auto state = snapshot();
+  const auto client = state.role(probe::Role::Client);
+  const auto *peer = state.find(client);
+  if (!peer) return true;
+  uint8_t address[6];
+  memcpy(address, peer->address, sizeof(address));
+  Serial.printf("BLE CLIENT release for HID id=%u generation=%lu\n",
+      client.id, (unsigned long)client.generation);
+  return esp_ble_gap_disconnect(address) == ESP_OK || !snapshot().find(client);
+}
+
 static bool handle(const String &text, uint8_t source) {
   if (text == "MAINTBYE") {
     const char *error = source == 0 ? releaseMaintenanceLink(gReplyContext.session) : "ERR=AUTH_REQUIRED";
@@ -792,8 +806,14 @@ static bool handle(const String &text, uint8_t source) {
       pairOwner = owner;
       pairStarted = millis();
       pairWindow = true;
-      replyLine(true, "HIDTEST=PAIR_WINDOW_60S");
-      replyLine(true, receiverText(pairMethod == PairMethod::Android));
+      if (releaseClientForHidPairing()) {
+        replyLine(true, "HIDTEST=PAIR_WINDOW_60S");
+        replyLine(true, receiverText(pairMethod == PairMethod::Android));
+      } else {
+        pairWindow = false;
+        restoreWindowsPairing();
+        replyLine(false, "ERR=HID_CLIENT_RELEASE");
+      }
     }
   } else if (text.startsWith("HIDPIN=")) {
     const String pinText = text.substring(7);
