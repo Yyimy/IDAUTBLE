@@ -1,0 +1,25 @@
+name: Compile Dual BLE v2 on ESP32-S3
+on:
+  push:
+    branches: [feature/dual-ble-client-v2]
+permissions:
+  contents: read
+jobs:
+  firmware:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+        with:
+          version: 1.3.1
+      - name: Install the documented firmware toolchain
+        run: |
+          index=https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index --additional-urls "$index"
+          arduino-cli core install esp32:esp32@3.0.7 --additional-urls "$index"
+          arduino-cli lib install 'Adafruit BusIO@1.16.2'
+          arduino-cli lib install --no-deps 'Adafruit ADS1X15@2.5.0'
+      - name: Compile firmware
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,PartitionScheme=min_spiffs firmware/PLC_Scanner_v3 --warnings all
