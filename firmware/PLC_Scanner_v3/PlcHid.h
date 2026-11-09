@@ -42,7 +42,9 @@ static uint32_t androidPinSinceMs = 0;
 class SecurityCallbacks;
 static SecurityCallbacks *securityCallbacks = nullptr;
 static std::atomic<bool> advertisePending{false};
-static bool maintenanceAdvertisement, advertisedHid;
+// Bench build: keep the very first advertisement neutral for ET40 enrollment.
+static bool maintenanceAdvertisement = true;
+static bool advertisedHid;
 static bool ready;
 static bool testActive;
 struct PendingReading {
@@ -377,10 +379,18 @@ class ServerCallbacks : public BLEServerCallbacks {
 
 class SecurityCallbacks : public BLESecurityCallbacks {
  public:
-  uint32_t onPassKeyRequest() override { return gMaintenancePin.toInt(); }
-  void onPassKeyNotify(uint32_t) override {}
+  uint32_t onPassKeyRequest() override {
+    Serial.println("BLE PAIR passkey=INPUT_ON_PLC");
+    return gMaintenancePin.toInt();
+  }
+  void onPassKeyNotify(uint32_t) override {
+    Serial.println("BLE PAIR passkey=INPUT_ON_PEER");
+  }
   bool onSecurityRequest() override { return true; }
-  bool onConfirmPIN(uint32_t pin) override { return pin == uint32_t(gMaintenancePin.toInt()); }
+  bool onConfirmPIN(uint32_t pin) override {
+    Serial.println("BLE PAIR method=NUMERIC_COMPARISON");
+    return pin == uint32_t(gMaintenancePin.toInt());
+  }
 
   void onAuthenticationComplete(esp_ble_auth_cmpl_t result) override {
     const bool secure = result.success && (result.auth_mode & ESP_LE_AUTH_REQ_MITM);
@@ -754,9 +764,8 @@ static void begin(const String &name) {
   protocolHandle = hid->protocolMode()->getHandle(); controlHandle = hid->hidControl()->getHandle();
 
   auto *adv = BLEDevice::getAdvertising();
-  // Keep maintenance discoverability while letting Windows detect BLE HID.
-  // The HID service exists in both modes; this A/B flag changes only adverts.
-  configureHidAdvertisement(PLC_ADVERTISE_HID);
+  // Both modes expose the same GATT services and security requirements.
+  configureHidAdvertisement(PLC_ADVERTISE_HID && !maintenanceAdvertisement);
   adv->addServiceUUID(BLEUUID(uint16_t(0xffe0)));
   adv->setScanResponse(true);
   BLEAdvertisementData scan;
