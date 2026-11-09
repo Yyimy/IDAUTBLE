@@ -1,10 +1,16 @@
 """Exercise the production GATT write dispatcher with independent peer sessions."""
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
 sketch = Path(__file__).resolve().parents[1] / 'PLC_Scanner_v3'
 source = (sketch / 'PlcHid.h').read_text()
+ino = (sketch / 'PLC_Scanner_v3.ino').read_text()
+types = (sketch / 'Types.h').read_text().replace('#pragma once', '').replace('#include <Arduino.h>', '')
+commands = '\n'.join(re.findall(r'^const uint8_t CMD_[LBAPDICO]\[4\] = \{[^\n]+?\};', ino, re.M))
+for name in ('matchCommand', 'cmdFromBinary4', 'isClientReading'):
+    commands += '\n' + re.search(r'^(?:static inline |static )?\w+ ' + name + r'\([^\n]*\) \{\n.*?^\}', ino, re.M | re.S).group()
 staging = source[source.index('struct PreparedWrite {'):source.index('static probe::Sessions snapshot()')]
 dispatcher = source[source.index('static void gattEvent('):source.index('static uint8_t reportMap[]')]
 lease = source[source.index('static void maintenanceLeaseTick()'):source.index('static void tick()')]
@@ -28,7 +34,6 @@ struct esp_ble_gatts_cb_param_t {
   struct { uint16_t conn_id; int exec_write_flag; } exec_write;
   struct { uint16_t conn_id, handle, len, offset; bool is_prep; const uint8_t *value; } write;
 };
-struct BleCmd { char payload[384]; };
 struct Char { uint16_t getHandle() const { return 20; } } uart, *pCharacteristic=&uart;
 std::atomic<esp_gatt_if_t> gattInterface{0};
 uint16_t uartCccd=21,inputCccd=31,bootCccd=32,outputHandle=33,bootOutputHandle=34,protocolHandle=35,controlHandle=36;
@@ -52,8 +57,7 @@ bool blocked(){return blockedState;}
 struct SerialStub {
   template <typename... Args> void printf(const char*, Args...) {}
 } Serial;
-constexpr int OTA_IDLE=0;
-int gOtaState=OTA_IDLE;
+OtaState gOtaState=OTA_IDLE;
 std::vector<uint8_t> disconnected;
 int esp_ble_gap_disconnect(const uint8_t* address){disconnected.push_back(address[0]);return ESP_OK;}
 bool deviceConnected=false;
@@ -63,7 +67,8 @@ std::vector<std::pair<uint32_t,std::string>> messages;
 void receiveBleCommand(const uint8_t *data,size_t len,uint32_t generation) {
   messages.emplace_back(generation,std::string(reinterpret_cast<const char*>(data),len));
 }
-enum TxTarget { TX_BLE_ONLY };
+std::vector<BleCmd> queued;
+void queueBleCommand(const BleCmd &cmd) { queued.push_back(cmd); }
 std::vector<std::pair<uint32_t,std::string>> replies;
 bool queueTargetFrame(const uint8_t *data,size_t len,std::nullptr_t,TxTarget,uint32_t generation) {
   replies.emplace_back(generation,std::string(reinterpret_cast<const char*>(data),len));
@@ -217,11 +222,27 @@ int main() {
   assert(peers.clientReady(client) && gBleSession==owner);
   write(1,20,"INFO?");
   assert(messages.size()==messageCount && gBleSession==owner);
+  for (char command : std::string("LBAPDI")) {
+    write(1,20,std::string{27,command,13,10});
+  }
+  const std::vector<BleCmdType> expected{BLECMD_L,BLECMD_B,BLECMD_A,BLECMD_P,BLECMD_D,BLECMD_I};
+  assert(queued.size()==expected.size());
+  for (size_t i=0;i<expected.size();++i) {
+    assert(queued[i].type==expected[i] && queued[i].source==CMD_SOURCE_CLIENT);
+    assert(queued[i].session==client.generation);
+  }
+  write(1,20,"\x1b" "C\r\n");
+  write(1,20,"\x1b" "O\r\n");
+  write(1,20,"\x1b" "L\n\n");
+  write(1,20,"\x1b" "L\r\n",true);exec(1);
+  write(1,20,"\x1b" "L\r\n",false,1);
+  write(1,21,disabled);write(1,20,"\x1b" "L\r\n");
+  assert(queued.size()==expected.size() && gBleSession==owner);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
     cpp, exe = Path(tmp) / 'test.cpp', Path(tmp) / 'test'
-    cpp.write_text(shim + staging + dispatcher + lease + release + cases)
+    cpp.write_text('#include <cstdint>\n#include <cstddef>\n' + types + commands + shim + staging + dispatcher + lease + release + cases)
     subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I',
                     str(sketch), str(cpp), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
