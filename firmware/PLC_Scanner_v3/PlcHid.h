@@ -795,7 +795,10 @@ static void advertise() {
   if (!ready) return;
   const uint32_t now = millis();
   if (uint32_t(now - lastAdvertiseCheck) < (advertisePending ? 5000u : 1500u)) return;
-  const bool wantHid = PLC_ADVERTISE_HID && !maintenanceAdvertisement;
+  // Windows uses the keyboard advertisement to discover the HID profile when
+  // pairing again. Keep the neutral advertisement outside that explicit window.
+  const bool windowsEnrollment = pairWindow && pairMethod == PairMethod::Windows;
+  const bool wantHid = PLC_ADVERTISE_HID && (!maintenanceAdvertisement || windowsEnrollment);
   auto *adv = BLEDevice::getAdvertising();
   if (advertisedHid != wantHid) {
     if (isAdvertising) {

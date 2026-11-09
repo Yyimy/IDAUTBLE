@@ -61,6 +61,8 @@ probe::Sessions snapshot(){
 uint32_t millis(){return nowMs;}
 bool gOtaTaskHandle=false;
 bool pairWindow=false, blockedState=false;
+enum class PairMethod : uint8_t { Windows, Android };
+PairMethod pairMethod=PairMethod::Windows;
 bool blocked(){return blockedState;}
 constexpr bool PLC_ADVERTISE_HID=true;
 constexpr uint16_t HID_KEYBOARD=0x03c1;
@@ -380,6 +382,36 @@ int main() {
   assert(advertising.appearance==0 && advertising.services==std::vector<BLEUUID>{0xffe0});
   advertisePending=false;
   advertising.starts=0;
+
+  // Only an explicit Windows enrollment overrides the neutral advertisement.
+  isAdvertising=true;
+  pairWindow=true;
+  pairMethod=PairMethod::Android;
+  nowMs+=1500;
+  advertise();
+  assert(!advertisedHid && advertising.stops==0);
+  pairMethod=PairMethod::Windows;
+  advertise();
+  assert(!advertisedHid && advertising.stops==1);
+  isAdvertising=false;
+  nowMs+=1500;
+  advertise();
+  assert(advertisedHid && advertising.starts==1 && advertising.appearance==HID_KEYBOARD);
+  assert((advertising.services==std::vector<BLEUUID>{0xffe0,0x1812}));
+  assert(maintenanceAdvertisement && peers.uartReady(maintenance));
+  isAdvertising=true;
+  advertisePending=false;
+  pairWindow=false;
+  nowMs+=1500;
+  advertise();
+  assert(advertisedHid && advertising.stops==2);
+  isAdvertising=false;
+  nowMs+=1500;
+  advertise();
+  assert(!advertisedHid && advertising.starts==2 && advertising.appearance==0);
+  assert(advertising.services==std::vector<BLEUUID>{0xffe0});
+  advertisePending=false;
+  advertising.starts=advertising.stops=0;
   setMaintenanceAdvertisement(false);
 
   // Switch the advertised role only after stopping the active advertisement.
