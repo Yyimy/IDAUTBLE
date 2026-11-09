@@ -3,6 +3,7 @@
 // BLE HID and maintenance share a GATT server, but all routing is by peer generation.
 #include <BLEHIDDevice.h>
 #include <mbedtls/aes.h>
+#include <mbedtls/sha256.h>
 #include "ProbeKeyboard.h"
 #include "HidEarlyAuth.h"
 
@@ -21,6 +22,7 @@ static uint16_t protocolHandle, controlHandle;
 static probe::Keyboard keyboard;
 static Preferences receiverPreferences;
 static probe::ReceiverIdentity savedReceiver;
+static probe::ReceiverIdentity forgottenSubscriptions;
 static probe::OutputFormat outputFormat;
 static bool receiverStorageReady, unbindAfterRelease;
 static std::atomic<bool> pairWindow{false};
@@ -121,7 +123,7 @@ static probe::ReceiverIdentity authenticatedIdentity(const probe::Peer &peer) {
   if (esp_ble_get_bond_device_list(&count, bonds) != ESP_OK) return {};
   probe::ReceiverIdentity found;
   for (int i = 0; i < count; ++i) {
-    const auto id = bondIdentity(bonds[i]);
+    auto id = bondIdentity(bonds[i]);
     if (!id.valid) continue;
     const bool direct = ((uint8_t(bonds[i].bd_addr_type) & 1) == (peer.addressType & 1)) &&
         !memcmp(bonds[i].bd_addr, peer.address, 6);
@@ -129,7 +131,12 @@ static probe::ReceiverIdentity authenticatedIdentity(const probe::Peer &peer) {
     const bool privateMatch = peer.addressType >= 1 && peer.addressType <= 3 &&
         probe::resolvesRpa(id, peer.address, aesIdentity);
     if (!direct && !canonical && !privateMatch) continue;
+    const auto &key = bonds[i].bond_key;
+    if ((key.key_mask & ESP_BLE_ENC_KEY_MASK) && key.penc_key.key_size >= 7) {
+      id.hasBondTag = mbedtls_sha256(key.penc_key.ltk, sizeof(key.penc_key.ltk), id.bondTag, 0) == 0;
+    }
     if (found.valid && !probe::sameIdentity(found, id)) return {}; // Ambiguous: fail closed.
+    if (found.valid && !probe::sameBond(found, id)) id.hasBondTag = false;
     found = id;
   }
   return found;
@@ -498,6 +505,10 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
       }
       if (handle == inputCccd) { p->reportNotify = enabled; p->reportSeen = true; }
       if (handle == bootCccd) { p->bootNotify = enabled; p->bootSeen = true; }
+      if (handle != uartCccd && !enabled && p->role != probe::Role::Maintenance &&
+          (!p->identity.valid || probe::sameBond(p->identity, forgottenSubscriptions))) {
+        forgottenSubscriptions.subscriptions &= ~(handle == inputCccd ? 1u : 2u);
+      }
     }
     portEXIT_CRITICAL(&peerMux);
     if (handle != uartCccd) {
@@ -697,9 +708,13 @@ static void pairTick() {
   }
   probe::Token candidate;
   unsigned candidates = 0;
+  portENTER_CRITICAL(&peerMux);
+  const auto remembered = forgottenSubscriptions;
+  portEXIT_CRITICAL(&peerMux);
   for (const auto &p : s.peers) {
-    if (!p.used || p.expiring || p.role != probe::Role::Unassigned || !p.secure ||
-        !(p.reportProtocol ? p.reportNotify : p.bootNotify)) continue;
+    if (!p.used || p.expiring || p.role != probe::Role::Unassigned || !p.secure) continue;
+    s.restoreForgottenSubscriptions(p.token, remembered);
+    if (!(p.reportProtocol ? p.reportNotify : p.bootNotify)) continue;
     candidate = p.token; ++candidates;
   }
   if (candidates > 1) {
@@ -711,23 +726,40 @@ static void pairTick() {
   const auto *p = s.find(candidate);
   if (!p || !p->identity.valid) return;
   auto selectedIdentity = p->identity;
-  selectedIdentity.subscriptionsKnown = true;
-  selectedIdentity.subscriptions = (p->reportNotify ? 1 : 0) | (p->bootNotify ? 2 : 0);
+  portENTER_CRITICAL(&peerMux);
+  auto *live = peers.find(candidate);
+  const bool samePeer = live && probe::sameIdentity(live->identity, selectedIdentity);
+  const bool reusedSubscriptions = samePeer && peers.restoreForgottenSubscriptions(candidate, forgottenSubscriptions);
+  const bool bound = samePeer && peers.bindKeyboard(candidate);
+  if (bound) {
+    selectedIdentity = live->identity;
+    selectedIdentity.subscriptionsKnown = true;
+    selectedIdentity.subscriptions = (live->reportNotify ? 1 : 0) | (live->bootNotify ? 2 : 0);
+  }
+  portEXIT_CRITICAL(&peerMux);
+  if (!bound) return;
   if (!saveReceiver(selectedIdentity)) {
+    portENTER_CRITICAL(&peerMux);
+    peers.unbindKeyboard();
+    portEXIT_CRITICAL(&peerMux);
     pairWindow = false;
     restoreWindowsPairing();
     peerReply(pairOwner, false, "ERR=HID_STORAGE"); return;
   }
   portENTER_CRITICAL(&peerMux);
-  const bool bound = peers.bindKeyboard(candidate);
+  forgottenSubscriptions = {};
   portEXIT_CRITICAL(&peerMux);
   pairWindow = false;
   restoreWindowsPairing();
-  if (bound) {
-    Serial.printf("HID BOUND id=%u generation=%lu (saved receiver)\n", candidate.id, (unsigned long)candidate.generation);
-    peerReply(pairOwner, true, "HIDTEST=BOUND");
-    peerReply(pairOwner, true, receiverText());
-  } else peerReply(pairOwner, false, "ERR=HID_DISCONNECTED_AFTER_SAVE");
+  const auto assigned = snapshot();
+  if (!assigned.keyboardTarget(candidate)) {
+    peerReply(pairOwner, false, "ERR=HID_DISCONNECTED_AFTER_SAVE");
+    return;
+  }
+  if (reusedSubscriptions) Serial.println("HID reassigned using confirmed subscriptions from the same bond");
+  Serial.printf("HID BOUND id=%u generation=%lu (saved receiver)\n", candidate.id, (unsigned long)candidate.generation);
+  peerReply(pairOwner, true, "HIDTEST=BOUND");
+  peerReply(pairOwner, true, receiverText());
 }
 
 
@@ -785,6 +817,19 @@ static bool handle(const String &text, uint8_t source) {
     else if (!saveOutputFormat(candidate)) replyLine(false, "ERR=HIDCFG_STORAGE");
     else replyLine(true, probe::outputWire(outputFormat).c_str());
   } else if (text == "HIDFORGET=1") {
+    probe::ReceiverIdentity recent;
+    for (const auto &p : state.peers) {
+      if (!p.used || !p.secure || !p.identity.hasBondTag ||
+          (p.role != probe::Role::Keyboard && p.role != probe::Role::Client) ||
+          !probe::sameIdentity(p.identity, savedReceiver)) continue;
+      recent = p.identity;
+      recent.subscriptionsKnown = true;
+      const bool sameBond = probe::sameBond(p.identity, savedReceiver);
+      const bool report = p.reportSeen ? p.reportNotify : sameBond && (savedReceiver.subscriptions & 1);
+      const bool boot = p.bootSeen ? p.bootNotify : sameBond && (savedReceiver.subscriptions & 2);
+      recent.subscriptions = (report ? 1 : 0) | (boot ? 2 : 0);
+      break;
+    }
     if (!forgetReceiver()) replyLine(false, "ERR=HID_STORAGE");
     else {
       pairWindow = false;
@@ -792,6 +837,7 @@ static bool handle(const String &text, uint8_t source) {
       keyboard.cancel();
       clearReadings();
       portENTER_CRITICAL(&peerMux);
+      forgottenSubscriptions = recent;
       if (!keyboard.busy()) peers.unbindKeyboard();
       else unbindAfterRelease = true;
       portEXIT_CRITICAL(&peerMux);

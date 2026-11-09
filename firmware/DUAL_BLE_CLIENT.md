@@ -23,6 +23,7 @@ Use **all** files from `firmware/PLC_Scanner_v3` on this branch, including every
 - Check long fragmented frames, secure pair rejection and idle/advertising behavior.
 - To alternate on the same Windows PC, enroll it as a HID receiver once and keep that assignment and Windows bond. The simulator can register CLIENT on that HID session after the current text finishes. Disconnecting from the simulator disables FFE1 notifications and lets the PLC restore the saved HID session. If the physical link closes, normal HID reconnection restores it.
 - Use Forget receiver and Assign receiver when changing the assigned HID device. An authorized Assign receiver releases any remaining CLIENT link and reserves the slot for HID enrollment.
+- To reassign the same PC after Forget receiver, leave it paired in Windows. During the current boot, the firmware can reuse previously confirmed HID subscriptions in a new authorized assignment when the PC authenticates with the same bond. A new bond or a client that explicitly disabled its reports still needs to enable its HID subscriptions.
 - Validate with hardware and compiler before release.
 
 **No claims of validated radio behavior or production readiness until bench testing succeeds.**

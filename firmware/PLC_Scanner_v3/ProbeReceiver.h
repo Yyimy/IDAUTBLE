@@ -12,6 +12,8 @@ struct ReceiverIdentity {
   uint8_t subscriptions = 0; // bit 0: report; bit 1: boot. Not part of identity.
   bool hasIrk = false;
   uint8_t irk[16] = {}; // Bluedroid little-endian; never returned in diagnostics
+  bool hasBondTag = false;
+  uint8_t bondTag[32] = {}; // Runtime only. Never persisted or returned in diagnostics.
 };
 inline bool stableIdentity(const ReceiverIdentity &id) {
   uint8_t bits = 0;
@@ -22,6 +24,10 @@ inline bool sameIdentity(const ReceiverIdentity &a, const ReceiverIdentity &b) {
   return stableIdentity(a) && stableIdentity(b) && a.type == b.type &&
       !std::memcmp(a.address, b.address, 6) && a.hasIrk == b.hasIrk &&
       (!a.hasIrk || !std::memcmp(a.irk, b.irk, 16));
+}
+inline bool sameBond(const ReceiverIdentity &a, const ReceiverIdentity &b) {
+  return a.hasBondTag && b.hasBondTag && sameIdentity(a, b) &&
+      !std::memcmp(a.bondTag, b.bondTag, sizeof(a.bondTag));
 }
 // Core Vol 3 Part H ah(): prand is the three MS bytes of a display-order RPA.
 // Bluedroid's SMP_Encrypt reverses its little-endian key for standard AES.
