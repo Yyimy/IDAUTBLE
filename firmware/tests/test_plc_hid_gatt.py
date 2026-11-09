@@ -63,6 +63,12 @@ std::vector<std::pair<uint32_t,std::string>> messages;
 void receiveBleCommand(const uint8_t *data,size_t len,uint32_t generation) {
   messages.emplace_back(generation,std::string(reinterpret_cast<const char*>(data),len));
 }
+enum TxTarget { TX_BLE_ONLY };
+std::vector<std::pair<uint32_t,std::string>> replies;
+bool queueTargetFrame(const uint8_t *data,size_t len,std::nullptr_t,TxTarget,uint32_t generation) {
+  replies.emplace_back(generation,std::string(reinterpret_cast<const char*>(data),len));
+  return true;
+}
 '''
 cases = r'''
 void write(uint16_t conn,uint16_t handle,const std::string &data, bool prep=false, uint16_t offset=0) {
@@ -192,6 +198,25 @@ int main() {
   connectDuringSnapshot=true;
   unassignedLeaseTick();
   assert(peers.byId(0) && !peers.byId(0)->expiring && disconnected.size()==1);
+
+  // Exercise the actual CLIENT handshake with maintenance already connected.
+  peers.disconnect(hid.id);
+  auto client=peers.connect(1,hidAddress);
+  peers.secureAddress(appAddress,true);
+  write(0,21,enabled);
+  write(0,20,"INFO?");
+  const auto owner=gBleSession;
+  const auto messageCount=messages.size();
+  write(1,21,enabled);
+  write(1,20,"CLIENT\r\n");
+  assert(replies.empty());
+  peers.secureAddress(hidAddress,true);
+  write(1,20,"CLIENT\r\n");
+  assert(replies.size()==1 && replies.back().first==client.generation);
+  assert(replies.back().second=="\x06" "CLIENT=READY\r\n");
+  assert(peers.clientReady(client) && gBleSession==owner);
+  write(1,20,"INFO?");
+  assert(messages.size()==messageCount && gBleSession==owner);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
