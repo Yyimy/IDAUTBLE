@@ -35,7 +35,7 @@ BleCmdType cmdFromBinary4(const uint8_t*p){if(p[0]!=27||p[2]!=13||p[3]!=10)retur
 struct IpMock{String toString(){return "192.0.2.22";}};
 struct WifiMock{bool linked=true;int status(){return linked?WL_CONNECTED:0;}IpMock localIP(){return{};}int RSSI(){return -45;}void disconnect(bool) {linked=false;}}WiFi;
 std::atomic<uint8_t> gOtaPct{0};bool gOtaParamsReady=false;
-bool gCutConfirmed=false,gOutboxDirty=false;uint32_t gEventLastAttempt=0,gEventOverflow=0;
+bool gCutConfirmed=false;uint32_t gEventLastAttempt=0,gEventOverflow=0;
 char gCutReason[40]="";
 uint32_t gBootCount=12,gPonTotal=1540,gPalCargado=320,gPalDescargado=319,gLecturasFallidas=8;
 int countersMux=0,locks=0;void portENTER_CRITICAL(int*){++locks;}void portEXIT_CRITICAL(int*){--locks;}
@@ -53,8 +53,14 @@ body += extra+'\n'+'\n'.join(base['function'](n).split('{',1)[0]+';' for n in na
 body += '\n'.join(base['function'](n) for n in names)
 body += r'''
 std::string bleBytes(){std::string s;for(auto &n:characteristic.notifications)s+=n;return s;}
+std::string clientBytes(){
+ std::string bytes;
+ for(const auto &notification:plcHid::clientCharacteristic.notifications) bytes+=notification;
+ return bytes;
+}
 void drain(){for(int i=0;i<700;++i){nowMs+=16;txTick();}}
 void fresh(){drain();commands.clear();txQueue.clear();characteristic.notifications.clear();
+ plcHid::clientGeneration=0;plcHid::clientCharacteristic.notifications.clear();
  gTcpClient.sent.clear();gTcpClient.rx.clear();gTcpClient.up=gTcpConnected=true;gTcpClient.limit=1000;gTcpClient.blockedCalls=0;
  deviceConnected=gBleSecure=true;gCccd->enabled=true;gBleSession=10;gTcpSession=20;gOtaBleSession=10;
  gOtaTaskHandle=nullptr;gOtaState=OTA_IDLE;gMaintenanceAuthorized=false;gMaintenancePin=PLC_MAINTENANCE_PIN;gAuthFails=0;gAuthBlockedUntil=0;gReplyContext={TX_BOTH,0};
@@ -113,6 +119,21 @@ int main(){
   if(t==BLECMD_A)scanTick();
   drain();CHECK(!gTcpClient.sent.empty());CHECK(bleBytes()==gTcpClient.sent);CHECK(gTcpClient.sent.front()==char(6));CHECK(gTcpClient.sent.back()==char(3));
  }
+ // The CLIENT receives the complete reading, while STATUS stays private to maintenance.
+ fresh();plcHid::clientGeneration=30;gTcpConnected=gTcpClient.up=false;
+ run(cmd(BLECMD_L,0));scanTick();
+ PLCSerial.rx="]d1PAL;]Q1LOC\n";nowMs+=10;scanTick();drain();
+ const auto reading=bleBytes();
+ CHECK(reading.size()>20 && reading.front()==char(6) && reading.back()==char(3));
+ CHECK(plcHid::clientCharacteristic.notifications.size()>1 && clientBytes()==reading);
+ run(cmd(BLECMD_TEXT,0,"STATUS?"));drain();
+ CHECK(bleBytes().find("STATUS=1")!=std::string::npos && clientBytes()==reading);
+ // A queued frame must never continue mid-frame on a replacement CLIENT session.
+ fresh();plcHid::clientGeneration=30;
+ sendFrame(reinterpret_cast<const uint8_t*>(reading.data()),reading.size());
+ nowMs+=16;txTick();CHECK(clientBytes().size()==20);
+ plcHid::clientGeneration=31;plcHid::clientCharacteristic.notifications.clear();drain();
+ CHECK(clientBytes().empty() && bleBytes()==reading);
  // One absent link does not prevent the other receiving a requested read.
  fresh();deviceConnected=false;run(cmd(BLECMD_B,1));drain();CHECK(!gTcpClient.sent.empty()&&bleBytes().empty());
  fresh();gTcpConnected=gTcpClient.up=false;run(cmd(BLECMD_B,0));drain();CHECK(gTcpClient.sent.empty()&&!bleBytes().empty());

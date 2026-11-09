@@ -77,6 +77,7 @@ int digitalRead(int){return rawFoto;}void countersIncPalCargado(){++loaded;}void
 void powerCut(const char*){gCutRequested=true;}
 '''
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
+outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
 names=['handleAuthCommand','maintenanceAuthorized','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
@@ -106,7 +107,8 @@ bool gTcpConnected=false;OtaState gOtaState=OTA_IDLE;
 std::deque<TxPacket> txQueue;int gTxQueue=1;
 int xQueueReceive(int,TxPacket*p,int){if(txQueue.empty())return 0;*p=txQueue.front();txQueue.pop_front();return 1;}
 int xQueueSend(int,const TxPacket*p,int){if(txQueue.size()>=24)return 0;txQueue.push_back(*p);return 1;}
-bool gAckMode=false,gEventInFlight=false;PersistentOutbox gOutbox{};
+bool gAckMode=false,gEventInFlight=false,gOutboxDirty=false;PersistentOutbox gOutbox{};
+uint8_t gOutboxEncoded[plcOutboxStorage::maxBytes];
 void outboxPop(){if(gOutbox.count)--gOutbox.count;}
 '''
 pin_declaration=re.search(r'static constexpr char PLC_MAINTENANCE_PIN\[\] = "[0-9]+";',source).group()
@@ -140,14 +142,20 @@ int esp_ble_remove_bond_device(uint8_t*){++bondsRemoved;return ESP_OK;}
 shim += r'''
 namespace plcHid {
 void batteryLevel(uint8_t) {}
+uint32_t clientGeneration=0;
+FakeCharacteristic clientCharacteristic;
+uint32_t clientSession() { return clientGeneration; }
+bool clientCanNotify() { return clientSession() != 0; }
 bool canNotify(uint32_t session) {
   return session == gBleSession && gBleSecure && deviceConnected && cccd.enabled;
 }
 int notify(uint32_t session, uint8_t *data, size_t length) {
-  if (!canNotify(session)) return -1;
+  const bool client = session != 0 && session == clientSession();
+  if (!client && !canNotify(session)) return -1;
   const auto size = std::min(length, size_t(gBleMtu - 3));
-  characteristic.setValue(data, size);
-  characteristic.notify();
+  auto &target = client ? clientCharacteristic : characteristic;
+  target.setValue(data, size);
+  target.notify();
   return int(size);
 }
 bool authorized(uint32_t) { return gMaintenanceAuthorized; }
@@ -159,7 +167,7 @@ void reading(const String &pallet, const String &location) { readings.emplace_ba
 '''
 # Types require integer definitions and String prototypes are declared by Arduino in firmware.
 includes=shim[:shim.index('using std::size_t;')]
-body=includes+types+'\n'+shim[shim.index('using std::size_t;'):]+'\n'
+body=includes+types+'\n'+outbox_storage+'\n'+shim[shim.index('using std::size_t;'):]+'\n'
 body+='\n'.join(function(n).split('{',1)[0]+';' for n in names)+'\n'
 body+='\n'.join(function(n) for n in names)
 body+=r'''
