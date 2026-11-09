@@ -2,6 +2,8 @@
 
 // BLE HID and maintenance share a GATT server, but all routing is by peer generation.
 #include <BLEHIDDevice.h>
+#include <cctype>
+#include <cstdlib>
 #include <mbedtls/aes.h>
 #include <mbedtls/sha256.h>
 #include "ProbeKeyboard.h"
@@ -115,6 +117,72 @@ static probe::ReceiverIdentity bondIdentity(const esp_ble_bond_dev_t &bond) {
   if (id.hasIrk) memcpy(id.irk, bond.bond_key.pid_key.irk, 16);
   return probe::stableIdentity(id) ? id : probe::ReceiverIdentity{};
 }
+
+static void forgetBondFromUsb(const char *text) {
+  if (blocked() || pairWindow || savedReceiver.valid) {
+    Serial.println("BLE BOND ERROR: stop pairing and clear the HID assignment first");
+    return;
+  }
+  uint8_t address[6];
+  if (strlen(text) != 17) {
+    Serial.println("BLE BOND ERROR: expected AA:BB:CC:DD:EE:FF");
+    return;
+  }
+  for (size_t i = 0; i < sizeof(address); ++i) {
+    const char *byte = text + i * 3;
+    if (!std::isxdigit(static_cast<unsigned char>(byte[0])) ||
+        !std::isxdigit(static_cast<unsigned char>(byte[1])) ||
+        (i < sizeof(address) - 1 && byte[2] != ':')) {
+      Serial.println("BLE BOND ERROR: expected AA:BB:CC:DD:EE:FF");
+      return;
+    }
+    const char hex[] = {byte[0], byte[1], '\0'};
+    address[i] = uint8_t(std::strtoul(hex, nullptr, 16));
+  }
+
+  int count = esp_ble_get_bond_device_num();
+  esp_ble_bond_dev_t bonds[16] = {};
+  if (count < 0 || count > 16 || (count && esp_ble_get_bond_device_list(&count, bonds) != ESP_OK)) {
+    Serial.println("BLE BOND ERROR: cannot read bond list");
+    return;
+  }
+  esp_ble_bond_dev_t *target = nullptr;
+  for (int i = 0; i < count; ++i) {
+    auto &bond = bonds[i];
+    const auto identity = bondIdentity(bond);
+    if (memcmp(bond.bd_addr, address, 6) &&
+        (!identity.valid || (memcmp(identity.address, address, 6) &&
+                             !probe::resolvesRpa(identity, address, aesIdentity)))) continue;
+    if (target) {
+      Serial.println("BLE BOND ERROR: ambiguous address");
+      return;
+    }
+    target = &bond;
+  }
+  if (!target) {
+    Serial.printf("BLE BOND NOT FOUND address=%s\n", text);
+    return;
+  }
+
+  const auto identity = bondIdentity(*target);
+  const auto state = snapshot();
+  for (const auto &p : state.peers) {
+    if (p.used && (!memcmp(p.address, address, 6) || !memcmp(p.address, target->bd_addr, 6) ||
+        (identity.valid && (!memcmp(p.address, identity.address, 6) ||
+         probe::sameIdentity(p.identity, identity) || probe::resolvesRpa(identity, p.address, aesIdentity))))) {
+      Serial.println("BLE BOND ERROR: target still connected");
+      return;
+    }
+  }
+  const auto result = esp_ble_remove_bond_device(target->bd_addr);
+  if (result == ESP_OK) {
+    portENTER_CRITICAL(&peerMux);
+    if (probe::sameIdentity(identity, forgottenSubscriptions)) forgottenSubscriptions = {};
+    portEXIT_CRITICAL(&peerMux);
+    Serial.printf("BLE BOND REMOVAL REQUESTED address=%s\n", text);
+  } else Serial.printf("BLE BOND ERROR: %s\n", esp_err_to_name(result));
+}
+
 static probe::ReceiverIdentity authenticatedIdentity(const probe::Peer &peer) {
   if (!peer.secure || peer.addressType == 0xff) return {};
   int count = esp_ble_get_bond_device_num();
@@ -403,6 +471,11 @@ static void gapEvent(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param
   } else if (event == ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT) {
     isAdvertising = false;
     advertisePending = false;
+  } else if (event == ESP_GAP_BLE_REMOVE_BOND_DEV_COMPLETE_EVT) {
+    const auto &removal = param->remove_bond_dev_cmpl;
+    const auto *address = removal.bd_addr;
+    Serial.printf("BLE BOND REMOVAL status=%u address=%02X:%02X:%02X:%02X:%02X:%02X\n",
+        unsigned(removal.status), address[0], address[1], address[2], address[3], address[4], address[5]);
   }
   if (!androidPairingActive.load()) return;
   if (event == ESP_GAP_BLE_PASSKEY_REQ_EVT) {
