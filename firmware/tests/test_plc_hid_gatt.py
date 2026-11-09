@@ -14,6 +14,8 @@ for name in ('matchCommand', 'cmdFromBinary4', 'isClientReading'):
 staging = source[source.index('struct PreparedWrite {'):source.index('static probe::Sessions snapshot()')]
 dispatcher = source[source.index('static void sendClientReady('):source.index('static uint8_t reportMap[]')]
 bond_reset = source[source.index('static probe::ReceiverIdentity bondIdentity('):source.index('static probe::ReceiverIdentity authenticatedIdentity(')]
+advertising_control = source[source.index('static void configureHidAdvertisement('):source.index('static void begin(const String &name)')]
+advertising_tick = source[source.index('static void advertise()'):source.index('static void pairTick()')]
 lease = source[source.index('static void maintenanceLeaseTick()'):source.index('static void tick()')]
 release = source[source.index('static const char *releaseMaintenanceLink('):source.index('static bool handle(')]
 shim = r'''
@@ -59,6 +61,22 @@ uint32_t millis(){return nowMs;}
 bool gOtaTaskHandle=false;
 bool pairWindow=false, blockedState=false;
 bool blocked(){return blockedState;}
+constexpr bool PLC_ADVERTISE_HID=true;
+constexpr uint16_t HID_KEYBOARD=0x03c1;
+bool ready=true, isAdvertising=false, advertisePending=false, advertisedHid=false, maintenanceAdvertisement=false;
+uint32_t lastAdvertiseCheck=0;
+using BLEUUID=uint16_t;
+struct AdvertisingStub {
+  std::vector<BLEUUID> services{0xffe0};
+  uint16_t appearance=0;
+  unsigned starts=0,stops=0;
+  void addServiceUUID(BLEUUID id){services.push_back(id);}
+  void removeServiceUUID(BLEUUID id){services.erase(std::remove(services.begin(),services.end(),id),services.end());}
+  void setAppearance(uint16_t value){appearance=value;}
+  void stop(){++stops;}
+  void start(){++starts;}
+} advertising;
+struct BLEDevice {static AdvertisingStub* getAdvertising(){return &advertising;}};
 struct SerialStub {
   template <typename... Args> void printf(const char*, Args...) {}
   void println(const char*) {}
@@ -353,11 +371,40 @@ int main() {
   forgetBondFromUsb("02:00:00:00:00:00");
   assert(removedBonds==std::vector<uint8_t>{hidAddress[0]});
   assert(peers.uartReady(maintenance));
+
+  // Switch the advertised role only after stopping the active advertisement.
+  configureHidAdvertisement(true);
+  assert((advertising.services==std::vector<BLEUUID>{0xffe0,0x1812}));
+  isAdvertising=true;
+  lastAdvertiseCheck=nowMs-1500;
+  pairWindow=true;
+  setMaintenanceAdvertisement(true);
+  assert(!maintenanceAdvertisement);
+  pairWindow=false;
+  setMaintenanceAdvertisement(true);
+  advertise();
+  assert(advertising.stops==1 && advertising.starts==0 && advertisedHid);
+  isAdvertising=false; // GAP stop complete.
+  nowMs+=1500;
+  advertise();
+  assert(advertising.starts==1 && advertising.appearance==0 && !advertisedHid);
+  assert((advertising.services==std::vector<BLEUUID>{0xffe0}));
+  isAdvertising=true; advertisePending=false;
+  nowMs+=1500;
+  setMaintenanceAdvertisement(false);
+  advertise();
+  assert(advertising.stops==2 && !advertisedHid);
+  isAdvertising=false;
+  nowMs+=1500;
+  advertise();
+  assert(advertising.starts==2 && advertising.appearance==HID_KEYBOARD);
+  assert((advertising.services==std::vector<BLEUUID>{0xffe0,0x1812}));
+  assert(peers.uartReady(maintenance));
 }
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
     cpp, exe = Path(tmp) / 'test.cpp', Path(tmp) / 'test'
-    cpp.write_text('#include <cstdint>\n#include <cstddef>\n' + types + commands + shim + bond_reset + staging + dispatcher + lease + release + cases)
+    cpp.write_text('#include <cstdint>\n#include <cstddef>\n' + types + commands + shim + bond_reset + staging + dispatcher + lease + release + advertising_control + advertising_tick + cases)
     subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I',
                     str(sketch), str(cpp), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
