@@ -59,7 +59,8 @@ struct SerialStub {
 } Serial;
 OtaState gOtaState=OTA_IDLE;
 std::vector<uint8_t> disconnected;
-int esp_ble_gap_disconnect(const uint8_t* address){disconnected.push_back(address[0]);return ESP_OK;}
+int disconnectResult=ESP_OK;
+int esp_ble_gap_disconnect(const uint8_t* address){disconnected.push_back(address[0]);return disconnectResult;}
 bool deviceConnected=false;
 #define portENTER_CRITICAL(x) ((void)0)
 #define portEXIT_CRITICAL(x) ((void)0)
@@ -205,12 +206,15 @@ int main() {
   assert(peers.byId(0) && !peers.byId(0)->expiring && disconnected.size()==1);
 
   // Exercise the actual CLIENT handshake with maintenance already connected.
+  peers.disconnect(0);
   peers.disconnect(hid.id);
+  const auto maintenance=peers.connect(0,appAddress);
   auto client=peers.connect(1,hidAddress);
   peers.secureAddress(appAddress,true);
   write(0,21,enabled);
   write(0,20,"INFO?");
   const auto owner=gBleSession;
+  assert(owner==maintenance.generation && peers.uartReady(maintenance));
   const auto messageCount=messages.size();
   write(1,21,enabled);
   write(1,20,"CLIENT\r\n");
@@ -238,6 +242,30 @@ int main() {
   write(1,20,"\x1b" "L\r\n",false,1);
   write(1,21,disabled);write(1,20,"\x1b" "L\r\n");
   assert(queued.size()==expected.size() && gBleSession==owner);
+
+  // Assigning HID releases the client slot and preserves maintenance.
+  disconnected.clear();
+  pairWindow=true;
+  assert(releaseClientForHidPairing());
+  assert(disconnected==std::vector<uint8_t>{hidAddress[0]});
+  assert(peers.role(probe::Role::Client)==client && gBleSession==owner);
+  disconnectResult=-1;
+  assert(!releaseClientForHidPairing());
+  disconnectResult=ESP_OK;
+  assert(peers.disconnect(client.id));
+  disconnected.clear();
+  assert(releaseClientForHidPairing() && disconnected.empty());
+
+  // Windows may reopen the same connection ID while the window is active.
+  auto keyboard=peers.connect(1,hidAddress);
+  assert(keyboard.generation!=client.generation);
+  peers.secureAddress(hidAddress,true);
+  write(1,21,enabled);
+  write(1,20,"CLIENT\r\n");
+  assert(!peers.clientReady(keyboard) && replies.size()==1);
+  write(1,31,enabled);
+  assert(peers.bindKeyboard(keyboard) && peers.keyboardReady(keyboard));
+  assert(peers.uartReady(peers.role(probe::Role::Maintenance)) && gBleSession==owner);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
