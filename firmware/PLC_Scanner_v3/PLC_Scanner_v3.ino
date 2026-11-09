@@ -3415,7 +3415,7 @@ static bool bleCanNotify() {
 static void eventTick() {
   // Do not transmit unpersisted events. ACK mode safely tolerates duplicates.
   if (!gOutbox.count || gOutboxDirty || gEventInFlight || gCutConfirmed) return;
-  if (!bleCanNotify() && !plcHid::clientCanNotify() &&
+  if (!bleCanNotify() &&
       (gOtaTaskHandle || !gTcpConnected || !gTcpClient.connected()))
     return;
   if (gEventLastAttempt && millis() - gEventLastAttempt < 3000) return;
@@ -3451,9 +3451,9 @@ static int tcpWriteAvailable(const uint8_t *data, size_t len) {
 static void txTick() {
   static TxPacket p;
   static bool active = false, tcpDone = false, bleDone = false,
-              clientDone = false, accepted = false;
-  static size_t offset = 0, tcpOffset = 0, clientOffset = 0;
-  static uint32_t clientSession = 0, started = 0, lastChunk = 0, clientLastChunk = 0;
+              accepted = false;
+  static size_t offset = 0, tcpOffset = 0;
+  static uint32_t started = 0, lastChunk = 0;
   static bool heightTimingReported = false;
   if (!active) {
     if (xQueueReceive(gTxQueue, &p, 0) != pdTRUE) return;
@@ -3461,13 +3461,9 @@ static void txTick() {
     heightTimingReported = false;
     tcpDone = p.target == TX_BLE_ONLY;
     bleDone = p.target == TX_TCP_ONLY;
-    // Mirror business frames only; maintenance replies stay private.
-    clientSession = p.target == TX_BOTH ? plcHid::clientSession() : 0;
-    clientDone = clientSession == 0;
     accepted = false;
     offset = 0;
     tcpOffset = 0;
-    clientOffset = 0;
     started = millis();
   }
   if (!tcpDone) {
@@ -3516,29 +3512,14 @@ static void txTick() {
       }
     }
   }
-  if (!clientDone && millis() - clientLastChunk >= 15) {
-    clientLastChunk = millis();
-    const int submitted = plcHid::notify(clientSession, p.data + clientOffset, p.len - clientOffset);
-    if (submitted < 0) clientDone = true;
-    else if (submitted > 0) {
-      clientOffset += size_t(submitted);
-      if (clientOffset == p.len) {
-        clientDone = true;
-        accepted = true;
-      }
-    }
-  }
-  if (millis() - started > 5000) {
-    bleDone = true;
-    clientDone = true;
-  }
+  if (millis() - started > 5000) bleDone = true;
   if (p.heightTiming.active && p.heightTiming.source == 0 && bleDone &&
       !heightTimingReported) {
     logHeightTiming(p.heightTiming,
                     offset == p.len ? "BLE_SUBMITTED" : "BLE_NOT_SENT", started);
     heightTimingReported = true;
   }
-  if (tcpDone && bleDone && clientDone) {
+  if (tcpDone && bleDone) {
     if (p.eventId) {
       if (accepted && !gAckMode && gOutbox.count &&
           gOutbox.items[0].id == p.eventId)
