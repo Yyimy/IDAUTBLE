@@ -88,6 +88,13 @@ OtaState gOtaState=OTA_IDLE;
 std::vector<uint8_t> disconnected;
 int disconnectResult=ESP_OK;
 int esp_ble_gap_disconnect(const uint8_t* address){disconnected.push_back(address[0]);return disconnectResult;}
+std::vector<uint16_t> resetDescriptors;
+uint16_t failDescriptor=0;
+int esp_ble_gatts_set_attr_value(uint16_t handle, uint16_t length, const uint8_t *value) {
+  assert(length==2 && value[0]==0 && value[1]==0);
+  resetDescriptors.push_back(handle);
+  return handle==failDescriptor ? -1 : ESP_OK;
+}
 bool deviceConnected=false;
 #define portENTER_CRITICAL(x) ((void)0)
 #define portEXIT_CRITICAL(x) ((void)0)
@@ -367,7 +374,13 @@ int main() {
   forgetBondFromUsb("01:00:00:00:00:00"); // Active maintenance.
   forgetBondFromUsb("02:00:00:00:00:00"); // Active keyboard.
   assert(removedBonds.empty());
+  assert(resetIdleHidDescriptors(peers) && resetDescriptors.empty());
   peers.disconnect(reassignment.id);
+  assert(resetIdleHidDescriptors(peers));
+  assert((resetDescriptors==std::vector<uint16_t>{inputCccd,bootCccd}));
+  failDescriptor=bootCccd;
+  assert(!resetIdleHidDescriptors(peers));
+  assert(peers.uartReady(maintenance));
   forgetBondFromUsb("+2:00:00:00:00:00");
   forgetBondFromUsb("03:00:00:00:00:00");
   assert(removedBonds.empty());

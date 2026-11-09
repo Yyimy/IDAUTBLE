@@ -921,6 +921,20 @@ static bool releaseClientForHidPairing() {
   return esp_ble_gap_disconnect(address) == ESP_OK || !snapshot().find(client);
 }
 
+static bool resetIdleHidDescriptors(const probe::Sessions &state) {
+  // The Arduino core answers CCCD reads from one shared attribute value.
+  // Clear old values before fresh Windows enrollment, but preserve a live
+  // subscription. Readiness still uses the authenticated peer's own state.
+  for (const auto &peer : state.peers) {
+    if (peer.used && peer.secure && (peer.reportNotify || peer.bootNotify)) return true;
+  }
+  const uint8_t disabled[] = {0, 0};
+  const auto report = esp_ble_gatts_set_attr_value(inputCccd, sizeof(disabled), disabled);
+  const auto boot = esp_ble_gatts_set_attr_value(bootCccd, sizeof(disabled), disabled);
+  Serial.printf("HID CCCD RESET report=%s boot=%s\n", esp_err_to_name(report), esp_err_to_name(boot));
+  return report == ESP_OK && boot == ESP_OK;
+}
+
 static bool handle(const String &text, uint8_t source) {
   if (text == "MAINTBYE") {
     const char *error = source == 0 ? releaseMaintenanceLink(gReplyContext.session) : "ERR=AUTH_REQUIRED";
@@ -987,6 +1001,8 @@ static bool handle(const String &text, uint8_t source) {
     if (savedReceiver.valid) replyLine(false, "ERR=HID_ALREADY_BOUND");
     else if (!receiverStorageReady) replyLine(false, "ERR=HID_STORAGE");
     else if (pairWindow) replyLine(false, "ERR=HID_PAIR_ALREADY_OPEN");
+    else if (text == "HIDPAIR=1" && !resetIdleHidDescriptors(state))
+      replyLine(false, "ERR=HID_CCCD_RESET");
     else if (text == "HIDPAIR=ANDROID" && !configureAndroidPairing())
       replyLine(false, "ERR=HID_SECURITY_CONFIG");
     else {
