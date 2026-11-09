@@ -16,6 +16,7 @@ dispatcher = source[source.index('static void sendClientReady('):source.index('s
 bond_reset = source[source.index('static probe::ReceiverIdentity bondIdentity('):source.index('static probe::ReceiverIdentity authenticatedIdentity(')]
 advertising_control = source[source.index('static void configureHidAdvertisement('):source.index('static void begin(const String &name)')]
 advertising_tick = source[source.index('static void advertise()'):source.index('static void pairTick()')]
+boot_advertising_state = re.search(r'^static bool maintenanceAdvertisement = (?:true|false);', source, re.M).group()
 lease = source[source.index('static void maintenanceLeaseTick()'):source.index('static void tick()')]
 release = source[source.index('static const char *releaseMaintenanceLink('):source.index('static bool handle(')]
 shim = r'''
@@ -63,7 +64,7 @@ bool pairWindow=false, blockedState=false;
 bool blocked(){return blockedState;}
 constexpr bool PLC_ADVERTISE_HID=true;
 constexpr uint16_t HID_KEYBOARD=0x03c1;
-bool ready=true, isAdvertising=false, advertisePending=false, advertisedHid=false, maintenanceAdvertisement=false;
+bool ready=true, isAdvertising=false, advertisePending=false, advertisedHid=false;
 uint32_t lastAdvertiseCheck=0;
 using BLEUUID=uint16_t;
 struct AdvertisingStub {
@@ -372,6 +373,15 @@ int main() {
   assert(removedBonds==std::vector<uint8_t>{hidAddress[0]});
   assert(peers.uartReady(maintenance));
 
+  // The diagnostic build's first advertisement is neutral.
+  lastAdvertiseCheck=nowMs-1500;
+  advertise();
+  assert(maintenanceAdvertisement && advertising.starts==1 && !advertisedHid);
+  assert(advertising.appearance==0 && advertising.services==std::vector<BLEUUID>{0xffe0});
+  advertisePending=false;
+  advertising.starts=0;
+  setMaintenanceAdvertisement(false);
+
   // Switch the advertised role only after stopping the active advertisement.
   configureHidAdvertisement(true);
   assert((advertising.services==std::vector<BLEUUID>{0xffe0,0x1812}));
@@ -404,7 +414,7 @@ int main() {
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
     cpp, exe = Path(tmp) / 'test.cpp', Path(tmp) / 'test'
-    cpp.write_text('#include <cstdint>\n#include <cstddef>\n' + types + commands + shim + bond_reset + staging + dispatcher + lease + release + advertising_control + advertising_tick + cases)
+    cpp.write_text('#include <cstdint>\n#include <cstddef>\n' + types + commands + shim + boot_advertising_state + '\n' + bond_reset + staging + dispatcher + lease + release + advertising_control + advertising_tick + cases)
     subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I',
                     str(sketch), str(cpp), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
