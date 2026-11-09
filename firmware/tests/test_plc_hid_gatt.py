@@ -13,6 +13,7 @@ for name in ('matchCommand', 'cmdFromBinary4', 'isClientReading'):
     commands += '\n' + re.search(r'^(?:static inline |static )?\w+ ' + name + r'\([^\n]*\) \{\n.*?^\}', ino, re.M | re.S).group()
 staging = source[source.index('struct PreparedWrite {'):source.index('static probe::Sessions snapshot()')]
 dispatcher = source[source.index('static void sendClientReady('):source.index('static uint8_t reportMap[]')]
+bond_reset = source[source.index('static probe::ReceiverIdentity bondIdentity('):source.index('static probe::ReceiverIdentity authenticatedIdentity(')]
 lease = source[source.index('static void maintenanceLeaseTick()'):source.index('static void tick()')]
 release = source[source.index('static const char *releaseMaintenanceLink('):source.index('static bool handle(')]
 shim = r'''
@@ -20,6 +21,8 @@ shim = r'''
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cctype>
+#include <cstdlib>
 #include <string>
 #include <vector>
 using std::max;
@@ -58,6 +61,7 @@ bool pairWindow=false, blockedState=false;
 bool blocked(){return blockedState;}
 struct SerialStub {
   template <typename... Args> void printf(const char*, Args...) {}
+  void println(const char*) {}
 } Serial;
 OtaState gOtaState=OTA_IDLE;
 std::vector<uint8_t> disconnected;
@@ -77,6 +81,24 @@ bool queueTargetFrame(const uint8_t *data,size_t len,std::nullptr_t,TxTarget,uin
   replies.emplace_back(generation,std::string(reinterpret_cast<const char*>(data),len));
   return true;
 }
+constexpr int ESP_BLE_ID_KEY_MASK=2;
+struct esp_ble_bond_dev_t {
+  uint8_t bd_addr[6], bd_addr_type;
+  struct {
+    int key_mask;
+    struct { uint8_t addr_type, static_addr[6], irk[16]; } pid_key;
+  } bond_key;
+};
+std::vector<esp_ble_bond_dev_t> bonds;
+std::vector<uint8_t> removedBonds;
+int esp_ble_get_bond_device_num() { return bonds.size(); }
+int esp_ble_get_bond_device_list(int* count,esp_ble_bond_dev_t* out) {
+  std::copy_n(bonds.begin(),*count,out);
+  return ESP_OK;
+}
+int esp_ble_remove_bond_device(const uint8_t* address) { removedBonds.push_back(address[0]); return ESP_OK; }
+const char* esp_err_to_name(int) { return "ERROR"; }
+bool aesIdentity(const uint8_t*,const uint8_t*,uint8_t*) { return false; }
 '''
 cases = r'''
 void write(uint16_t conn,uint16_t handle,const std::string &data, bool prep=false, uint16_t offset=0) {
@@ -313,11 +335,29 @@ int main() {
   assert(!peers.bindKeyboard(reassignment));
   write(1,31,enabled);
   assert(peers.bindKeyboard(reassignment) && peers.keyboardReady(reassignment));
+
+  // The USB command is limited to one valid, disconnected peer address.
+  bonds.resize(2);
+  std::memcpy(bonds[0].bd_addr,appAddress,6);
+  std::memcpy(bonds[1].bd_addr,hidAddress,6);
+  forgetBondFromUsb("02:00:00:00:00:00"); // Still assigned and connected.
+  assert(removedBonds.empty());
+  savedReceiver={};
+  forgetBondFromUsb("01:00:00:00:00:00"); // Active maintenance.
+  forgetBondFromUsb("02:00:00:00:00:00"); // Active keyboard.
+  assert(removedBonds.empty());
+  peers.disconnect(reassignment.id);
+  forgetBondFromUsb("+2:00:00:00:00:00");
+  forgetBondFromUsb("03:00:00:00:00:00");
+  assert(removedBonds.empty());
+  forgetBondFromUsb("02:00:00:00:00:00");
+  assert(removedBonds==std::vector<uint8_t>{hidAddress[0]});
+  assert(peers.uartReady(maintenance));
 }
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
     cpp, exe = Path(tmp) / 'test.cpp', Path(tmp) / 'test'
-    cpp.write_text('#include <cstdint>\n#include <cstddef>\n' + types + commands + shim + staging + dispatcher + lease + release + cases)
+    cpp.write_text('#include <cstdint>\n#include <cstddef>\n' + types + commands + shim + bond_reset + staging + dispatcher + lease + release + cases)
     subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I',
                     str(sketch), str(cpp), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
