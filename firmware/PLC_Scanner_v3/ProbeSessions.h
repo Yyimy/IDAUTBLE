@@ -6,7 +6,7 @@
 
 namespace probe {
 static constexpr uint16_t kNoConnection = 0xffff;
-enum class Role : uint8_t { Unassigned, Maintenance, Keyboard };
+enum class Role : uint8_t { Unassigned, Maintenance, Keyboard, Client };
 struct Token {
   uint16_t id = kNoConnection;
   uint32_t generation = 0;
@@ -99,16 +99,28 @@ class Sessions {
   }
   bool claimMaintenance(Token token) {
     auto *p = find(token);
-    if (!p || p->expiring || !p->secure || !p->uartNotify || p->role == Role::Keyboard) return false;
+    if (!p || p->expiring || !p->secure || !p->uartNotify || (p->role == Role::Keyboard || p->role == Role::Client)) return false;
     auto existing = role(Role::Maintenance);
     if (existing.id != kNoConnection && !(existing == token)) return false;
     p->role = Role::Maintenance;
     return true;
   }
+  // Clients must opt in explicitly. A CCCD subscription grants no role.
+  bool claimClient(Token token) {
+    auto *p = find(token);
+    if (!p || p->expiring || !p->secure || !p->uartNotify || p->role != Role::Unassigned) return false;
+    if (role(Role::Client).id != kNoConnection) return false;
+    p->role = Role::Client;
+    return true;
+  }
+  bool clientReady(Token token) const {
+    const auto *p = find(token);
+    return p && p->role == Role::Client && p->secure && p->uartNotify;
+  }
   // Explicit admin action: a CCCD write by itself never becomes a keyboard role.
   bool bindKeyboard(Token token) {
     auto *p = find(token);
-    if (!p || p->expiring || !p->secure || p->role == Role::Maintenance || !subscription(*p)) return false;
+    if (!p || p->expiring || !p->secure || (p->role == Role::Maintenance || p->role == Role::Client) || !subscription(*p)) return false;
     auto existing = role(Role::Keyboard);
     if (existing.id != kNoConnection && !(existing == token)) return false;
     p->role = Role::Keyboard;
