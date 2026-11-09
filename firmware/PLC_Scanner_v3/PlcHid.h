@@ -294,6 +294,7 @@ class ServerCallbacks : public BLEServerCallbacks {
 };
 
 class SecurityCallbacks : public BLESecurityCallbacks {
+ public:
   uint32_t onPassKeyRequest() override { return gMaintenancePin.toInt(); }
   void onPassKeyNotify(uint32_t) override {}
   bool onSecurityRequest() override { return true; }
