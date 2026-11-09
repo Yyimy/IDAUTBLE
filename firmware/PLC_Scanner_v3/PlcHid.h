@@ -4,6 +4,7 @@
 #include <BLEHIDDevice.h>
 #include <cctype>
 #include <cstdlib>
+#include <esp_mac.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/sha256.h>
 #include "ProbeKeyboard.h"
@@ -707,6 +708,20 @@ static void setMaintenanceAdvertisement(bool enabled) {
 }
 
 static void begin(const String &name) {
+  // ET40 recovery trial: present a fresh local Bluetooth identity. Keep the
+  // Wi-Fi/base MAC and the existing bond storage intact for the control build.
+  uint8_t btMac[6];
+  esp_err_t macResult = esp_read_mac(btMac, ESP_MAC_BT);
+  if (macResult == ESP_OK) {
+    btMac[0] = (btMac[0] | 0x02) & 0xfe;
+    btMac[5] ^= 0x50;
+    macResult = esp_iface_mac_addr_set(btMac, ESP_MAC_BT);
+  }
+  if (macResult != ESP_OK) {
+    Serial.printf("BLE ET40 TEST identity setup failed: %s\n", esp_err_to_name(macResult));
+    return;
+  }
+  Serial.println("BLE ET40 TEST alternate Bluetooth identity active");
   loadReceiver();
   BLEDevice::init(name);
   applyConfiguredPin();
