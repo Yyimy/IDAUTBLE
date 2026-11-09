@@ -137,6 +137,11 @@ class Sessions {
     if (!p->bootSeen) p->bootNotify = (saved.subscriptions & 2) != 0;
     return true;
   }
+  bool restoreForgottenSubscriptions(Token token, const ReceiverIdentity &forgotten) {
+    const auto *p = find(token);
+    return p && p->role == Role::Unassigned && sameBond(p->identity, forgotten) &&
+        restoreSubscriptions(token, forgotten);
+  }
   bool resumeSavedKeyboard(Token token, const ReceiverIdentity &saved) {
     auto *p = find(token);
     if (!p || p->role != Role::Client || p->uartNotify || !p->secure ||

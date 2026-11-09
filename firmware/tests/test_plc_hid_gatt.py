@@ -39,6 +39,7 @@ std::atomic<esp_gatt_if_t> gattInterface{0};
 uint16_t uartCccd=21,inputCccd=31,bootCccd=32,outputHandle=33,bootOutputHandle=34,protocolHandle=35,controlHandle=36;
 probe::Sessions peers;
 probe::ReceiverIdentity savedReceiver;
+probe::ReceiverIdentity forgottenSubscriptions;
 probe::Token pendingClientSwitch;
 uint32_t gBleSession=0;
 uint32_t nowMs=0;
@@ -291,6 +292,27 @@ int main() {
   write(1,21,disabled);
   assert(!peers.resumeSavedKeyboard(keyboard,savedReceiver)); // Explicit disable wins.
   assert(peers.role(probe::Role::Client)==keyboard);
+
+  assert(peers.disconnect(keyboard.id));
+  const auto reassignment=peers.connect(1,hidAddress);
+  peers.secureAddress(hidAddress,true);
+  forgottenSubscriptions=savedReceiver;
+  forgottenSubscriptions.hasBondTag=true;
+  forgottenSubscriptions.bondTag[0]=1;
+  auto *rejoined=peers.find(reassignment);
+  rejoined->identity=forgottenSubscriptions;
+  rejoined->identity.bondTag[0]=2;
+  assert(!peers.restoreForgottenSubscriptions(reassignment,forgottenSubscriptions));
+  assert(!peers.bindKeyboard(reassignment));
+  rejoined->identity.bondTag[0]=1;
+  assert(peers.restoreForgottenSubscriptions(reassignment,forgottenSubscriptions));
+  assert(!peers.keyboardReady(reassignment)); // Only the assignment window binds it.
+  write(1,31,disabled);
+  assert(forgottenSubscriptions.subscriptions==0);
+  assert(peers.restoreForgottenSubscriptions(reassignment,forgottenSubscriptions));
+  assert(!peers.bindKeyboard(reassignment));
+  write(1,31,enabled);
+  assert(peers.bindKeyboard(reassignment) && peers.keyboardReady(reassignment));
 }
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
