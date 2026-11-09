@@ -237,6 +237,7 @@ static void receiverTick() {
 
 static const char *roleName(probe::Role role) {
   if (role == probe::Role::Maintenance) return "MAINTENANCE";
+  if (role == probe::Role::Client) return "CLIENT";
   if (role == probe::Role::Keyboard) return "KEYBOARD";
   return "UNASSIGNED";
 }
@@ -500,8 +501,14 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
     if (handle == controlHandle && data[0] <= 1) p->suspended = data[0] == 0;
     if (handle == outputHandle || handle == bootOutputHandle) p->capsLock = data[0] & 0x02;
   }
-  const bool claimed = pCharacteristic && handle == pCharacteristic->getHandle() &&
-                       peers.claimMaintenance(p->token);
+  // The CLIENT handshake is read-only and cannot claim maintenance privileges.
+  constexpr char clientHello[] = "CLIENT\r\n";
+  const bool isClientHello = pCharacteristic && handle == pCharacteristic->getHandle() &&
+      !write.is_prep && !write.offset && length == sizeof(clientHello) - 1 &&
+      memcmp(data, clientHello, sizeof(clientHello) - 1) == 0;
+  const bool clientClaimed = isClientHello && peers.claimClient(p->token);
+  const bool claimed = !isClientHello && pCharacteristic &&
+      handle == pCharacteristic->getHandle() && peers.claimMaintenance(p->token);
   const auto token = p->token;
   if (claimed) {
     p->maintenanceActivityMs = millis();
@@ -524,6 +531,14 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
     }
   }
   portEXIT_CRITICAL(&peerMux);
+  if (isClientHello) {
+    if (clientClaimed) {
+      const uint8_t ok[] = {0x06, 'C','L','I','E','N','T','=','R','E','A','D','Y',13,10};
+      queueTargetFrame(ok, sizeof(ok), nullptr, TX_BLE_ONLY, token.generation);
+      Serial.printf("BLE CLIENT READY id=%u generation=%lu\n", token.id, (unsigned long)token.generation);
+    }
+    return;
+  }
   if (claimed && !write.is_prep && !write.offset && length) {
     constexpr char ping[] = "MAINTPING\r\n";
     if (length == sizeof(ping) - 1 && memcmp(data, ping, length) == 0) return;
@@ -971,6 +986,13 @@ static void tick() {
   }
 }
 
+static uint32_t clientSession() {
+  const auto state = snapshot();
+  const auto client = state.role(probe::Role::Client);
+  return state.clientReady(client) ? client.generation : 0;
+}
+static bool clientCanNotify() { return clientSession() != 0; }
+
 static bool canNotify(uint32_t session) {
   const auto state = snapshot();
   const auto owner = state.role(probe::Role::Maintenance);
@@ -980,12 +1002,15 @@ static bool canNotify(uint32_t session) {
 // Returns bytes submitted, zero for congestion, or -1 for a vanished session.
 static int notify(uint32_t session, uint8_t *bytes, size_t remaining) {
   const auto state = snapshot();
-  const auto owner = state.role(probe::Role::Maintenance);
-  if (owner.generation != session || !state.uartReady(owner) || !ready) return -1;
-  const auto *peer = state.find(owner);
+  const auto maintenance = state.role(probe::Role::Maintenance);
+  const auto client = state.role(probe::Role::Client);
+  const auto target = maintenance.generation == session && state.uartReady(maintenance)
+      ? maintenance : (client.generation == session && state.clientReady(client) ? client : probe::Token{});
+  if (target.id == probe::kNoConnection || !ready) return -1;
+  const auto *peer = state.find(target);
   if (peer->congested) return 0;
   const auto size = min(remaining, size_t(peer->mtu - 3));
-  const auto rc = esp_ble_gatts_send_indicate(gattInterface.load(), owner.id,
+  const auto rc = esp_ble_gatts_send_indicate(gattInterface.load(), target.id,
       pCharacteristic->getHandle(), size, bytes, false);
   return rc == ESP_OK ? int(size) : -1;
 }
