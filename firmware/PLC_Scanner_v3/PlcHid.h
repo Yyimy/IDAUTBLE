@@ -817,19 +817,7 @@ static bool handle(const String &text, uint8_t source) {
     else if (!saveOutputFormat(candidate)) replyLine(false, "ERR=HIDCFG_STORAGE");
     else replyLine(true, probe::outputWire(outputFormat).c_str());
   } else if (text == "HIDFORGET=1") {
-    probe::ReceiverIdentity recent;
-    for (const auto &p : state.peers) {
-      if (!p.used || !p.secure || !p.identity.hasBondTag ||
-          (p.role != probe::Role::Keyboard && p.role != probe::Role::Client) ||
-          !probe::sameIdentity(p.identity, savedReceiver)) continue;
-      recent = p.identity;
-      recent.subscriptionsKnown = true;
-      const bool sameBond = probe::sameBond(p.identity, savedReceiver);
-      const bool report = p.reportSeen ? p.reportNotify : sameBond && (savedReceiver.subscriptions & 1);
-      const bool boot = p.bootSeen ? p.bootNotify : sameBond && (savedReceiver.subscriptions & 2);
-      recent.subscriptions = (report ? 1 : 0) | (boot ? 2 : 0);
-      break;
-    }
+    const auto previous = savedReceiver;
     if (!forgetReceiver()) replyLine(false, "ERR=HID_STORAGE");
     else {
       pairWindow = false;
@@ -837,10 +825,24 @@ static bool handle(const String &text, uint8_t source) {
       keyboard.cancel();
       clearReadings();
       portENTER_CRITICAL(&peerMux);
-      forgottenSubscriptions = recent;
+      forgottenSubscriptions = {};
+      for (const auto &p : peers.peers) {
+        if (!p.used || !p.secure || !p.identity.hasBondTag ||
+            (p.role != probe::Role::Keyboard && p.role != probe::Role::Client) ||
+            !probe::sameIdentity(p.identity, previous)) continue;
+        forgottenSubscriptions = p.identity;
+        forgottenSubscriptions.subscriptionsKnown = true;
+        const bool sameBond = probe::sameBond(p.identity, previous);
+        const bool report = p.reportSeen ? p.reportNotify : sameBond && (previous.subscriptions & 1);
+        const bool boot = p.bootSeen ? p.bootNotify : sameBond && (previous.subscriptions & 2);
+        forgottenSubscriptions.subscriptions = (report ? 1 : 0) | (boot ? 2 : 0);
+        break;
+      }
       if (!keyboard.busy()) peers.unbindKeyboard();
       else unbindAfterRelease = true;
+      const bool remembered = forgottenSubscriptions.subscriptions != 0;
       portEXIT_CRITICAL(&peerMux);
+      Serial.printf("HID FORGOTTEN remembered_subscriptions=%u\n", remembered);
       replyLine(true, "HIDTEST=FORGOTTEN");
       replyLine(true, receiverText());
     }
