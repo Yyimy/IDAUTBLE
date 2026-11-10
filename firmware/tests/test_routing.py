@@ -45,6 +45,12 @@ void otaTask(void*){}
 BaseType_t xTaskCreatePinnedToCore(void(*)(void*),const char*,int,void*,int,void **handle,int){*handle=(void*)1;return pdPASS;}
 String otaGetLastErr(){return "";}
 static void replyLine(bool,const String&);
+namespace plcHid {
+struct ShortcutPeer { uint32_t generation; };
+uint32_t hidGeneration=0;
+ShortcutPeer shortcutReceiver(){return {hidGeneration};}
+void sendHotkey(ShortcutPeer){replyLine(true,"HIDHOTKEY=CTRL+ALT+L");}
+}
 void sendDeviceStatus(){replyLine(true,"STATUS=1;FW=TEST;ID=TRUCK-1");}
 void handleIdentityCommand(const String&,uint8_t){replyLine(true,"ID=TRUCK-1;HWID=AABBCCDDEEFF;NAME=TRUCK-1");}
 '''
@@ -61,6 +67,7 @@ std::string clientBytes(){
 void drain(){for(int i=0;i<700;++i){nowMs+=16;txTick();}}
 void fresh(){drain();commands.clear();txQueue.clear();characteristic.notifications.clear();
  plcHid::clientGeneration=0;plcHid::clientCharacteristic.notifications.clear();
+ plcHid::hidGeneration=0;
  gTcpClient.sent.clear();gTcpClient.rx.clear();gTcpClient.up=gTcpConnected=true;gTcpClient.limit=1000;gTcpClient.blockedCalls=0;
  deviceConnected=gBleSecure=true;gCccd->enabled=true;gBleSession=10;gTcpSession=20;gOtaBleSession=10;
  gOtaTaskHandle=nullptr;gOtaState=OTA_IDLE;gMaintenanceAuthorized=false;gMaintenancePin=PLC_MAINTENANCE_PIN;gAuthFails=0;gAuthBlockedUntil=0;gReplyContext={TX_BOTH,0};
@@ -125,6 +132,13 @@ int main(){
  fresh();plcHid::clientGeneration=30;gOtaState=OTA_WAIT_PARAMS;
  run(cmd(BLECMD_L,CMD_SOURCE_CLIENT));drain();
  CHECK(clientBytes().find("ERR=MAINTENANCE_MODE")!=std::string::npos && bleBytes().empty() && gTcpClient.sent.empty());
+ // The HID control channel is private and tied to the assigned generation.
+ fresh();plcHid::hidGeneration=42;
+ BleCmd hid{};hid.type=BLECMD_TEXT;hid.source=CMD_SOURCE_HID;hid.session=42;
+ run(hid);CHECK(txQueue.size()==1 && txQueue.back().target==TX_BLE_ONLY && txQueue.back().session==42);
+ drain();CHECK(bleBytes().empty()&&gTcpClient.sent.empty());
+ hid.type=BLECMD_L;run(hid);CHECK(gScanCount==1 && txQueue.back().session==42);
+ plcHid::hidGeneration=43;run(hid);CHECK(gScanCount==1);
  // The CLIENT receives the complete reading, while STATUS stays private to maintenance.
  fresh();plcHid::clientGeneration=30;gTcpConnected=gTcpClient.up=false;
  run(cmd(BLECMD_L,0));scanTick();
