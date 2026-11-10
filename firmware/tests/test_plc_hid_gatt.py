@@ -45,7 +45,7 @@ std::atomic<esp_gatt_if_t> gattInterface{0};
 uint16_t uartCccd=21,inputCccd=31,bootCccd=32,outputHandle=33,bootOutputHandle=34,protocolHandle=35,controlHandle=36;
 probe::Sessions peers;
 probe::ReceiverIdentity savedReceiver;
-probe::ReceiverIdentity forgottenSubscriptions;
+probe::ReceiverIdentity receiverToRemove;
 probe::Token pendingClientSwitch;
 uint32_t gBleSession=0;
 uint32_t nowMs=0;
@@ -346,20 +346,9 @@ int main() {
   assert(peers.disconnect(keyboard.id));
   const auto reassignment=peers.connect(1,hidAddress);
   peers.secureAddress(hidAddress,true);
-  forgottenSubscriptions=savedReceiver;
-  forgottenSubscriptions.hasBondTag=true;
-  forgottenSubscriptions.bondTag[0]=1;
-  auto *rejoined=peers.find(reassignment);
-  rejoined->identity=forgottenSubscriptions;
-  rejoined->identity.bondTag[0]=2;
-  assert(!peers.restoreForgottenSubscriptions(reassignment,forgottenSubscriptions));
+  peers.find(reassignment)->identity=savedReceiver;
   assert(!peers.bindKeyboard(reassignment));
-  rejoined->identity.bondTag[0]=1;
-  assert(peers.restoreForgottenSubscriptions(reassignment,forgottenSubscriptions));
-  assert(!peers.keyboardReady(reassignment)); // Only the assignment window binds it.
   write(1,31,disabled);
-  assert(forgottenSubscriptions.subscriptions==0);
-  assert(peers.restoreForgottenSubscriptions(reassignment,forgottenSubscriptions));
   assert(!peers.bindKeyboard(reassignment));
   write(1,31,enabled);
   assert(peers.bindKeyboard(reassignment) && peers.keyboardReady(reassignment));
@@ -386,6 +375,29 @@ int main() {
   assert(removedBonds.empty());
   forgetBondFromUsb("02:00:00:00:00:00");
   assert(removedBonds==std::vector<uint8_t>{hidAddress[0]});
+  assert(peers.uartReady(maintenance));
+
+  // Forget records survive boot but are never decoded as an assignment.
+  const auto target=bondIdentity(bonds[1]);
+  uint8_t removalRecord[probe::receiverRecordSize];
+  assert(probe::encodeReceiver(target,removalRecord,true));
+  assert(!probe::decodeReceiver(removalRecord,sizeof(removalRecord)).valid);
+  receiverToRemove=probe::decodeReceiver(removalRecord,sizeof(removalRecord),true);
+  assert(probe::sameIdentity(receiverToRemove,target));
+  assert(!receiverToRemove.subscriptionsKnown);
+  removedBonds.clear();
+  forgetBondFromUsb("02:00:00:00:00:00"); // Pending app request owns removal.
+  assert(removedBonds.empty());
+  assert(!receiverBondRemoved(bondIdentity(bonds[0]),peers)); // Active maintenance is protected.
+  assert(removedBonds.empty());
+  assert(!receiverBondRemoved(receiverToRemove,peers)); // Request accepted, bond still present.
+  assert(removedBonds==std::vector<uint8_t>{hidAddress[0]});
+  bonds.pop_back();
+  const auto staleLink=peers.connect(1,hidAddress);
+  assert(!receiverBondRemoved(receiverToRemove,peers));
+  assert(disconnected.back()==hidAddress[0]);
+  peers.disconnect(staleLink.id);
+  assert(receiverBondRemoved(receiverToRemove,peers));
   assert(peers.uartReady(maintenance));
 
   // The diagnostic build's first advertisement is neutral.
