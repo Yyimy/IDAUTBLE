@@ -656,11 +656,13 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
   // Registered CLIENT writes are limited to the binary reading commands.
   constexpr char clientHello[] = "CLIENT\r\n";
   const bool uartWrite = pCharacteristic && handle == pCharacteristic->getHandle();
-  if (uartWrite && !write.is_prep && !write.offset && peers.shortcutReady(p->token)) {
+  if (uartWrite && !write.is_prep && !write.offset) {
     constexpr char query[] = "HIDHOTKEY?\r\n";
+    constexpr char trigger[] = "HIDREAD\r\n";
     const bool getHotkey = length == sizeof(query) - 1 && !memcmp(data, query, length);
-    const bool read = length == sizeof(CMD_L) && !memcmp(data, CMD_L, length);
+    const bool read = length == sizeof(trigger) - 1 && !memcmp(data, trigger, length);
     if (getHotkey || read) {
+      if (!peers.shortcutReady(p->token)) { portEXIT_CRITICAL(&peerMux); return; }
       BleCmd cmd = {};
       cmd.type = getHotkey ? BLECMD_TEXT : BLECMD_L;
       cmd.source = CMD_SOURCE_HID;

@@ -313,6 +313,10 @@ int main() {
   assert(keyboard.generation!=client.generation);
   peers.secureAddress(hidAddress,true);
   write(1,21,enabled);
+  queued.clear();
+  write(1,20,"HIDHOTKEY?\r\n");
+  write(1,20,"HIDREAD\r\n");
+  assert(queued.empty() && peers.find(keyboard)->role==probe::Role::Unassigned);
   write(1,20,"CLIENT\r\n");
   assert(!peers.clientReady(keyboard) && replies.size()==1);
   write(1,31,enabled);
@@ -322,10 +326,10 @@ int main() {
   // Only the assigned HID receiver can query the shortcut and request a full scan.
   queued.clear();
   write(1,20,"HIDHOTKEY?\r\n");
-  write(1,20,"\x1b" "L\r\n");
+  write(1,20,"HIDREAD\r\n");
   write(1,20,"AUTH=123456\r\n");
   write(1,20,"\x1b" "D\r\n");
-  write(1,20,"\x1b" "L\r\n",true);
+  write(1,20,"HIDREAD\r\n",true);
   assert(queued.size()==2 && queued[0].type==BLECMD_TEXT && queued[1].type==BLECMD_L);
   for (const auto &cmd : queued) assert(cmd.source==CMD_SOURCE_HID && cmd.session==keyboard.generation);
   assert(peers.keyboardReady(keyboard) && peers.uartReady(maintenance));
