@@ -1,0 +1,48 @@
+name: Verify Android and package Windows HID shortcut
+on:
+  push:
+    branches: [verify/hid-shortcut]
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android platform 36 if needed
+        run: |
+          if [ ! -f "$ANDROID_HOME/platforms/android-36/android.jar" ]; then
+            sdkmanager "platforms;android-36"
+          fi
+      - run: ./gradlew testDebugUnitTest assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Android-HID-shortcut
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+  windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: tools/windows-hid-shortcut
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt "pyinstaller>=6,<7"
+      - name: Check the shortcut mapping
+        run: python -c "from idaut_lectura import hotkey_codes; assert hotkey_codes('CTRL+ALT+L') == (0x4003, 76)"
+      - run: python -m PyInstaller --noconfirm --onefile --windowed --name IDAUT_Lectura --collect-submodules bleak.backends.winrt --collect-submodules pystray idaut_lectura.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IDAUT_Lectura-Windows
+          path: tools/windows-hid-shortcut/dist/IDAUT_Lectura.exe
+          if-no-files-found: error
