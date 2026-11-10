@@ -3294,7 +3294,7 @@ static void handleTextCommand(const BleCmd &cmd) {
     replyLine(true, "FW=" FIRMWARE_VERSION ";PROTO=V2;ACKMODE=" +
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
-                        (cmd.source == 0 ? ";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1" : ""));
+                        (cmd.source == 0 ? ";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1" : ""));
     return;
   }
   if (s == "STATUS?") {

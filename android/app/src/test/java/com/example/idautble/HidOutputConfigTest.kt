@@ -35,6 +35,25 @@ class HidOutputConfigTest {
         assertEquals(cfg, parseHidOutputConfig(cfg.wire()))
         assertEquals("PALLET123{TAB}LOC01{ENTER}", cfg.preview())
     }
+    @Test fun initialKeysAreSentBeforeTheFirstSelectedField() {
+        val config = HidOutputConfig(prefix = decodeHidSeparator("{TAB}{ENTER}{RIGHT}")!!)
+        assertEquals("HIDCFG=1;FIELDS=PU;SEPHEX=09;END=ENTER;LAYOUT=US;PREHEX=090A80", config.wire())
+        assertEquals(config, parseHidOutputConfig(config.wire()))
+        assertEquals("{TAB}{ENTER}{RIGHT}PALLET123{TAB}LOC01{ENTER}", config.preview())
+        assertEquals("{TAB}{ENTER}{RIGHT}LOC01{ENTER}", config.copy(fields = "U").preview())
+        assertEquals("{TAB}{ENTER}{RIGHT}PALLET123{ENTER}", config.copy(fields = "P").preview())
+    }
+    @Test fun initialKeysCanBeClearedAndAreStrictlyValidated() {
+        val config = HidOutputConfig()
+        assertTrue(config.wire(includePrefix = true).endsWith(";PREHEX=-"))
+        assertEquals(config, parseHidOutputConfig(config.wire(includePrefix = true)))
+        assertEquals(config, parseHidOutputConfig(config.wire()))
+        val longest = HidOutputConfig(prefix = "\t".repeat(32), separator = "\n".repeat(32), ending = "BACKSPACE")
+        assertEquals(longest, parseHidOutputConfig(longest.wire()))
+        listOf("", "00", "0a", "1", "98", "09;PREHEX=-", "09".repeat(33)).forEach { hex ->
+            assertNull(parseHidOutputConfig(config.wire() + ";PREHEX=$hex"))
+        }
+    }
     @Test fun keyCombinationsAndLiteralDelimiters() {
         val bytes = "\n\n;=|\t {}"
         assertEquals(bytes, decodeHidSeparator(hidSeparatorPattern(bytes)))

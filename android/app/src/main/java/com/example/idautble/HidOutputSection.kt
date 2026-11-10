@@ -14,39 +14,49 @@ import androidx.compose.ui.unit.sp
 
 private val hidFields = mapOf("P" to "Pallet", "U" to "Location", "PU" to "Both")
 private val hidLayouts = mapOf("US" to "US", "ES" to "Spanish")
+private enum class HidSequence(val title: String) {
+    Prefix("Keys before the first code"), Separator("Separator between fields"),
+}
 
 @Composable
 fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Boolean, onAction: (HidOutputConfig?) -> Unit) {
     if (!state.supported) return
     var expanded by rememberSaveable { mutableStateOf(false) }
     var fields by remember { mutableStateOf("PU") }
+    var prefixPattern by remember { mutableStateOf("") }
     var pattern by remember { mutableStateOf("{TAB}") }
     var ending by remember { mutableStateOf("ENTER") }
     var layout by remember { mutableStateOf("US") }
-    var editSeparator by remember { mutableStateOf(false) }
+    var editingSequence by remember { mutableStateOf<HidSequence?>(null) }
     LaunchedEffect(state.revision) {
         state.config?.let {
             fields = it.fields
+            prefixPattern = hidSeparatorPattern(it.prefix)
             pattern = hidSeparatorPattern(it.separator)
             ending = it.ending
             layout = it.layout
         }
     }
     val endings = hidEndingOptions(state.extendedKeys)
-    val draft = decodeHidSeparator(pattern, allowArrows = state.arrowSeparators || state.extendedKeys, extended = state.extendedKeys)
-        ?.let { HidOutputConfig(fields, it, ending, layout) }
+    val allowArrows = state.arrowSeparators || state.extendedKeys
+    val prefix = if (state.prefixKeys) decodeHidSeparator(prefixPattern, allowArrows, state.extendedKeys) else ""
+    val separator = decodeHidSeparator(pattern, allowArrows, state.extendedKeys)
+    val draft = if (prefix != null && separator != null) HidOutputConfig(fields, separator, ending, layout, prefix) else null
     val enabled = connected && !state.busy
     CollapsibleSettingsSection(
         if (production) "HID OUTPUT" else "HID OUTPUT · PROTOTYPE",
         "Pallet / location · keyboard format", expanded, { expanded = !expanded },
     ) {
         HidSettingRow("Fields") { HidValueMenu(hidFields, fields, enabled) { fields = it } }
+        if (state.prefixKeys) HidSettingRow("Initial keys") {
+            HidPickerButton(prefixPattern.ifEmpty { "None" }, enabled) { editingSequence = HidSequence.Prefix }
+        }
         HidSettingRow("Separator") {
-            HidPickerButton(pattern.ifEmpty { "None" }, enabled && fields == "PU") { editSeparator = true }
+            HidPickerButton(pattern.ifEmpty { "None" }, enabled && fields == "PU") { editingSequence = HidSequence.Separator }
         }
         HidSettingRow("Final key") { HidValueMenu(endings, ending, enabled) { ending = it } }
         HidSettingRow("Keyboard layout") { HidValueMenu(hidLayouts, layout, enabled) { layout = it } }
-        Text("Preview: ${draft?.preview() ?: "Invalid separator"}", fontFamily = FontFamily.Monospace,
+        Text("Preview: ${draft?.preview() ?: "Invalid key sequence"}", fontFamily = FontFamily.Monospace,
             fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (state.message.isNotBlank()) Text(state.message, fontSize = 11.sp)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -56,12 +66,17 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
         }
         Text("Match the receiver keyboard layout. Saving requires PIN / ACCESS.", fontSize = 11.sp)
     }
-    if (editSeparator && enabled) HidSeparatorDialog(
-        initial = pattern,
-        allowArrows = state.arrowSeparators || state.extendedKeys,
+    val sequence = editingSequence
+    if (sequence != null && enabled) HidSequenceDialog(
+        title = sequence.title,
+        initial = if (sequence == HidSequence.Prefix) prefixPattern else pattern,
+        allowArrows = allowArrows,
         extended = state.extendedKeys,
-        onDismiss = { editSeparator = false },
-        onApply = { pattern = it; editSeparator = false },
+        onDismiss = { editingSequence = null },
+        onApply = {
+            if (sequence == HidSequence.Prefix) prefixPattern = it else pattern = it
+            editingSequence = null
+        },
     )
 }
 
@@ -96,14 +111,14 @@ private fun HidValueMenu(options: Map<String, String>, value: String, enabled: B
 }
 
 @Composable
-private fun HidSeparatorDialog(initial: String, allowArrows: Boolean, extended: Boolean, onDismiss: () -> Unit, onApply: (String) -> Unit) {
+private fun HidSequenceDialog(title: String, initial: String, allowArrows: Boolean, extended: Boolean, onDismiss: () -> Unit, onApply: (String) -> Unit) {
     var draft by remember { mutableStateOf(initial) }
     var open by remember { mutableStateOf(false) }
     val decoded = decodeHidSeparator(draft, allowArrows, extended)
     val keys = hidSeparatorOptions(allowArrows, extended)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Separator between fields") },
+        title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(

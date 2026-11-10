@@ -69,13 +69,33 @@ int main(){
  }
  CHECK(!formatReading(f,"\x84","U",text));
  CHECK(!parseOutputFormat("HIDCFG=1;FIELDS=P;SEPHEX=-;END=F13;LAYOUT=US",f));
+#ifdef PLC_PREFIX_KEYS
+ const std::string legacy="HIDCFG=1;FIELDS=PU;SEPHEX=09;END=ENTER;LAYOUT=US";
+ const std::string withPrefix=legacy+";PREHEX=090A80";
+ bool prefixPresent=false;
+ CHECK(parseOutputFormat(withPrefix,f,&prefixPresent)&&prefixPresent);
+ CHECK(outputWire(f,true)==withPrefix);CHECK(outputWire(f)==legacy);
+ CHECK(formatReading(f,"P","U",text));CHECK(text=="\t\n\x80P\tU\n");
+ f.fields=1;CHECK(formatReading(f,"P",nullptr,text));CHECK(text=="\t\n\x80P\n");
+ f.fields=2;CHECK(formatReading(f,nullptr,"U",text));CHECK(text=="\t\n\x80U\n");
+ CHECK(!formatReading(f,nullptr,nullptr,text));CHECK(text.empty());
+ CHECK(parseOutputFormat(legacy+";PREHEX=-",f,&prefixPresent)&&prefixPresent&&!f.prefixLength);
+ CHECK(parseOutputFormat(legacy,f,&prefixPresent)&&!prefixPresent&&!f.prefixLength);
+ for(const auto *hex:{"", "00", "0a", "1", "98", "09;PREHEX=-"})
+   CHECK(!parseOutputFormat(legacy+";PREHEX="+hex,f));
+ const std::string maxSequence(64,'4');
+ const std::string maxConfig="HIDCFG=1;FIELDS=PU;SEPHEX="+maxSequence+";END=BACKSPACE;LAYOUT=US;PREHEX="+maxSequence;
+ CHECK(parseOutputFormat(maxConfig,f));CHECK(outputWire(f,true)==maxConfig);
+ CHECK(!parseOutputFormat(maxConfig+"44",f));
+#endif
  printf("PASS: %u HID format/payload/report assertions\n",checks);
 }
 '''
 for sketch in (root, root.parent / 'PLC_Scanner_v3'):
  with tempfile.TemporaryDirectory(prefix='hid_format_') as tmp:
   cpp=Path(tmp)/'test.cpp';exe=Path(tmp)/'test';cpp.write_text(code)
-  subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(sketch),str(cpp),'-o',str(exe)],check=True)
+  defines = ['-DPLC_PREFIX_KEYS'] if sketch.name == 'PLC_Scanner_v3' else []
+  subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer',*defines,'-I',str(sketch),str(cpp),'-o',str(exe)],check=True)
   subprocess.run([str(exe)],check=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0',UBSAN_OPTIONS='halt_on_error=1'))
 # The firmware routes the setter after the maintenance gate and refuses mid-text updates.
 s=(root/'HID_Coexistence_Probe.ino').read_text()
