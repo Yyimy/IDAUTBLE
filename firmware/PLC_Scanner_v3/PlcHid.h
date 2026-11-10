@@ -6,7 +6,6 @@
 #include <cstdlib>
 #include <esp_mac.h>
 #include <mbedtls/aes.h>
-#include <mbedtls/sha256.h>
 #include "ProbeKeyboard.h"
 #include "HidEarlyAuth.h"
 
@@ -25,7 +24,9 @@ static uint16_t protocolHandle, controlHandle;
 static probe::Keyboard keyboard;
 static Preferences receiverPreferences;
 static probe::ReceiverIdentity savedReceiver;
-static probe::ReceiverIdentity forgottenSubscriptions;
+static probe::ReceiverIdentity receiverToRemove;
+static probe::Token receiverRemovalOwner;
+static uint32_t nextReceiverRemovalAttempt;
 static probe::OutputFormat outputFormat;
 static bool receiverStorageReady, unbindAfterRelease;
 static std::atomic<bool> pairWindow{false};
@@ -122,8 +123,40 @@ static probe::ReceiverIdentity bondIdentity(const esp_ble_bond_dev_t &bond) {
   return probe::stableIdentity(id) ? id : probe::ReceiverIdentity{};
 }
 
+static bool matchesReceiver(const probe::Peer &peer, const probe::ReceiverIdentity &identity) {
+  return peer.used && (probe::sameIdentity(peer.identity, identity) ||
+      !memcmp(peer.address, identity.address, 6) || probe::resolvesRpa(identity, peer.address, aesIdentity));
+}
+
+// The GAP request is asynchronous. Completion requires an absent bond and
+// no remaining link to the former receiver. Never remove the maintenance peer.
+static bool receiverBondRemoved(const probe::ReceiverIdentity &identity, const probe::Sessions &state) {
+  const auto *owner = state.find(state.role(probe::Role::Maintenance));
+  if (owner && matchesReceiver(*owner, identity)) return false;
+  int count = esp_ble_get_bond_device_num();
+  esp_ble_bond_dev_t bonds[16] = {};
+  if (count < 0 || count > 16 || (count && esp_ble_get_bond_device_list(&count, bonds) != ESP_OK)) return false;
+  for (int i = 0; i < count; ++i) {
+    auto &bond = bonds[i];
+    if (!probe::sameIdentity(identity, bondIdentity(bond))) continue;
+    if (owner && !memcmp(owner->address, bond.bd_addr, 6)) return false;
+    const auto result = esp_ble_remove_bond_device(bond.bd_addr);
+    if (result != ESP_OK) Serial.printf("HID BOND REMOVE ERROR: %s\n", esp_err_to_name(result));
+    return false;
+  }
+  for (const auto &peer : state.peers) {
+    if (matchesReceiver(peer, identity)) {
+      uint8_t address[6];
+      memcpy(address, peer.address, sizeof(address));
+      esp_ble_gap_disconnect(address);
+      return false;
+    }
+  }
+  return true;
+}
+
 static void forgetBondFromUsb(const char *text) {
-  if (blocked() || pairWindow || savedReceiver.valid) {
+  if (blocked() || pairWindow || savedReceiver.valid || receiverToRemove.valid) {
     Serial.println("BLE BOND ERROR: stop pairing and clear the HID assignment first");
     return;
   }
@@ -180,9 +213,6 @@ static void forgetBondFromUsb(const char *text) {
   }
   const auto result = esp_ble_remove_bond_device(target->bd_addr);
   if (result == ESP_OK) {
-    portENTER_CRITICAL(&peerMux);
-    if (probe::sameIdentity(identity, forgottenSubscriptions)) forgottenSubscriptions = {};
-    portEXIT_CRITICAL(&peerMux);
     Serial.printf("BLE BOND REMOVAL REQUESTED address=%s\n", text);
   } else Serial.printf("BLE BOND ERROR: %s\n", esp_err_to_name(result));
 }
@@ -203,12 +233,7 @@ static probe::ReceiverIdentity authenticatedIdentity(const probe::Peer &peer) {
     const bool privateMatch = peer.addressType >= 1 && peer.addressType <= 3 &&
         probe::resolvesRpa(id, peer.address, aesIdentity);
     if (!direct && !canonical && !privateMatch) continue;
-    const auto &key = bonds[i].bond_key;
-    if ((key.key_mask & ESP_BLE_ENC_KEY_MASK) && key.penc_key.key_size >= 7) {
-      id.hasBondTag = mbedtls_sha256(key.penc_key.ltk, sizeof(key.penc_key.ltk), id.bondTag, 0) == 0;
-    }
     if (found.valid && !probe::sameIdentity(found, id)) return {}; // Ambiguous: fail closed.
-    if (found.valid && !probe::sameBond(found, id)) id.hasBondTag = false;
     found = id;
   }
   return found;
@@ -236,6 +261,12 @@ static void loadReceiver() {
   uint8_t record[probe::receiverRecordSize];
   if ((size == sizeof(record) || size == probe::legacyReceiverRecordSize) && receiverPreferences.getBytes("receiver", record, size) == size) {
     if (probe::clearedReceiverRecord(record, size)) { Serial.println("HID RECEIVER not assigned"); return; }
+    receiverToRemove = probe::decodeReceiver(record, size, true);
+    if (receiverToRemove.valid) {
+      nextReceiverRemovalAttempt = millis();
+      Serial.println("HID FORGET resuming bond removal");
+      return;
+    }
     savedReceiver = probe::decodeReceiver(record, size);
   }
   if (savedReceiver.valid && !savedReceiver.subscriptionsKnown) Serial.println("HID RECEIVER legacy subscriptions unknown; fresh HID subscription required");
@@ -248,18 +279,18 @@ static bool saveReceiver(const probe::ReceiverIdentity &identity) {
   savedReceiver = identity;
   return true;
 }
-static bool forgetReceiver() {
+static bool writeReceiverRemoval(const probe::ReceiverIdentity &identity = {}) {
   if (!receiverStorageReady) return false;
-  // A committed tombstone avoids treating a failed key lookup as successful erase.
-  uint8_t record[probe::receiverRecordSize]; probe::clearReceiverRecord(record);
-  if (receiverPreferences.putBytes("receiver", record, sizeof(record)) != sizeof(record)) return false;
-  savedReceiver = {};
-  return true;
+  uint8_t record[probe::receiverRecordSize];
+  if (identity.valid) {
+    if (!probe::encodeReceiver(identity, record, true)) return false;
+  } else probe::clearReceiverRecord(record);
+  return receiverPreferences.putBytes("receiver", record, sizeof(record)) == sizeof(record);
 }
 static String receiverText(bool extended = false) {
   auto s = snapshot();
   String text = "HIDRECEIVER=1;SAVED=" + String(savedReceiver.valid ? 1 : 0);
-  text += ";READY=" + String(s.keyboardReady(s.role(probe::Role::Keyboard)) ? 1 : 0);
+  text += ";READY=" + String(savedReceiver.valid && s.keyboardReady(s.role(probe::Role::Keyboard)) ? 1 : 0);
   text += ";WINDOW=" + String(pairWindow ? 1 : 0);
   // Legacy HIDRECEIVER? responses must remain byte-for-byte compatible with
   // deployed Android apps. Only the opt-in V2 query and Android flow extend it.
@@ -282,6 +313,23 @@ static String receiverText(bool extended = false) {
   }
   return text; // Never return IRK or other bond keys.
 }
+
+static void receiverRemovalTick() {
+  if (!receiverToRemove.valid || keyboard.busy()) return;
+  const uint32_t now = millis();
+  if (int32_t(now - nextReceiverRemovalAttempt) < 0) return;
+  nextReceiverRemovalAttempt = now + 1000;
+  const auto state = snapshot();
+  if (!receiverBondRemoved(receiverToRemove, state) || !writeReceiverRemoval()) return;
+  receiverToRemove = {};
+  Serial.println("HID FORGOTTEN bond_removed=1");
+  if (state.uartReady(receiverRemovalOwner)) {
+    peerReply(receiverRemovalOwner, true, "HIDTEST=FORGOTTEN");
+    peerReply(receiverRemovalOwner, true, receiverText());
+  }
+  receiverRemovalOwner = {};
+}
+
 static void receiverTick() {
   const uint32_t now = millis();
   if (uint32_t(now - lastIdentityCheck) < 250) return;
@@ -590,10 +638,6 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
       }
       if (handle == inputCccd) { p->reportNotify = enabled; p->reportSeen = true; }
       if (handle == bootCccd) { p->bootNotify = enabled; p->bootSeen = true; }
-      if (handle != uartCccd && !enabled && p->role != probe::Role::Maintenance &&
-          (!p->identity.valid || probe::sameBond(p->identity, forgottenSubscriptions))) {
-        forgottenSubscriptions.subscriptions &= ~(handle == inputCccd ? 1u : 2u);
-      }
     }
     portEXIT_CRITICAL(&peerMux);
     if (handle != uartCccd) {
@@ -840,12 +884,8 @@ static void pairTick() {
   }
   probe::Token candidate;
   unsigned candidates = 0;
-  portENTER_CRITICAL(&peerMux);
-  const auto remembered = forgottenSubscriptions;
-  portEXIT_CRITICAL(&peerMux);
   for (const auto &p : s.peers) {
     if (!p.used || p.expiring || p.role != probe::Role::Unassigned || !p.secure) continue;
-    s.restoreForgottenSubscriptions(p.token, remembered);
     if (!(p.reportProtocol ? p.reportNotify : p.bootNotify)) continue;
     candidate = p.token; ++candidates;
   }
@@ -861,7 +901,6 @@ static void pairTick() {
   portENTER_CRITICAL(&peerMux);
   auto *live = peers.find(candidate);
   const bool samePeer = live && probe::sameIdentity(live->identity, selectedIdentity);
-  const bool reusedSubscriptions = samePeer && peers.restoreForgottenSubscriptions(candidate, forgottenSubscriptions);
   const bool bound = samePeer && peers.bindKeyboard(candidate);
   if (bound) {
     selectedIdentity = live->identity;
@@ -878,9 +917,6 @@ static void pairTick() {
     restoreWindowsPairing();
     peerReply(pairOwner, false, "ERR=HID_STORAGE"); return;
   }
-  portENTER_CRITICAL(&peerMux);
-  forgottenSubscriptions = {};
-  portEXIT_CRITICAL(&peerMux);
   pairWindow = false;
   restoreWindowsPairing();
   const auto assigned = snapshot();
@@ -888,7 +924,6 @@ static void pairTick() {
     peerReply(pairOwner, false, "ERR=HID_DISCONNECTED_AFTER_SAVE");
     return;
   }
-  if (reusedSubscriptions) Serial.println("HID reassigned using confirmed subscriptions from the same bond");
   Serial.printf("HID BOUND id=%u generation=%lu (saved receiver)\n", candidate.id, (unsigned long)candidate.generation);
   peerReply(pairOwner, true, "HIDTEST=BOUND");
   peerReply(pairOwner, true, receiverText());
@@ -963,34 +998,28 @@ static bool handle(const String &text, uint8_t source) {
     else if (!saveOutputFormat(candidate)) replyLine(false, "ERR=HIDCFG_STORAGE");
     else replyLine(true, probe::outputWire(outputFormat).c_str());
   } else if (text == "HIDFORGET=1") {
-    const auto previous = savedReceiver;
-    if (!forgetReceiver()) replyLine(false, "ERR=HID_STORAGE");
+    if (receiverToRemove.valid) receiverRemovalOwner = owner;
+    else if (savedReceiver.valid && matchesReceiver(*state.find(owner), savedReceiver))
+      replyLine(false, "ERR=HID_RECEIVER_IN_MAINTENANCE");
+    else if (!writeReceiverRemoval(savedReceiver)) replyLine(false, "ERR=HID_STORAGE");
     else {
+      receiverToRemove = savedReceiver;
+      savedReceiver = {};
       pairWindow = false;
       restoreWindowsPairing();
       keyboard.cancel();
       clearReadings();
       portENTER_CRITICAL(&peerMux);
-      forgottenSubscriptions = {};
-      for (const auto &p : peers.peers) {
-        if (!p.used || !p.secure || !p.identity.hasBondTag ||
-            (p.role != probe::Role::Keyboard && p.role != probe::Role::Client) ||
-            !probe::sameIdentity(p.identity, previous)) continue;
-        forgottenSubscriptions = p.identity;
-        forgottenSubscriptions.subscriptionsKnown = true;
-        const bool sameBond = probe::sameBond(p.identity, previous);
-        const bool report = p.reportSeen ? p.reportNotify : sameBond && (previous.subscriptions & 1);
-        const bool boot = p.bootSeen ? p.bootNotify : sameBond && (previous.subscriptions & 2);
-        forgottenSubscriptions.subscriptions = (report ? 1 : 0) | (boot ? 2 : 0);
-        break;
-      }
       if (!keyboard.busy()) peers.unbindKeyboard();
       else unbindAfterRelease = true;
-      const bool remembered = forgottenSubscriptions.subscriptions != 0;
       portEXIT_CRITICAL(&peerMux);
-      Serial.printf("HID FORGOTTEN remembered_subscriptions=%u\n", remembered);
-      replyLine(true, "HIDTEST=FORGOTTEN");
-      replyLine(true, receiverText());
+      if (receiverToRemove.valid) {
+        receiverRemovalOwner = owner;
+        nextReceiverRemovalAttempt = millis();
+      } else {
+        replyLine(true, "HIDTEST=FORGOTTEN");
+        replyLine(true, receiverText());
+      }
     }
   } else if (text == "HIDPAIR=0") {
     pairWindow = false;
@@ -998,7 +1027,8 @@ static bool handle(const String &text, uint8_t source) {
     replyLine(true, "HIDTEST=PAIR_CLOSED");
     replyLine(true, receiverText());
   } else if (text == "HIDPAIR=1" || text == "HIDPAIR=ANDROID") {
-    if (savedReceiver.valid) replyLine(false, "ERR=HID_ALREADY_BOUND");
+    if (receiverToRemove.valid) replyLine(false, "ERR=HID_FORGET_PENDING");
+    else if (savedReceiver.valid) replyLine(false, "ERR=HID_ALREADY_BOUND");
     else if (!receiverStorageReady) replyLine(false, "ERR=HID_STORAGE");
     else if (pairWindow) replyLine(false, "ERR=HID_PAIR_ALREADY_OPEN");
     else if (text == "HIDPAIR=1" && !resetIdleHidDescriptors(state))
@@ -1168,6 +1198,7 @@ static void tick() {
     keyboard.cancel();
     clearReadings();
   } else {
+    receiverRemovalTick();
     // Finish the current HID text and release its keys before changing roles.
     if (!keyboard.busy()) {
       portENTER_CRITICAL(&peerMux);
