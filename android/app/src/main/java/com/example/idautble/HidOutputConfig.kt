@@ -77,11 +77,19 @@ data class HidOutputConfig(
     val ending: String = "ENTER",
     val layout: String = "US",
     val prefix: String = "",
+    val hotkey: String = "NONE",
 ) {
-    fun wire(includePrefix: Boolean = prefix.isNotEmpty()): String {
+    fun wire(includePrefix: Boolean = prefix.isNotEmpty(), includeHotkey: Boolean = hotkey != "NONE"): String {
         require(fields in setOf("P", "U", "PU") && ending in hidEndingLabels && layout in setOf("US", "ES"))
         val base = "HIDCFG=1;FIELDS=$fields;SEPHEX=${encodeHidSequence(separator)};END=$ending;LAYOUT=$layout"
-        return if (includePrefix) "$base;PREHEX=${encodeHidSequence(prefix)}" else base
+        return buildString {
+            append(base)
+            if (includePrefix) append(";PREHEX=${encodeHidSequence(prefix)}")
+            if (includeHotkey) {
+                require(validHidHotkey(hotkey))
+                append(";HOTKEY=$hotkey")
+            }
+        }
     }
     fun preview(): String = buildString {
         append(prefix)
@@ -101,7 +109,11 @@ data class HidOutputState(
     val arrowSeparators: Boolean = false,
     val extendedKeys: Boolean = false,
     val prefixKeys: Boolean = false,
+    val readHotkey: Boolean = false,
 )
+
+private val hidHotkeyPattern = Regex("(?:CTRL\\+(?:ALT\\+)?|ALT\\+)(?:SHIFT\\+)?(?:[A-Z0-9]|F(?:[1-9]|1[0-2]))")
+internal fun validHidHotkey(value: String) = value == "NONE" || hidHotkeyPattern.matches(value)
 
 private fun hidOutputCharacter(c: Char) = c == '\t' || c == '\n' || c.code in 32..126
 
@@ -148,15 +160,16 @@ fun decodeHidSeparator(pattern: String, allowArrows: Boolean = true, extended: B
 }
 
 fun parseHidOutputConfig(text: String): HidOutputConfig? {
-    if (text.length > 192 || !text.startsWith("HIDCFG=1;")) return null
+    if (text.length > 224 || !text.startsWith("HIDCFG=1;")) return null
     val values = linkedMapOf<String, String>()
     for (part in text.substring(9).split(';')) {
         val pair = part.split('=', limit = 2)
         if (pair.size != 2 || values.put(pair[0], pair[1]) != null) return null
     }
-    if (values.keys - "PREHEX" != setOf("FIELDS", "SEPHEX", "END", "LAYOUT")) return null
+    if (values.keys - setOf("PREHEX", "HOTKEY") != setOf("FIELDS", "SEPHEX", "END", "LAYOUT")) return null
     val separator = decodeHidSequence(values.getValue("SEPHEX")) ?: return null
     val prefix = decodeHidSequence(values["PREHEX"] ?: "-") ?: return null
-    val result = HidOutputConfig(values.getValue("FIELDS"), separator, values.getValue("END"), values.getValue("LAYOUT"), prefix)
+    val hotkey = values["HOTKEY"] ?: "NONE"
+    val result = HidOutputConfig(values.getValue("FIELDS"), separator, values.getValue("END"), values.getValue("LAYOUT"), prefix, hotkey)
     return runCatching { result.wire(); result }.getOrNull()
 }

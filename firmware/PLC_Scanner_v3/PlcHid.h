@@ -245,7 +245,7 @@ static void loadOutputFormat() {
   if (!probe::parseOutputFormat(stored.c_str(), outputFormat)) Serial.println("HID FORMAT invalid; defaults active");
 }
 static bool saveOutputFormat(const probe::OutputFormat &candidate) {
-  const std::string canonical = probe::outputWire(candidate, candidate.prefixLength != 0);
+  const std::string canonical = probe::outputWire(candidate, candidate.prefixLength != 0, candidate.hotkey != "NONE");
   if (!receiverStorageReady || receiverPreferences.putString("format", canonical.c_str()) != canonical.size()) return false;
   outputFormat = candidate;
   return true;
@@ -656,6 +656,23 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
   // Registered CLIENT writes are limited to the binary reading commands.
   constexpr char clientHello[] = "CLIENT\r\n";
   const bool uartWrite = pCharacteristic && handle == pCharacteristic->getHandle();
+  if (uartWrite && !write.is_prep && !write.offset) {
+    constexpr char query[] = "HIDHOTKEY?\r\n";
+    constexpr char trigger[] = "HIDREAD\r\n";
+    const bool getHotkey = length == sizeof(query) - 1 && !memcmp(data, query, length);
+    const bool read = length == sizeof(trigger) - 1 && !memcmp(data, trigger, length);
+    if (getHotkey || read) {
+      if (!peers.shortcutReady(p->token)) { portEXIT_CRITICAL(&peerMux); return; }
+      BleCmd cmd = {};
+      cmd.type = getHotkey ? BLECMD_TEXT : BLECMD_L;
+      cmd.source = CMD_SOURCE_HID;
+      cmd.session = p->token.generation;
+      cmd.receivedMs = millis();
+      portEXIT_CRITICAL(&peerMux);
+      queueBleCommand(cmd);
+      return;
+    }
+  }
   const bool isClientHello = uartWrite &&
       !write.is_prep && !write.offset && length == sizeof(clientHello) - 1 &&
       memcmp(data, clientHello, sizeof(clientHello) - 1) == 0;
@@ -973,13 +990,28 @@ static bool resetIdleHidDescriptors(const probe::Sessions &state) {
   return report == ESP_OK && boot == ESP_OK;
 }
 
+static probe::Token shortcutReceiver() {
+  const auto state = snapshot();
+  const auto receiver = state.role(probe::Role::Keyboard);
+  return state.shortcutReady(receiver) ? receiver : probe::Token{};
+}
+
+static void sendHotkey(probe::Token receiver) {
+  peerReply(receiver, true, "HIDHOTKEY=" + String(outputFormat.hotkey.c_str()));
+}
+
+static bool shortcutEnabled(uint32_t session) {
+  return session && shortcutReceiver().generation == session && outputFormat.hotkey != "NONE";
+}
+
 static bool handle(const String &text, uint8_t source) {
   if (text == "MAINTBYE") {
     const char *error = source == 0 ? releaseMaintenanceLink(gReplyContext.session) : "ERR=AUTH_REQUIRED";
     if (error) replyLine(false, error);
     return true;
   }
-  const bool getter = text == "HIDRECEIVER?" || text == "HIDRECEIVER2?" || text == "HIDCFG?" || text == "HIDCFG2?";
+  const bool getter = text == "HIDRECEIVER?" || text == "HIDRECEIVER2?" || text == "HIDCFG?" ||
+      text == "HIDCFG2?" || text == "HIDCFG3?";
   if (!getter && !text.startsWith("HIDCFG=") && text != "HIDPAIR=1" &&
       text != "HIDPAIR=ANDROID" && !text.startsWith("HIDPIN=") &&
       text != "HIDPAIR=0" && text != "HIDFORGET=1" && text != "HIDTYPE=TEST") return false;
@@ -992,22 +1024,32 @@ static bool handle(const String &text, uint8_t source) {
   if (!state.uartReady(owner) || owner.generation != gReplyContext.session) return true;
   if (text == "HIDRECEIVER?" || text == "HIDRECEIVER2?")
     replyLine(true, receiverText(text == "HIDRECEIVER2?"));
-  else if (text == "HIDCFG?" || text == "HIDCFG2?")
-    replyLine(true, probe::outputWire(outputFormat, text == "HIDCFG2?").c_str());
+  else if (text == "HIDCFG?" || text == "HIDCFG2?" || text == "HIDCFG3?")
+    replyLine(true, probe::outputWire(outputFormat, text != "HIDCFG?", text == "HIDCFG3?").c_str());
   else if (blocked()) replyLine(false, "ERR=BUSY");
   else if (text.startsWith("HIDCFG=")) {
     probe::OutputFormat candidate;
     bool prefixPresent = false;
+    bool hotkeyPresent = false;
     if (keyboard.busy() || pendingCount) replyLine(false, "ERR=HIDCFG_BUSY");
-    else if (!probe::parseOutputFormat(text.c_str(), candidate, &prefixPresent)) replyLine(false, "ERR=HIDCFG_INVALID");
+    else if (!probe::parseOutputFormat(text.c_str(), candidate, &prefixPresent, &hotkeyPresent))
+      replyLine(false, "ERR=HIDCFG_INVALID");
     else {
       // An older app can edit its fields without discarding an existing prefix.
       if (!prefixPresent) {
         candidate.prefixLength = outputFormat.prefixLength;
         memcpy(candidate.prefix, outputFormat.prefix, candidate.prefixLength);
       }
+      if (!hotkeyPresent) candidate.hotkey = outputFormat.hotkey;
+      const bool hotkeyChanged = candidate.hotkey != outputFormat.hotkey;
       if (!saveOutputFormat(candidate)) replyLine(false, "ERR=HIDCFG_STORAGE");
-      else replyLine(true, probe::outputWire(outputFormat, prefixPresent).c_str());
+      else {
+        replyLine(true, probe::outputWire(outputFormat, prefixPresent, hotkeyPresent).c_str());
+        if (hotkeyChanged) {
+          const auto receiver = shortcutReceiver();
+          if (receiver.generation) sendHotkey(receiver);
+        }
+      }
     }
   } else if (text == "HIDFORGET=1") {
     if (receiverToRemove.valid) receiverRemovalOwner = owner;
@@ -1106,7 +1148,7 @@ static bool handle(const String &text, uint8_t source) {
   return true;
 }
 
-static void reading(const String &pallet, const String &location) {
+static void reading(const String &pallet, const String &location, uint32_t requestedSession = 0) {
   if (!savedReceiver.valid || blocked()) return;
   std::string formatted;
   if (!probe::formatReading(outputFormat, pallet.c_str(), location.c_str(), formatted)) {
@@ -1115,6 +1157,7 @@ static void reading(const String &pallet, const String &location) {
   }
   const auto state = snapshot();
   const auto receiver = state.role(probe::Role::Keyboard);
+  if (requestedSession && receiver.generation != requestedSession) return;
   if (!state.keyboardReady(receiver) || pendingCount == pendingCapacity) {
     Serial.println("HID READING skipped: receiver unavailable or queue full");
     return;
@@ -1303,8 +1346,12 @@ static int notify(uint32_t session, uint8_t *bytes, size_t remaining) {
   const auto state = snapshot();
   const auto maintenance = state.role(probe::Role::Maintenance);
   const auto client = state.role(probe::Role::Client);
-  const auto target = maintenance.generation == session && state.uartReady(maintenance)
+  auto target = maintenance.generation == session && state.uartReady(maintenance)
       ? maintenance : (client.generation == session && state.clientReady(client) ? client : probe::Token{});
+  if (target.id == probe::kNoConnection) {
+    const auto receiver = state.role(probe::Role::Keyboard);
+    if (receiver.generation == session && state.shortcutReady(receiver)) target = receiver;
+  }
   if (target.id == probe::kNoConnection || !ready) return -1;
   const auto *peer = state.find(target);
   if (peer->congested) return 0;

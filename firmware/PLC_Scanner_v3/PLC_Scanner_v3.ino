@@ -2202,6 +2202,17 @@ static void bleProcessPendingOnce() {
   }
   CommandReplyScope replies(gReplyContext,
       cmd.source == 1 ? TX_TCP_ONLY : TX_BLE_ONLY, cmd.session);
+  if (cmd.source == CMD_SOURCE_HID) {
+    const auto receiver = plcHid::shortcutReceiver();
+    if (!receiver.generation || receiver.generation != cmd.session) return;
+    if (cmd.type == BLECMD_TEXT) {
+      plcHid::sendHotkey(receiver);
+      return;
+    }
+    if (cmd.type != BLECMD_L) return;
+    if (!plcHid::shortcutEnabled(cmd.session)) { replyLine(false, "ERR=HIDREAD_DISABLED"); return; }
+    if (gCutRequested || gScanActive || gScanCount) { replyLine(false, "ERR=HIDREAD_BUSY"); return; }
+  }
   if (cmd.type == BLECMD_TEXT) {
     handleTextCommand(cmd);
     return;
@@ -2237,6 +2248,7 @@ static void bleProcessPendingOnce() {
   if (cmd.type == BLECMD_L || cmd.type == BLECMD_A || cmd.type == BLECMD_D ||
       cmd.type == BLECMD_I) {
     enqueueCommandScan(cmd);
+    if (cmd.source == CMD_SOURCE_HID && gScanCount) replyLine(true, "HIDREAD=QUEUED");
     return;
   }
   // Ejecutar el comando (AQUÍ sí se puede tardar 2s)
@@ -3294,7 +3306,7 @@ static void handleTextCommand(const BleCmd &cmd) {
     replyLine(true, "FW=" FIRMWARE_VERSION ";PROTO=V2;ACKMODE=" +
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
-                        (cmd.source == 0 ? ";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1" : ""));
+                        (cmd.source == 0 ? ";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1" : ""));
     return;
   }
   if (s == "STATUS?") {
@@ -3604,8 +3616,9 @@ static void enqueueCommandScan(const BleCmd &cmd) {
     logHeightRejected(cmd, gCutRequested ? "POWER_CUT" : "SCAN_QUEUE_FULL");
     return;
   }
+  ScanJob &job = gScanJobs[(gScanHead + gScanCount - 1) % 16];
+  if (cmd.source == CMD_SOURCE_HID) job.hidSession = cmd.session;
   if (cmd.type == BLECMD_A) {
-    ScanJob &job = gScanJobs[(gScanHead + gScanCount - 1) % 16];
     job.heightTiming.active = true;
     job.heightTiming.receivedMs = cmd.receivedMs;
     job.heightTiming.source = cmd.source;
@@ -3638,7 +3651,7 @@ static void finishScan() {
   gCurrentScan.heightTiming.sensorFinishedMs = millis();
   actualizarCampoBateriaBLE();
   String f = frameForScan(gCurrentScan);
-  if (gCurrentScan.type == BLECMD_L) plcHid::reading(gCodPalet, gCodUbic);
+  if (gCurrentScan.type == BLECMD_L) plcHid::reading(gCodPalet, gCodUbic, gCurrentScan.hidSession);
   if (gCurrentScan.event)
     outboxPush(f);
   else
@@ -3701,6 +3714,7 @@ static void scanTick() {
     gCurrentScan = gScanJobs[gScanHead];
     gScanHead = (gScanHead + 1) % 16;
     --gScanCount;
+    if (gCurrentScan.hidSession && !plcHid::shortcutEnabled(gCurrentScan.hidSession)) return;
     gScanActive = true;
     gCodPalet = "-";
     gCodUbic = "-";

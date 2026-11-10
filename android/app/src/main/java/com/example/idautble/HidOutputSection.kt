@@ -24,6 +24,7 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
     var expanded by rememberSaveable { mutableStateOf(false) }
     var fields by remember { mutableStateOf("PU") }
     var prefixPattern by remember { mutableStateOf("") }
+    var hotkeyPattern by remember { mutableStateOf("") }
     var pattern by remember { mutableStateOf("{TAB}") }
     var ending by remember { mutableStateOf("ENTER") }
     var layout by remember { mutableStateOf("US") }
@@ -32,6 +33,7 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
         state.config?.let {
             fields = it.fields
             prefixPattern = hidSeparatorPattern(it.prefix)
+            hotkeyPattern = if (it.hotkey == "NONE") "" else it.hotkey
             pattern = hidSeparatorPattern(it.separator)
             ending = it.ending
             layout = it.layout
@@ -41,7 +43,10 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
     val allowArrows = state.arrowSeparators || state.extendedKeys
     val prefix = if (state.prefixKeys) decodeHidSeparator(prefixPattern, allowArrows, state.extendedKeys) else ""
     val separator = decodeHidSeparator(pattern, allowArrows, state.extendedKeys)
-    val draft = if (prefix != null && separator != null) HidOutputConfig(fields, separator, ending, layout, prefix) else null
+    val hotkey = if (state.readHotkey) hotkeyPattern.filterNot(Char::isWhitespace).uppercase().ifEmpty { "NONE" } else "NONE"
+    val hotkeyValid = validHidHotkey(hotkey)
+    val draft = if (prefix != null && separator != null && hotkeyValid)
+        HidOutputConfig(fields, separator, ending, layout, prefix, hotkey) else null
     val enabled = connected && !state.busy
     CollapsibleSettingsSection(
         if (production) "HID OUTPUT" else "HID OUTPUT · PROTOTYPE",
@@ -56,6 +61,16 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
         }
         HidSettingRow("Final key") { HidValueMenu(endings, ending, enabled) { ending = it } }
         HidSettingRow("Keyboard layout") { HidValueMenu(hidLayouts, layout, enabled) { layout = it } }
+        if (state.readHotkey) {
+            OutlinedTextField(
+                value = hotkeyPattern,
+                onValueChange = { hotkeyPattern = it },
+                modifier = Modifier.fillMaxWidth(), enabled = enabled, singleLine = true, isError = !hotkeyValid,
+                label = { Text("Read shortcut (Windows)") },
+                placeholder = { Text("CTRL+ALT+L") },
+                supportingText = { Text("Leave blank to disable. Enter Ctrl, Alt and Shift in that order, then a letter, digit or F1–F12. Use at least Ctrl or Alt.") },
+            )
+        }
         Text("Preview: ${draft?.preview() ?: "Invalid key sequence"}", fontFamily = FontFamily.Monospace,
             fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (state.message.isNotBlank()) Text(state.message, fontSize = 11.sp)

@@ -12,6 +12,7 @@ struct OutputFormat {
   KeyLayout layout=KeyLayout::US;
   uint8_t prefix[32]={};
   uint8_t prefixLength=0;
+  std::string hotkey="NONE";
 };
 inline bool validOutputByte(unsigned char c) {return c=='\t'||c=='\n'||(c>=32&&c<=126);}
 // The first four SEPHEX values remain compatible with older HID configurations.
@@ -95,7 +96,19 @@ inline bool parseOutputHex(const std::string &hex, uint8_t (&bytes)[32], uint8_t
   }
   return true;
 }
-inline std::string outputWire(const OutputFormat &f, bool includePrefix = false) {
+inline bool validHotkey(const std::string &shortcut) {
+  if (shortcut == "NONE") return true;
+  size_t start = 0;
+  if (shortcut.compare(start, 5, "CTRL+") == 0) start += 5;
+  if (shortcut.compare(start, 4, "ALT+") == 0) start += 4;
+  if (!start) return false;
+  if (shortcut.compare(start, 6, "SHIFT+") == 0) start += 6;
+  const auto key = shortcut.substr(start);
+  return (key.size() == 1 && ((key[0] >= 'A' && key[0] <= 'Z') || (key[0] >= '0' && key[0] <= '9'))) ||
+      (key.size() == 2 && key[0] == 'F' && key[1] >= '1' && key[1] <= '9') ||
+      key == "F10" || key == "F11" || key == "F12";
+}
+inline std::string outputWire(const OutputFormat &f, bool includePrefix = false, bool includeHotkey = false) {
   std::string s="HIDCFG=1;FIELDS=";s+=f.fields==1?"P":f.fields==2?"U":"PU";s+=";SEPHEX=";
   appendOutputHex(s, f.separator, f.separatorLength);
   s+=";END=";s+=endingName(f.ending);
@@ -104,10 +117,11 @@ inline std::string outputWire(const OutputFormat &f, bool includePrefix = false)
     s += ";PREHEX=";
     appendOutputHex(s, f.prefix, f.prefixLength);
   }
+  if (includeHotkey) s += ";HOTKEY=" + f.hotkey;
   return s;
 }
-inline bool parseOutputFormat(const std::string &s,OutputFormat &out, bool *prefixPresent = nullptr) {
-  if(s.size()>192||s.rfind("HIDCFG=1;",0)!=0)return false;
+inline bool parseOutputFormat(const std::string &s,OutputFormat &out, bool *prefixPresent = nullptr, bool *hotkeyPresent = nullptr) {
+  if(s.size()>224||s.rfind("HIDCFG=1;",0)!=0)return false;
   OutputFormat f;unsigned seen=0;size_t start=9;
   while(start<s.size()) {
     size_t end=s.find(';',start);if(end==std::string::npos)end=s.size();
@@ -118,6 +132,7 @@ inline bool parseOutputFormat(const std::string &s,OutputFormat &out, bool *pref
     else if(key=="END") {bit=4;if(!parseEnding(value,f.ending))return false;}
     else if(key=="LAYOUT") {bit=8;if(value=="US")f.layout=KeyLayout::US;else if(value=="ES")f.layout=KeyLayout::ES;else return false;}
     else if(key=="PREHEX") {bit=16;if(!parseOutputHex(value,f.prefix,f.prefixLength))return false;}
+    else if(key=="HOTKEY") {bit=32;if(!validHotkey(value))return false;f.hotkey=value;}
     else return false;
     if(seen&bit)return false;
     seen|=bit;
@@ -126,6 +141,7 @@ inline bool parseOutputFormat(const std::string &s,OutputFormat &out, bool *pref
   }
   if((seen&15)!=15)return false;
   if(prefixPresent)*prefixPresent=(seen&16)!=0;
+  if(hotkeyPresent)*hotkeyPresent=(seen&32)!=0;
   out=f;return true;
 }
 // A missing selected field rejects the whole reading; never substitute stale data.
