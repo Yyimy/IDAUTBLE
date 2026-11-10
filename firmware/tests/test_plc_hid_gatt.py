@@ -365,6 +365,10 @@ int main() {
   assert(removedBonds.empty());
   assert(resetIdleHidDescriptors(peers) && resetDescriptors.empty());
   peers.disconnect(reassignment.id);
+  // The tablet may have subscribed to HID before it claimed maintenance.
+  write(maintenance.id,inputCccd,enabled);
+  write(maintenance.id,bootCccd,enabled);
+  assert(peers.find(maintenance)->reportNotify && peers.find(maintenance)->bootNotify);
   assert(resetIdleHidDescriptors(peers));
   assert((resetDescriptors==std::vector<uint16_t>{inputCccd,bootCccd}));
   failDescriptor=bootCccd;

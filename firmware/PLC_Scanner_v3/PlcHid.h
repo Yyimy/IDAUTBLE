@@ -958,10 +958,13 @@ static bool releaseClientForHidPairing() {
 
 static bool resetIdleHidDescriptors(const probe::Sessions &state) {
   // The Arduino core answers CCCD reads from one shared attribute value.
-  // Clear old values before fresh Windows enrollment, but preserve a live
-  // subscription. Readiness still uses the authenticated peer's own state.
+  // Clear old values before fresh Windows enrollment unless a peer eligible
+  // for HID already has a live subscription. Maintenance and CLIENT peers
+  // can write these descriptors, but their flags cannot authorize HID.
   for (const auto &peer : state.peers) {
-    if (peer.used && peer.secure && (peer.reportNotify || peer.bootNotify)) return true;
+    if (peer.used && peer.secure && !peer.expiring &&
+        (peer.role == probe::Role::Unassigned || peer.role == probe::Role::Keyboard) &&
+        (peer.reportNotify || peer.bootNotify)) return true;
   }
   const uint8_t disabled[] = {0, 0};
   const auto report = esp_ble_gatts_set_attr_value(inputCccd, sizeof(disabled), disabled);
