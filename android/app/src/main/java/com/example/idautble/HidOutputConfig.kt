@@ -2,7 +2,7 @@ package com.example.idautble
 
 internal const val HID_SEPARATOR_LIMIT = 32
 
-/** Separator tokens are encoded as individual bytes in SEPHEX. */
+/** Key tokens are encoded as individual bytes in SEPHEX and PREHEX. */
 internal val hidArrowTokens = mapOf(
     "{RIGHT}" to '\u0080',
     "{LEFT}" to '\u0081',
@@ -76,14 +76,15 @@ data class HidOutputConfig(
     val separator: String = "\t",
     val ending: String = "ENTER",
     val layout: String = "US",
+    val prefix: String = "",
 ) {
-    fun wire(): String {
+    fun wire(includePrefix: Boolean = prefix.isNotEmpty()): String {
         require(fields in setOf("P", "U", "PU") && ending in hidEndingLabels && layout in setOf("US", "ES"))
-        require(separator.length <= HID_SEPARATOR_LIMIT && separator.all { hidOutputCharacter(it) || it in hidTokensByByte })
-        val hex = if (separator.isEmpty()) "-" else separator.map { "%02X".format(it.code) }.joinToString("")
-        return "HIDCFG=1;FIELDS=$fields;SEPHEX=$hex;END=$ending;LAYOUT=$layout"
+        val base = "HIDCFG=1;FIELDS=$fields;SEPHEX=${encodeHidSequence(separator)};END=$ending;LAYOUT=$layout"
+        return if (includePrefix) "$base;PREHEX=${encodeHidSequence(prefix)}" else base
     }
     fun preview(): String = buildString {
+        append(prefix)
         if (fields != "U") append("PALLET123")
         if (fields == "PU") append(separator)
         if (fields != "P") append("LOC01")
@@ -99,9 +100,22 @@ data class HidOutputState(
     val revision: Long = 0,
     val arrowSeparators: Boolean = false,
     val extendedKeys: Boolean = false,
+    val prefixKeys: Boolean = false,
 )
 
 private fun hidOutputCharacter(c: Char) = c == '\t' || c == '\n' || c.code in 32..126
+
+private fun encodeHidSequence(bytes: String): String {
+    require(bytes.length <= HID_SEPARATOR_LIMIT && bytes.all { hidOutputCharacter(it) || it in hidTokensByByte })
+    return if (bytes.isEmpty()) "-" else bytes.map { "%02X".format(it.code) }.joinToString("")
+}
+
+private fun decodeHidSequence(hex: String): String? {
+    if (hex == "-") return ""
+    if (hex.isEmpty() || hex.length > HID_SEPARATOR_LIMIT * 2 || hex.length % 2 != 0 ||
+        !hex.all { it in '0'..'9' || it in 'A'..'F' }) return null
+    return hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("")
+}
 
 fun hidSeparatorPattern(bytes: String): String = buildString {
     bytes.forEach { byte ->
@@ -134,18 +148,15 @@ fun decodeHidSeparator(pattern: String, allowArrows: Boolean = true, extended: B
 }
 
 fun parseHidOutputConfig(text: String): HidOutputConfig? {
-    if (text.length > 160 || !text.startsWith("HIDCFG=1;")) return null
+    if (text.length > 192 || !text.startsWith("HIDCFG=1;")) return null
     val values = linkedMapOf<String, String>()
     for (part in text.substring(9).split(';')) {
         val pair = part.split('=', limit = 2)
         if (pair.size != 2 || values.put(pair[0], pair[1]) != null) return null
     }
-    if (values.keys != setOf("FIELDS", "SEPHEX", "END", "LAYOUT")) return null
-    val hex = values["SEPHEX"] ?: return null
-    val separator = if (hex == "-") "" else {
-        if (hex.isEmpty() || hex.length > HID_SEPARATOR_LIMIT * 2 || hex.length % 2 != 0 || !hex.all { it in '0'..'9' || it in 'A'..'F' }) return null
-        hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("")
-    }
-    val result = HidOutputConfig(values.getValue("FIELDS"), separator, values.getValue("END"), values.getValue("LAYOUT"))
+    if (values.keys - "PREHEX" != setOf("FIELDS", "SEPHEX", "END", "LAYOUT")) return null
+    val separator = decodeHidSequence(values.getValue("SEPHEX")) ?: return null
+    val prefix = decodeHidSequence(values["PREHEX"] ?: "-") ?: return null
+    val result = HidOutputConfig(values.getValue("FIELDS"), separator, values.getValue("END"), values.getValue("LAYOUT"), prefix)
     return runCatching { result.wire(); result }.getOrNull()
 }

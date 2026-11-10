@@ -245,7 +245,7 @@ static void loadOutputFormat() {
   if (!probe::parseOutputFormat(stored.c_str(), outputFormat)) Serial.println("HID FORMAT invalid; defaults active");
 }
 static bool saveOutputFormat(const probe::OutputFormat &candidate) {
-  const std::string canonical = probe::outputWire(candidate);
+  const std::string canonical = probe::outputWire(candidate, candidate.prefixLength != 0);
   if (!receiverStorageReady || receiverPreferences.putString("format", canonical.c_str()) != canonical.size()) return false;
   outputFormat = candidate;
   return true;
@@ -979,7 +979,7 @@ static bool handle(const String &text, uint8_t source) {
     if (error) replyLine(false, error);
     return true;
   }
-  const bool getter = text == "HIDRECEIVER?" || text == "HIDRECEIVER2?" || text == "HIDCFG?";
+  const bool getter = text == "HIDRECEIVER?" || text == "HIDRECEIVER2?" || text == "HIDCFG?" || text == "HIDCFG2?";
   if (!getter && !text.startsWith("HIDCFG=") && text != "HIDPAIR=1" &&
       text != "HIDPAIR=ANDROID" && !text.startsWith("HIDPIN=") &&
       text != "HIDPAIR=0" && text != "HIDFORGET=1" && text != "HIDTYPE=TEST") return false;
@@ -992,14 +992,23 @@ static bool handle(const String &text, uint8_t source) {
   if (!state.uartReady(owner) || owner.generation != gReplyContext.session) return true;
   if (text == "HIDRECEIVER?" || text == "HIDRECEIVER2?")
     replyLine(true, receiverText(text == "HIDRECEIVER2?"));
-  else if (text == "HIDCFG?") replyLine(true, probe::outputWire(outputFormat).c_str());
+  else if (text == "HIDCFG?" || text == "HIDCFG2?")
+    replyLine(true, probe::outputWire(outputFormat, text == "HIDCFG2?").c_str());
   else if (blocked()) replyLine(false, "ERR=BUSY");
   else if (text.startsWith("HIDCFG=")) {
     probe::OutputFormat candidate;
+    bool prefixPresent = false;
     if (keyboard.busy() || pendingCount) replyLine(false, "ERR=HIDCFG_BUSY");
-    else if (!probe::parseOutputFormat(text.c_str(), candidate)) replyLine(false, "ERR=HIDCFG_INVALID");
-    else if (!saveOutputFormat(candidate)) replyLine(false, "ERR=HIDCFG_STORAGE");
-    else replyLine(true, probe::outputWire(outputFormat).c_str());
+    else if (!probe::parseOutputFormat(text.c_str(), candidate, &prefixPresent)) replyLine(false, "ERR=HIDCFG_INVALID");
+    else {
+      // An older app can edit its fields without discarding an existing prefix.
+      if (!prefixPresent) {
+        candidate.prefixLength = outputFormat.prefixLength;
+        memcpy(candidate.prefix, outputFormat.prefix, candidate.prefixLength);
+      }
+      if (!saveOutputFormat(candidate)) replyLine(false, "ERR=HIDCFG_STORAGE");
+      else replyLine(true, probe::outputWire(outputFormat, prefixPresent).c_str());
+    }
   } else if (text == "HIDFORGET=1") {
     if (receiverToRemove.valid) receiverRemovalOwner = owner;
     else if (savedReceiver.valid && matchesReceiver(*state.find(owner), savedReceiver))

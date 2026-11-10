@@ -935,7 +935,10 @@ class MainActivity : ComponentActivity() {
     private fun requestHidOutput(config: HidOutputConfig?) {
         if (!bleChannelReady || !uiHidOutput.value.supported || uiHidOutput.value.busy) return
         if (config != null && !maintenanceSession.isAuthorized()) { showIdentityAuthorizationMessage(); return }
-        val command = if (config == null) "HIDCFG?" else runCatching { config.wire() }.getOrNull() ?: return
+        val prefixKeys = uiHidOutput.value.prefixKeys
+        val command = if (config == null) {
+            if (prefixKeys) "HIDCFG2?" else "HIDCFG?"
+        } else runCatching { config.wire(includePrefix = prefixKeys) }.getOrNull() ?: return
         hidOutputExpected = config
         val request = ++hidOutputRequest
         uiHidOutput.value = uiHidOutput.value.copy(busy = true, message = "Waiting for the PLC...")
@@ -956,6 +959,7 @@ class MainActivity : ComponentActivity() {
                 supported = supported,
                 arrowSeparators = "HIDARROWS=1" in text.split(';'),
                 extendedKeys = "HIDKEYS=1" in text.split(';'),
+                prefixKeys = "HIDPREFIX=1" in text.split(';'),
             )
             hidOutputRequest++; hidOutputExpected = null
             if (supported) requestHidOutput(null)
@@ -976,7 +980,7 @@ class MainActivity : ComponentActivity() {
             uiHidOutput.value = uiHidOutput.value.copy(busy = false, message = when (text) {
                 "ERR=HIDCFG_STORAGE" -> "PLC storage failed. The active format was not changed."
                 "ERR=HIDCFG_BUSY", "BUSY" -> "Wait for the keyboard test to finish."
-                "ERR=HIDCFG_INVALID" -> "PLC rejected the format. Check the separator."
+                "ERR=HIDCFG_INVALID" -> "PLC rejected the format. Check the key sequences."
                 else -> "Enter the PIN in PIN / ACCESS before saving."
             })
         }
