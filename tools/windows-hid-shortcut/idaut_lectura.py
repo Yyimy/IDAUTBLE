@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 FFE1 = "0000ffe1-0000-1000-8000-00805f9b34fb"
 QUERY = b"HIDHOTKEY?\r\n"
-READ = b"\x1bL\r\n"
+READ = b"HIDREAD\r\n"
 HOTKEY = re.compile(r"(?:(CTRL\+)(ALT\+)?|(ALT\+))(SHIFT\+)?([A-Z0-9]|F(?:[1-9]|1[0-2]))")
 WM_HOTKEY = 0x0312
 
