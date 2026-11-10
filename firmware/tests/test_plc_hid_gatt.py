@@ -18,7 +18,7 @@ advertising_control = source[source.index('static void configureHidAdvertisement
 advertising_tick = source[source.index('static void advertise()'):source.index('static void pairTick()')]
 boot_advertising_state = re.search(r'^static bool maintenanceAdvertisement = (?:true|false);', source, re.M).group()
 lease = source[source.index('static void maintenanceLeaseTick()'):source.index('static void tick()')]
-release = source[source.index('static const char *releaseMaintenanceLink('):source.index('static bool handle(')]
+release = source[source.index('static const char *releaseMaintenanceLink('):source.index('static probe::Token shortcutReceiver(')]
 shim = r'''
 #include "ProbeSessions.h"
 #include <algorithm>
@@ -319,6 +319,17 @@ int main() {
   assert(peers.bindKeyboard(keyboard) && peers.keyboardReady(keyboard));
   assert(peers.uartReady(peers.role(probe::Role::Maintenance)) && gBleSession==owner);
 
+  // Only the assigned HID receiver can query the shortcut and request a full scan.
+  queued.clear();
+  write(1,20,"HIDHOTKEY?\r\n");
+  write(1,20,"\x1b" "L\r\n");
+  write(1,20,"AUTH=123456\r\n");
+  write(1,20,"\x1b" "D\r\n");
+  write(1,20,"\x1b" "L\r\n",true);
+  assert(queued.size()==2 && queued[0].type==BLECMD_TEXT && queued[1].type==BLECMD_L);
+  for (const auto &cmd : queued) assert(cmd.source==CMD_SOURCE_HID && cmd.session==keyboard.generation);
+  assert(peers.keyboardReady(keyboard) && peers.uartReady(maintenance));
+
   // An existing HID receiver requests CLIENT on the same secure connection.
   pairWindow=false;
   savedReceiver.valid=true;
@@ -331,6 +342,8 @@ int main() {
   assert(replies.size()==1); // Main loop waits for the last HID key release.
   assert(peers.claimClient(pendingClientSwitch,true));
   assert(peers.clientReady(keyboard) && !peers.keyboardReady(keyboard));
+  write(1,20,"HIDHOTKEY?\r\n");
+  assert(queued.size()==2);
   assert(!peers.resumeSavedKeyboard(keyboard,savedReceiver));
   write(1,21,disabled);
   assert(peers.resumeSavedKeyboard(keyboard,savedReceiver));

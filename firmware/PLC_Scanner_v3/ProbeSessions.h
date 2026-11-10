@@ -174,6 +174,10 @@ class Sessions {
     auto *p = find(token);
     return keyboardTarget(token) && !p->suspended;
   }
+  bool shortcutReady(Token token) const {
+    const auto *p = find(token);
+    return p && p->uartNotify && keyboardReady(token);
+  }
  private:
   uint32_t generation_ = 0;
   static bool subscription(const Peer &p) {

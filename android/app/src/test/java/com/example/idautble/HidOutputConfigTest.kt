@@ -4,6 +4,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HidOutputConfigTest {
+    @Test fun readShortcutRoundTripsWithoutChangingTheTypedSequence() {
+        val config = HidOutputConfig(hotkey = "CTRL+ALT+L")
+        assertEquals(config, parseHidOutputConfig(config.wire()))
+        assertEquals(HidOutputConfig().preview(), config.preview())
+        assertEquals(HidOutputConfig(), parseHidOutputConfig(config.wire(includeHotkey = false)))
+        assertEquals(HidOutputConfig(), parseHidOutputConfig(HidOutputConfig().wire(includeHotkey = true)))
+        listOf("L", "SHIFT+L", "CTRL+F13", "CTRL+CTRL+L", "ALT+", "ALT+CTRL+L").forEach {
+            assertFalse(validHidHotkey(it))
+            assertNull(parseHidOutputConfig(HidOutputConfig().wire() + ";HOTKEY=$it"))
+        }
+    }
     @Test fun extendedKeysCanSeparateOrTerminate() {
         val pattern = "{ESC}{BACKSPACE}{DELETE}{INSERT}{HOME}{END}{PAGEUP}{PAGEDOWN}{F1}{F12}"
         val separator = decodeHidSeparator(pattern)!!

@@ -142,6 +142,7 @@ int esp_ble_remove_bond_device(uint8_t*){++bondsRemoved;return ESP_OK;}
 shim += r'''
 namespace plcHid {
 void batteryLevel(uint8_t) {}
+bool shortcutEnabled(uint32_t session) { return session == 42; }
 uint32_t clientGeneration=0;
 FakeCharacteristic clientCharacteristic;
 uint32_t clientSession() { return clientGeneration; }
@@ -162,7 +163,7 @@ bool authorized(uint32_t) { return gMaintenanceAuthorized; }
 void setAuthorized(uint32_t, bool value) { gMaintenanceAuthorized = value; }
 bool handle(const String&, uint8_t) { return false; }
 std::vector<std::pair<String, String>> readings;
-void reading(const String &pallet, const String &location) { readings.emplace_back(pallet, location); }
+void reading(const String &pallet, const String &location, uint32_t) { readings.emplace_back(pallet, location); }
 }
 '''
 # Types require integer definitions and String prototypes are declared by Arduino in firmware.
@@ -202,6 +203,8 @@ int main(){
  CHECK(plcHid::readings.size()==1&&plcHid::readings[0].first=="PAL"&&plcHid::readings[0].second=="LOC");
  resetScanner();nowMs=4000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx=std::string(330,'A')+"\n";scanTick();CHECK(failCount==1);CHECK(gCodPalet=="-");
  CHECK(plcHid::readings.size()==2&&plcHid::readings[1].first=="-"&&plcHid::readings[1].second=="-");
+ resetScanner();BleCmd shortcut{};shortcut.type=BLECMD_L;shortcut.source=CMD_SOURCE_HID;shortcut.session=41;
+ const int triggers=PLCSerial.triggers;enqueueCommandScan(shortcut);scanTick();CHECK(!gScanActive&&PLCSerial.triggers==triggers);
  resetScanner();nowMs=5000;gAlturaEnabled=true;enqueueScan(BLECMD_A,false);scanTick();CHECK(gScanActive);nowMs=5251;scanTick();CHECK(!gScanActive&&gAltura=="-");CHECK(plcHid::readings.size()==2);
  resetScanner();nowMs=6000;gFotoLista=false;gFotoUltLect=LOW;rawFoto=LOW;gFotoUltCambioMs=6000;photoTick();nowMs=7500;photoTick();CHECK(gFotoLista&&armadoInactividad&&!PaletCargado);
  rawFoto=HIGH;nowMs=7600;photoTick();nowMs=7851;photoTick();CHECK(PaletCargado&&loaded==1);

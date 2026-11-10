@@ -42,10 +42,11 @@ enum BleCmdType : uint8_t {
 };
 
 constexpr uint8_t CMD_SOURCE_CLIENT = 2;
+constexpr uint8_t CMD_SOURCE_HID = 3;
 
 struct BleCmd {
   BleCmdType type;
-  uint8_t source;  // 0=BLE maintenance, 1=TCP, 2=BLE client
+  uint8_t source;  // 0=BLE maintenance, 1=TCP, 2=BLE client, 3=HID shortcut
   uint32_t session;  // Generation of the originating BLE or TCP connection.
   uint32_t receivedMs;  // Complete command received by the PLC, before queueing.
   char payload[384];  // para RTC=... o CFG=...
@@ -132,6 +133,7 @@ struct ScanJob {
   char iso[20];
   char photo;
   HeightTiming heightTiming;
+  uint32_t hidSession;
 };
 
 struct EventRecord {

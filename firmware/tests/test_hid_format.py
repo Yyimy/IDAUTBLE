@@ -87,6 +87,14 @@ int main(){
  const std::string maxConfig="HIDCFG=1;FIELDS=PU;SEPHEX="+maxSequence+";END=BACKSPACE;LAYOUT=US;PREHEX="+maxSequence;
  CHECK(parseOutputFormat(maxConfig,f));CHECK(outputWire(f,true)==maxConfig);
  CHECK(!parseOutputFormat(maxConfig+"44",f));
+ const std::string withHotkey=withPrefix+";HOTKEY=CTRL+ALT+L";
+ bool hotkeyPresent=false;
+ CHECK(parseOutputFormat(withHotkey,f,&prefixPresent,&hotkeyPresent)&&hotkeyPresent);
+ CHECK(outputWire(f,true,true)==withHotkey);
+ CHECK(outputWire(f,true)==withPrefix);
+ CHECK(parseOutputFormat(legacy,f,&prefixPresent,&hotkeyPresent)&&!hotkeyPresent&&f.hotkey=="NONE");
+ for(const auto *key:{"L", "SHIFT+L", "CTRL+F13", "CTRL+CTRL+L", "ALT+", "ALT+CTRL+L"})
+   CHECK(!parseOutputFormat(legacy+";HOTKEY="+key,f));
 #endif
  printf("PASS: %u HID format/payload/report assertions\n",checks);
 }
