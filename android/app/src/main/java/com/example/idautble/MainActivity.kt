@@ -61,6 +61,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.idautble.ui.theme.IDAUTBLETheme
 import java.text.SimpleDateFormat
@@ -2199,6 +2201,7 @@ class MainActivity : ComponentActivity() {
         initBluetooth()
 
         enableEdgeToEdge()
+        hideNavigationBar()
         val appSettings = getSharedPreferences("app_settings", Context.MODE_PRIVATE)
         setContent {
             // The previous Graphite preference selected the full dark theme.
@@ -2352,6 +2355,17 @@ class MainActivity : ComponentActivity() {
                     )
             }
         }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideNavigationBar()
+    }
+
+    private fun hideNavigationBar() {
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.navigationBars())
     }
 
     override fun onStart() {
