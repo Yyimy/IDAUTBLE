@@ -40,10 +40,12 @@ Los comandos pendientes de autorización se cancelan al cerrar el diálogo o des
 
 ## Red
 
-Desde la app 1.3.19, NETWORK muestra **LIVE CONNECTION** a la izquierda (40 %) y
-**PLC CONFIGURATION** a la derecha (60 %) en horizontal con al menos 700 dp de ancho.
-Las tarjetas tienen desplazamiento independiente; en vertical o con menos anchura se
-apilan. Los refrescos automáticos actualizan el estado sin parpadeos de los botones:
+NETWORK muestra **PLC CONFIGURATION** a la izquierda (60 %) y **LIVE CONNECTION**
+a la derecha (40 %) en horizontal con al menos 700 dp de ancho. Las columnas se
+pueden desplazar por separado. En vertical o con menos anchura, la configuración
+aparece encima de la información de conexión. Los ajustes de Wi-Fi, IP, servidor TCP
+y red avanzada se abren en tarjetas plegables. Los ajustes avanzados aparecen en
+los PLC que los admiten y su tarjeta empieza plegada. Los refrescos automáticos actualizan el estado sin parpadeos de los botones:
 no los deshabilitan ni muestran “Refreshing…”. Las acciones manuales siguen indicando
 su progreso y pueden adelantarse a una consulta automática pendiente.
 
