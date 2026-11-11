@@ -76,13 +76,17 @@ internal enum class TerminalSection(val label: String) {
     HID_OUTPUT("HID output"),
     DEVICE_ID("Device ID"),
     HEIGHT_MEASUREMENT("Height measurement"),
-    BARCODE_RTC("Barcode ID / RTC"),
+    BARCODE_ID("Barcode ID"),
+    RTC("RTC"),
     MANUAL_TERMINAL("Manual terminal");
 
     companion object {
         fun readOrder(saved: String?): List<TerminalSection> {
             val savedIds = saved.orEmpty().split(',')
-            val savedSections = savedIds.mapNotNull { id -> entries.firstOrNull { it.name == id } }
+            val savedSections = savedIds.flatMap { id ->
+                if (id == "BARCODE_RTC") listOf(BARCODE_ID, RTC)
+                else listOfNotNull(entries.firstOrNull { it.name == id })
+            }
             return (savedSections + entries).distinct()
         }
     }
