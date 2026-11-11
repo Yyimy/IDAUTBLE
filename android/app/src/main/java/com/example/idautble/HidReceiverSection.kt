@@ -12,9 +12,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-fun HidReceiverSection(state: HidReceiverState, connected: Boolean, authorised: Boolean, onAction: (String) -> Unit, configurableFormat: Boolean = false) {
+fun HidReceiverSection(state: HidReceiverState, connected: Boolean, authorised: Boolean, onAction: (String) -> Unit, configurableFormat: Boolean = false, expanded: Boolean, onToggle: () -> Unit) {
     if (!state.supported) return
-    var expanded by rememberSaveable { mutableStateOf(false) }
     var confirmForget by remember { mutableStateOf(false) }
     var selectedPairMode by rememberSaveable { mutableStateOf("WINDOWS") }
     var androidPin by rememberSaveable { mutableStateOf("") }
@@ -25,7 +24,7 @@ fun HidReceiverSection(state: HidReceiverState, connected: Boolean, authorised: 
         title = if (state.production) "HID RECEIVER" else "HID RECEIVER · PROTOTYPE",
         summary = when { info?.ready == true -> "Receiver ready"; saved -> "Saved · waiting for receiver"; else -> "No receiver assigned" },
         expanded = expanded,
-        onToggle = { expanded = !expanded },
+        onToggle = onToggle,
     ) {
         Text(info?.identity ?: "Not assigned", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
         Text("The saved receiver regains its role after a secure reconnection. The receiver must connect from its own Bluetooth settings.", fontSize = 11.sp)
