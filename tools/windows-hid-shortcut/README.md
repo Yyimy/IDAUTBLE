@@ -8,7 +8,7 @@ Utilidad de prueba para solicitar una lectura desde el PC que ya recibe datos co
 4. Comprueba el atajo activo. Deja el foco en el formulario y pulsa el atajo.
 5. Cambia el atajo desde mantenimiento con el programa conectado y comprueba que se actualiza. Deja el campo vacío para desactivarlo.
 
-La utilidad se puede ocultar en la bandeja de Windows. Usa **Salir** desde su icono para cerrarla. Si Windows rechaza la combinación, la utilidad conserva el atajo anterior y muestra un aviso.
+Pulsa **Desconectar** para cerrar el canal de lectura y **Conectar** para volver a abrirlo. El programa conserva el último PLC conectado e intenta reconectar con él al arrancar. La **X** oculta la ventana en la bandeja de Windows. Usa **Salir** desde su icono para cerrar el programa por completo. Si Windows rechaza la combinación, la utilidad conserva el atajo anterior y muestra un aviso.
 
 ## Ejecutar o empaquetar en Windows
 

@@ -2,6 +2,8 @@
 import asyncio
 import ctypes
 from ctypes import wintypes
+import os
+from pathlib import Path
 import queue
 import re
 import sys
@@ -55,8 +57,10 @@ class Hotkey:
 
 
 class Connection:
-    def __init__(self, emit):
+    def __init__(self, emit, last_device):
         self.emit = emit
+        self.last_device = last_device
+        self.transition = asyncio.Lock()
         self.hotkey = Hotkey(ctypes.windll.user32)
         self.client = None
         self.sync = None
@@ -64,7 +68,7 @@ class Connection:
         self.buffer = bytearray()
         self.reading = False
 
-    async def paired(self):
+    async def paired(self, reconnect=False):
         from winrt.windows.devices.bluetooth import BluetoothLEDevice
         from winrt.windows.devices.enumeration import DeviceInformation, DeviceInformationKind
 
@@ -72,12 +76,26 @@ class Connection:
         try:
             found = await asyncio.wait_for(DeviceInformation.find_all_async_with_kind_aqs_filter_and_additional_properties(
                 selector, [], DeviceInformationKind.ASSOCIATION_ENDPOINT), timeout=10)
-            self.emit("devices", [(item.id, item.name or "Sin nombre") for item in found])
+            devices = [(item.id, item.name or "Sin nombre") for item in found]
+            try:
+                saved = self.last_device.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                saved = None
+            self.emit("devices", (devices, saved))
             self.emit("status", "Selecciona el PLC emparejado en Windows.")
+            if reconnect:
+                target = next((device for device in devices if device[0] == saved), None)
+                if target is not None:
+                    await self.connect(*target)
         except Exception as exc:
             self.emit("status", f"Error al consultar Bluetooth: {exc}")
 
     async def connect(self, device_id, name):
+        async with self.transition:
+            if self.client is None:
+                await self._connect(device_id, name)
+
+    async def _connect(self, device_id, name):
         from bleak import BleakClient
         from bleak.backends.device import BLEDevice
         from bleak.backends.winrt.scanner import RawAdvData
@@ -102,34 +120,55 @@ class Connection:
             await client.connect()
             await client.start_notify(FFE1, lambda _, data: self.notification(client, data))
             await self.refresh(client)
+            if self.client is not client:
+                raise RuntimeError("se perdió el enlace Bluetooth")
             self.sync = asyncio.create_task(self.keep_in_sync(client))
             self.emit("link", "connected")
+            try:
+                self.last_device.parent.mkdir(parents=True, exist_ok=True)
+                self.last_device.write_text(device_id, encoding="utf-8")
+            except OSError:
+                self.emit("status", "Conectado. Windows no ha podido guardar el PLC para la próxima apertura.")
+        except asyncio.CancelledError:
+            await self._disconnect()
+            raise
         except Exception as exc:
-            await self.disconnect()
+            await self._disconnect()
             self.emit("status", f"No se pudo abrir el canal de lectura: {exc}. Comprueba que este PC está asignado como HID.")
 
     def lost(self, client):
         if self.client is not client:
             return
+        self.clear_link()
+        if not self.transition.locked():
+            self.emit("link", "idle")
+            self.emit("status", "Desconectado del PLC.")
+
+    def clear_link(self):
         self.client = None
+        self.received.clear()
         self.buffer.clear()
         self.hotkey.apply("NONE")
         self.emit("hotkey", "—")
-        self.emit("link", "idle")
-        self.emit("status", "Desconectado del PLC.")
 
     async def disconnect(self):
+        async with self.transition:
+            await self._disconnect()
+
+    async def _disconnect(self):
+        self.emit("link", "busy")
         client = self.client
         if self.sync is not None and self.sync is not asyncio.current_task():
             self.sync.cancel()
         self.sync = None
-        if client is not None:
-            self.lost(client)
-            try:
+        self.clear_link()
+        try:
+            if client is not None:
                 await client.disconnect()
-            except Exception as exc:
-                self.emit("status", f"Error al cerrar Bluetooth: {exc}")
-        else:
+            self.emit("status", "Desconectado del PLC.")
+        except Exception as exc:
+            self.emit("status", f"Error al cerrar Bluetooth: {exc}")
+        finally:
             self.emit("link", "idle")
 
     async def refresh(self, client):
@@ -148,8 +187,10 @@ class Connection:
             try:
                 await self.refresh(client)
             except Exception as exc:
-                await self.disconnect()
-                self.emit("status", f"Canal de lectura cerrado: {exc}.")
+                async with self.transition:
+                    if self.client is client:
+                        await self._disconnect()
+                        self.emit("status", f"Canal de lectura cerrado: {exc}.")
 
     def notification(self, client, data):
         if client is not self.client:
@@ -213,7 +254,8 @@ def main():
     events = queue.SimpleQueue()
     emit = lambda kind, value=None: events.put((kind, value))
     loop = asyncio.new_event_loop()
-    connection = Connection(emit)
+    settings = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "IDAUT Lectura"
+    connection = Connection(emit, settings / "last-device.txt")
 
     def worker():
         asyncio.set_event_loop(loop)
@@ -237,15 +279,18 @@ def main():
     reload_button = ttk.Button(frame, text="Emparejados", command=lambda: run(connection.paired()))
     reload_button.grid(row=1, column=0, sticky="ew", pady=6)
     link = "idle"
+    pending_connection = None
 
     def toggle():
+        nonlocal pending_connection
         if link == "connected":
-            run(connection.disconnect())
-        elif picker.current() >= 0:
             button.configure(state="disabled")
-            run(connection.connect(*devices[picker.current()]))
+            run(connection.disconnect())
+        elif link == "idle" and picker.current() >= 0:
+            button.configure(state="disabled")
+            pending_connection = run(connection.connect(*devices[picker.current()]))
 
-    button = ttk.Button(frame, text="Conectar", command=toggle)
+    button = ttk.Button(frame, text="Conectar", command=toggle, state="disabled")
     button.grid(row=1, column=1, sticky="ew", pady=6)
     ttk.Label(frame, text="Atajo activo").grid(row=2, column=0, sticky="w")
     ttk.Label(frame, textvariable=hotkey).grid(row=2, column=1, sticky="w")
@@ -266,11 +311,19 @@ def main():
         while not events.empty():
             kind, value = events.get()
             if kind == "devices":
-                devices = value
+                current = picker.current()
+                previous = devices[current][0] if 0 <= current < len(devices) else None
+                devices, saved = value
                 picker["values"] = [f"{name} ({i + 1})" for i, (_, name) in enumerate(devices)]
                 picker.set("")
-                if len(devices) == 1:
+                selected = next((i for i, (device_id, _) in enumerate(devices)
+                                 if device_id == (previous or saved)), None)
+                if selected is not None:
+                    picker.current(selected)
+                elif len(devices) == 1:
                     picker.current(0)
+                if link == "idle":
+                    button.configure(state="normal")
             elif kind == "status":
                 status.set(value)
             elif kind == "hotkey":
@@ -289,12 +342,15 @@ def main():
                 return
         root.after(80, update)
 
-    run(connection.paired())
+    startup = run(connection.paired(reconnect=True))
     root.after(80, update)
     try:
         root.mainloop()
     finally:
         try:
+            startup.cancel()
+            if pending_connection is not None:
+                pending_connection.cancel()
             run(connection.disconnect()).result(timeout=3)
         finally:
             loop.call_soon_threadsafe(loop.stop)
