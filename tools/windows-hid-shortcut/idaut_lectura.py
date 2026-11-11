@@ -12,6 +12,7 @@ import threading
 from types import SimpleNamespace
 
 
+FFE0 = "0000ffe0-0000-1000-8000-00805f9b34fb"
 FFE1 = "0000ffe1-0000-1000-8000-00805f9b34fb"
 QUERY = b"HIDHOTKEY?\r\n"
 READ = b"HIDREAD\r\n"
@@ -98,32 +99,21 @@ class Connection:
                 await self._connect(device_id, name)
 
     async def _connect(self, device_id, name):
-        from bleak import BleakClient
-        from bleak.backends.device import BLEDevice
-        from bleak.backends.winrt.scanner import RawAdvData
-        from winrt.windows.devices.bluetooth import BluetoothAddressType, BluetoothLEDevice
+        from bleak.exc import BleakCharacteristicNotFoundError
 
         self.emit("link", "busy")
         self.emit("status", f"Conectando a {name}…")
         try:
-            device = await asyncio.wait_for(BluetoothLEDevice.from_id_async(device_id), timeout=10)
-            if device is None:
-                raise RuntimeError("Windows no encuentra el emparejamiento")
-            try:
-                address = device.bluetooth_address
-                target = BLEDevice(address.to_bytes(6, "big").hex(":"), name,
-                                   RawAdvData(adv=SimpleNamespace(bluetooth_address=address), scan=None))
-                address_type = "random" if device.bluetooth_address_type == BluetoothAddressType.RANDOM else "public"
-            finally:
-                device.close()
-            client = BleakClient(target, timeout=15, winrt={"address_type": address_type, "use_cached_services": False},
-                                 disconnected_callback=self.lost)
-            self.client = client
-            await client.connect()
-            await client.start_notify(FFE1, lambda _, data: self.notification(client, data))
-            await self.refresh(client)
-            if self.client is not client:
-                raise RuntimeError("se perdió el enlace Bluetooth")
+            for retry_delay in (2, 4, None):
+                try:
+                    client = await self._open_shortcut_channel(device_id, name)
+                    break
+                except BleakCharacteristicNotFoundError:
+                    if retry_delay is None:
+                        raise
+                    await self._close_client()
+                    self.emit("status", f"Conectando a {name}… Esperando el canal de lectura del PLC.")
+                    await asyncio.sleep(retry_delay)
             self.sync = asyncio.create_task(self.keep_in_sync(client))
             self.emit("device", name)
             self.emit("link", "connected")
@@ -135,9 +125,39 @@ class Connection:
         except asyncio.CancelledError:
             await self._disconnect()
             raise
+        except BleakCharacteristicNotFoundError:
+            await self._disconnect()
+            self.emit("status", "El canal de lectura del PLC aún no está disponible. Espera unos segundos y pulsa Conectar.")
         except Exception as exc:
             await self._disconnect()
             self.emit("status", f"No se pudo abrir el canal de lectura: {exc}. Comprueba que este PC está asignado como HID.")
+
+    async def _open_shortcut_channel(self, device_id, name):
+        from bleak import BleakClient
+        from bleak.backends.device import BLEDevice
+        from bleak.backends.winrt.scanner import RawAdvData
+        from winrt.windows.devices.bluetooth import BluetoothAddressType, BluetoothLEDevice
+
+        device = await asyncio.wait_for(BluetoothLEDevice.from_id_async(device_id), timeout=10)
+        if device is None:
+            raise RuntimeError("Windows no encuentra el emparejamiento")
+        try:
+            address = device.bluetooth_address
+            target = BLEDevice(address.to_bytes(6, "big").hex(":"), name,
+                               RawAdvData(adv=SimpleNamespace(bluetooth_address=address), scan=None))
+            address_type = "random" if device.bluetooth_address_type == BluetoothAddressType.RANDOM else "public"
+        finally:
+            device.close()
+        client = BleakClient(target, services=[FFE0], timeout=15,
+                             winrt={"address_type": address_type, "use_cached_services": False},
+                             disconnected_callback=self.lost)
+        self.client = client
+        await client.connect()
+        await client.start_notify(FFE1, lambda _, data: self.notification(client, data))
+        await self.refresh(client)
+        if self.client is not client:
+            raise RuntimeError("se perdió el enlace Bluetooth")
+        return client
 
     def lost(self, client):
         if self.client is not client:
@@ -160,19 +180,22 @@ class Connection:
 
     async def _disconnect(self):
         self.emit("link", "busy")
-        client = self.client
-        if self.sync is not None and self.sync is not asyncio.current_task():
-            self.sync.cancel()
-        self.sync = None
-        self.clear_link()
         try:
-            if client is not None:
-                await client.disconnect()
+            await self._close_client()
             self.emit("status", "")
         except Exception as exc:
             self.emit("status", f"Error al cerrar Bluetooth: {exc}")
         finally:
             self.emit("link", "idle")
+
+    async def _close_client(self):
+        client = self.client
+        if self.sync is not None and self.sync is not asyncio.current_task():
+            self.sync.cancel()
+        self.sync = None
+        self.clear_link()
+        if client is not None:
+            await client.disconnect()
 
     async def refresh(self, client):
         self.received.clear()
