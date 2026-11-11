@@ -1,5 +1,6 @@
 """Windows companion for an already assigned PLC Scanner HID receiver."""
 import asyncio
+from collections import Counter
 import ctypes
 from ctypes import wintypes
 import os
@@ -246,6 +247,25 @@ class Connection:
             self.reading = False
 
 
+def device_labels(devices):
+    counts = Counter(name for _, name in devices)
+    reserved = set(counts)
+    numbers = Counter()
+    labels = []
+    for _, name in devices:
+        if counts[name] == 1:
+            labels.append(name)
+            continue
+        while True:
+            numbers[name] += 1
+            label = f"{name} ({numbers[name]})"
+            if label not in reserved:
+                reserved.add(label)
+                labels.append(label)
+                break
+    return labels
+
+
 def barcode_icon():
     from PIL import Image, ImageDraw
 
@@ -407,7 +427,7 @@ def main():
                 current = picker.current()
                 previous = devices[current][0] if 0 <= current < len(devices) else None
                 devices, saved = value
-                picker["values"] = [f"{name} ({i + 1})" for i, (_, name) in enumerate(devices)]
+                picker["values"] = device_labels(devices)
                 picker.set("")
                 selected = next((i for i, (device_id, _) in enumerate(devices)
                                  if device_id == (previous or saved)), None)
