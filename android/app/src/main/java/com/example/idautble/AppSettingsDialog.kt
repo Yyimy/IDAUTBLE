@@ -40,6 +40,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -109,7 +111,7 @@ private enum class SettingsPage(val title: String) {
     THEME("Theme"),
     TERMINAL_TEXT_SIZE("Terminal text size"),
     LOG_VIEW("Log view"),
-    TERMINAL_ORDER("Terminal section order"),
+    TERMINAL_ORDER("Section order"),
     EXPANDED_SECTIONS("Expanded sections"),
 }
 
@@ -132,7 +134,7 @@ internal fun AppSettingsDialog(
     onDismiss: () -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf(SettingsPage.MAIN) }
-    val themeLabel = if (darkMode) "Dark mode" else "Light"
+    val themeLabel = if (darkMode) "Dark mode" else "Light mode"
 
     AlertDialog(
         onDismissRequest = {
@@ -144,12 +146,13 @@ internal fun AppSettingsDialog(
                 SettingsPage.MAIN -> Column(
                     Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())
                 ) {
-                    SettingsRow("Background", background.label, Modifier.clickable { page = SettingsPage.BACKGROUND }) {
-                        BackgroundSwatch(background, darkMode, Modifier.size(18.dp))
+                    SettingsGroupHeading("Style")
+                    SettingsRow("Theme", themeLabel, Modifier.clickable { page = SettingsPage.THEME }) {
                         SettingsChevron()
                     }
                     HorizontalDivider()
-                    SettingsRow("Theme", themeLabel, Modifier.clickable { page = SettingsPage.THEME }) {
+                    SettingsRow("Background", background.label, Modifier.clickable { page = SettingsPage.BACKGROUND }) {
+                        BackgroundSwatch(background, darkMode, Modifier.size(18.dp))
                         SettingsChevron()
                     }
                     HorizontalDivider()
@@ -162,15 +165,17 @@ internal fun AppSettingsDialog(
                     SettingsRow("Log view", logView.label, Modifier.clickable { page = SettingsPage.LOG_VIEW }) {
                         SettingsChevron()
                     }
-                    HorizontalDivider()
-                    SettingsRow("Terminal section order", modifier = Modifier.clickable { page = SettingsPage.TERMINAL_ORDER }) {
+
+                    SettingsGroupHeading("Terminal sections")
+                    SettingsRow("Section order", modifier = Modifier.clickable { page = SettingsPage.TERMINAL_ORDER }) {
                         SettingsChevron()
                     }
                     HorizontalDivider()
                     SettingsRow("Expanded sections", modifier = Modifier.clickable { page = SettingsPage.EXPANDED_SECTIONS }) {
                         SettingsChevron()
                     }
-                    HorizontalDivider()
+
+                    SettingsGroupHeading("Screen")
                     SettingsRow(
                         "Keep screen on",
                         modifier = Modifier.toggleable(keepScreenOn, role = Role.Switch, onValueChange = onKeepScreenOnChange),
@@ -261,7 +266,7 @@ internal fun AppSettingsDialog(
                     }
                 }
                 SettingsPage.THEME -> Column(Modifier.selectableGroup()) {
-                    SettingsChoiceRow("Light", !darkMode, { onDarkModeChange(false) }, divider = true)
+                    SettingsChoiceRow("Light mode", !darkMode, { onDarkModeChange(false) }, divider = true)
                     SettingsChoiceRow("Dark mode", darkMode, { onDarkModeChange(true) }, divider = false)
                 }
             }
@@ -281,6 +286,16 @@ internal fun AppSettingsDialog(
                 TextButton(onClick = { page = SettingsPage.MAIN }) { Text("Back") }
             }
         },
+    )
+}
+
+@Composable
+private fun SettingsGroupHeading(label: String) {
+    Text(
+        label,
+        modifier = Modifier.padding(start = 4.dp, top = 10.dp, bottom = 2.dp).semantics { heading() },
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary,
     )
 }
 
