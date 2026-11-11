@@ -89,8 +89,35 @@ fun parseNetStatusLine(line: String): NetStatus? {
         wifi, link, tcp, ip, rssi,
         fields["PONGAGE"]?.toLongOrNull()?.takeIf { it >= 0 },
         fields["EVT_PENDING"]?.toIntOrNull()?.takeIf { it >= 0 },
+        parseTcpMonitor(fields),
     )
 }
+
+private fun parseTcpMonitor(fields: Map<String, String>): TcpMonitorSnapshot? {
+    if (fields["TCPMON"] != "1") return null
+    val disconnection = fields["TCPDOWN"]?.let { entry ->
+        val reason = entry.substringBefore(',')
+        val age = parseTcpAge(entry.substringAfter(',', ""))
+        if (reason.isNotEmpty() && age != null) TcpDisconnection(reason, age) else null
+    }
+    val replies = fields["TCPRX"].orEmpty().split('|', limit = 6).take(5).mapNotNull { entry ->
+        val age = parseTcpAge(entry.substringBefore(',')) ?: return@mapNotNull null
+        val payload = entry.substringAfter(',', "")
+        val hex = payload.removeSuffix("+")
+        if (hex.length !in 2..48 || hex.length % 2 != 0) return@mapNotNull null
+        val text = buildString {
+            for (pair in hex.chunked(2)) {
+                val code = pair.toIntOrNull(16)?.takeIf { it in 32..126 } ?: return@mapNotNull null
+                append(code.toChar())
+            }
+        }
+        TcpServerReply(age, text, payload.endsWith('+'))
+    }
+    return TcpMonitorSnapshot(parseTcpAge(fields["TCPUP"]), disconnection, replies)
+}
+
+private fun parseTcpAge(value: String?): Long? =
+    value?.toLongOrNull()?.takeIf { it in 0..4_294_967L }
 
 // Construcción del comando para enviar al PLC
 fun buildNetSetCommand(cfg: NetConfig): String {

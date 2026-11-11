@@ -31,6 +31,7 @@
 
 #include "Types.h"
 #include "OutboxStorage.h"
+#include "TcpMonitor.h"
 
 // ================= CONFIGURACION DEL PIN POR EL INSTALADOR ==================
 // Cambia este valor ANTES de compilar. Exactamente 6 cifras, entre comillas.
@@ -233,6 +234,7 @@ static bool gWifiEnabled = false;
 
 static bool gWifiConnected = false;
 static bool gTcpConnected = false;
+static TcpMonitor gTcpMonitor;
 
 static bool gTcpConnectedPrev = false;
 
@@ -997,6 +999,7 @@ static void netSave() {
 }
 
 static void wifiStartFromConfig() {
+  gTcpMonitor.disconnected(millis(), "CONFIG_CHANGED");
   gTcpClient.stop();
   gTcpConnected = false;
   gTcpState = TCP_IDLE;
@@ -1029,6 +1032,7 @@ static void wifiStartFromConfig() {
 static void tcpConnectTick() {
   // Si WiFi no está realmente conectado, no hay nada que hacer
   if (!gWifiConnected) {
+    gTcpMonitor.disconnected(millis(), "WIFI_LOST");
     if (gTcpClient.connected()) gTcpClient.stop();
     gTcpConnected = false;
     gTcpState = TCP_IDLE;
@@ -1044,6 +1048,7 @@ static void tcpConnectTick() {
 
   // Si creíamos que estaba conectado pero ya no, limpiamos
   if (gTcpConnected) {
+    gTcpMonitor.disconnected(millis(), "SOCKET_CLOSED");
     gTcpConnected = false;
     gTcpState = TCP_WAIT_RETRY;
   }
@@ -1095,6 +1100,7 @@ static void tcpConnectTick() {
           gTcpState = TCP_WAIT_RETRY;
           logLine("TCP greeting queue full; reconnecting before sending data");
         } else {
+          gTcpMonitor.connected(millis());
           logLine("TCP CONNECTED greeting queued");
         }
       } else {
@@ -1171,6 +1177,7 @@ static void tcpPollRx() {
     if (c == '\n') {
       if (used && !overflow) {
         line[used] = 0;
+        gTcpMonitor.receive(millis(), line, used);
         if (!strcmp(line, "PONG") || !strncmp(line, "PONG;", 5)) {
           gLastTcpRxMs = millis();
           gTcpPongSeen = true;
@@ -1203,6 +1210,7 @@ static void tcpPollRx() {
 static void tcpWatchdog() {
   if (!gTcpConnected) return;
   if (!gTcpClient.connected()) {
+    gTcpMonitor.disconnected(millis(), "SOCKET_CLOSED");
     gTcpConnected = false;
     return;
   }
@@ -1214,6 +1222,7 @@ static void tcpWatchdog() {
     queueTargetFrame(ping, sizeof(ping), nullptr, TX_TCP_ONLY, gTcpSession.load());
   }
   if (millis() - gLastTcpRxMs > gTcpTimeoutSeconds * 1000U) {
+    gTcpMonitor.disconnected(millis(), "PONG_TIMEOUT");
     gTcpClient.stop();
     gTcpConnected = false;
     logLine("TCP: timeout PONG");
@@ -1695,6 +1704,30 @@ static void netSendCurrent() {
   sendCommandReply((const uint8_t *)s.c_str(), s.length());
 }
 
+static void appendTcpMonitor(String &status, uint32_t now) {
+  status += ";TCPMON=1";
+  if (gTcpMonitor.hasConnected) status += ";TCPUP=" + String((now - gTcpMonitor.connectedAt) / 1000U);
+  if (gTcpMonitor.disconnectReason) {
+    status += ";TCPDOWN=" + String(gTcpMonitor.disconnectReason) + "," +
+              String((now - gTcpMonitor.disconnectedAt) / 1000U);
+  }
+  if (!gTcpMonitor.count) return;
+  status += ";TCPRX=";
+  static constexpr char hex[] = "0123456789ABCDEF";
+  for (uint8_t i = 0; i < gTcpMonitor.count; ++i) {
+    if (i) status += '|';
+    const auto &reply = gTcpMonitor.newest(i);
+    status += String((now - reply.at) / 1000U);
+    status += ',';
+    for (uint8_t j = 0; j < reply.length; ++j) {
+      const uint8_t value = reply.text[j];
+      status += hex[value >> 4];
+      status += hex[value & 0x0F];
+    }
+    if (reply.truncated) status += '+';
+  }
+}
+
 static void netSendStatus(bool unsolicited) {
   String s;
   s.reserve(160);
@@ -1714,6 +1747,7 @@ static void netSendStatus(bool unsolicited) {
     if (realTcp && gHeartbeatEnabled && gTcpPongSeen) s += String((millis() - gLastTcpRxMs) / 1000U);
     else s += "-";
     s += ";EVT_PENDING=" + String(gOutbox.count);
+    appendTcpMonitor(s, millis());
   }
 
   if (gWifiConnected) {
@@ -2380,6 +2414,7 @@ static void bleProcessPendingOnce() {
           gTcpClient.stop();
         }
 
+        gTcpMonitor.disconnected(millis(), "WIFI_DISABLED");
         // Limpiamos flags en orden correcto
         gTcpConnected = false;
         gTcpConnectedPrev = false;
@@ -2514,6 +2549,7 @@ static void bleProcessPendingOnce() {
           break;
         }
 
+        gTcpMonitor.disconnected(millis(), "OTA");
         uint8_t okFrame[] = {0x06, 'O', 'K', 0x0D, 0x0A};
         sendCommandReply(okFrame, sizeof(okFrame));
         break;
@@ -3105,6 +3141,7 @@ void loop() {
         tcpPollRx();
         tcpWatchdog();
       } else {
+        gTcpMonitor.disconnected(millis(), "WIFI_LOST");
         if (gTcpClient.connected()) gTcpClient.stop();
         gTcpConnected = false;
         gTcpState = TCP_IDLE;
@@ -3623,6 +3660,7 @@ static void txTick() {
           accepted = true;
         }
       } else if (n == -1) {
+        gTcpMonitor.disconnected(millis(), "WRITE_FAILED");
         gTcpClient.stop();
         gTcpConnected = false;
         tcpDone = true;
@@ -3630,6 +3668,7 @@ static void txTick() {
       // Backpressure never blocks IO. Drop this connection after 2 s without
       // completing.
       if (!tcpDone && millis() - started > 2000) {
+        gTcpMonitor.disconnected(millis(), "WRITE_TIMEOUT");
         gTcpClient.stop();
         gTcpConnected = false;
         tcpDone = true;

@@ -27,7 +27,7 @@ int xQueueReceive(int,BleCmd*c,int){if(commands.empty())return 0;*c=commands.fro
 int xQueueSend(int,const BleCmd*c,int){if(commands.size()>=8)return 0;commands.push_back(*c);return 1;}
 bool gWifiEnabled=true,gWifiConnected=true,gTcpConnectedPrev=false;
 TcpConnState gTcpState=TCP_IDLE;
-uint32_t gLastTcpAttempt=0,gLastTcpActivity=0,gLastTcpRxMs=0,gLastTcpPingMs=0;
+uint32_t gLastTcpAttempt=0,gLastTcpActivity=0;
 constexpr uint32_t TCP_RETRY_MS=3000;constexpr uint16_t TCP_CONNECT_TIMEOUT_MS=200;
 constexpr int WL_CONNECTED=3;const char*NVS_NS_NET="net3";
 bool cfgParseSet(const String&,String&a,String&b){a="]d1";b="]Q1";return true;}bool cfgSave(const String&,const String&){return true;}
@@ -54,7 +54,7 @@ void sendHotkey(ShortcutPeer){replyLine(true,"HIDHOTKEY=CTRL+ALT+L");}
 void sendDeviceStatus(){replyLine(true,"STATUS=1;FW=TEST;ID=TRUCK-1");}
 void handleIdentityCommand(const String&,uint8_t){replyLine(true,"ID=TRUCK-1;HWID=AABBCCDDEEFF;NAME=TRUCK-1");}
 '''
-names = ['sendCounters','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','tcpTextCommandType','cfgSendOk','cfgSendErr','cfgSendCurrent','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','eventTick']
+names = ['sendCounters','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','tcpTextCommandType','cfgSendOk','cfgSendErr','cfgSendCurrent','tcpAdvancedValues','setReaderTimeout','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','tcpWatchdog','eventTick']
 body += extra+'\n'+'\n'.join(base['function'](n).split('{',1)[0]+';' for n in names)+'\n'
 body += '\n'.join(base['function'](n) for n in names)
 body += r'''
@@ -173,6 +173,18 @@ int main(){
  CHECK(commands[0].type==BLECMD_NETSTAT_GET&&commands[0].session==gTcpSession);bleProcessPendingOnce();bleProcessPendingOnce();drain();
  CHECK(bleBytes().empty());CHECK(gTcpClient.sent.find("NETSTAT=")!=std::string::npos);CHECK(gTcpClient.sent.find("FW=")!=std::string::npos);
  CHECK(tcpTextCommandType("STATUS?")==BLECMD_TEXT);CHECK(tcpTextCommandType("NET=PORT=1")==BLECMD_NONE);CHECK(tcpTextCommandType("WIFI=0")==BLECMD_NONE);CHECK(tcpTextCommandType("AUTH=123456")==BLECMD_NONE);
+ // Server replies and outage diagnostics stay on the BLE maintenance session.
+ fresh();gTcpMonitor=TcpMonitor{};gTcpMonitor.connected(nowMs);
+ plcHid::clientGeneration=31;gTcpClient.rx="PONG\r\nACK=42\r\n";tcpPollRx();commands.clear();
+ gHeartbeatEnabled=true;gLastTcpRxMs=nowMs-21000;tcpWatchdog();
+ CHECK(!gTcpClient.up);CHECK(std::string(gTcpMonitor.disconnectReason)=="PONG_TIMEOUT");
+ netSendStatus(true);drain();
+ CHECK(bleBytes().find("TCPMON=1")!=std::string::npos);
+ CHECK(bleBytes().find("TCPDOWN=PONG_TIMEOUT,")!=std::string::npos);
+ CHECK(bleBytes().find(",41434B3D3432|")!=std::string::npos);
+ CHECK(bleBytes().find(",504F4E47")!=std::string::npos);
+ CHECK(clientBytes().empty()&&gTcpClient.sent.empty());
+ gHeartbeatEnabled=false;
  // Neither partial text nor binary bytes from an old socket can become a new command.
  fresh();gTcpClient.rx="STA";tcpPollRx();++gTcpSession;gTcpClient.rx="TUS?\n";tcpPollRx();CHECK(commands.empty());
  gTcpClient.rx="INFO?\n";tcpPollRx();CHECK(commands.size()==1);commands.clear();
