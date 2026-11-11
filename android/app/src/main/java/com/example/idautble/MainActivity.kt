@@ -937,13 +937,15 @@ class MainActivity : ComponentActivity() {
         if (config != null && !maintenanceSession.isAuthorized()) { showIdentityAuthorizationMessage(); return }
         val prefixKeys = uiHidOutput.value.prefixKeys
         val readHotkey = uiHidOutput.value.readHotkey
+        val endingSequence = uiHidOutput.value.endingSequence
         val command = if (config == null) {
             when {
+                endingSequence -> "HIDCFG4?"
                 readHotkey -> "HIDCFG3?"
                 prefixKeys -> "HIDCFG2?"
                 else -> "HIDCFG?"
             }
-        } else runCatching { config.wire(includePrefix = prefixKeys, includeHotkey = readHotkey) }.getOrNull() ?: return
+        } else runCatching { config.wire(includePrefix = prefixKeys, includeHotkey = readHotkey, includeEndingSequence = endingSequence) }.getOrNull() ?: return
         hidOutputExpected = config
         val request = ++hidOutputRequest
         uiHidOutput.value = uiHidOutput.value.copy(busy = true, message = "Waiting for the PLC...")
@@ -966,6 +968,7 @@ class MainActivity : ComponentActivity() {
                 extendedKeys = "HIDKEYS=1" in text.split(';'),
                 prefixKeys = "HIDPREFIX=1" in text.split(';'),
                 readHotkey = "HIDHOTKEY=1" in text.split(';'),
+                endingSequence = "HIDENDSEQ=1" in text.split(';'),
             )
             hidOutputRequest++; hidOutputExpected = null
             if (supported) requestHidOutput(null)

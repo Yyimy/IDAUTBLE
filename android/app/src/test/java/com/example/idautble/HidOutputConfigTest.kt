@@ -4,6 +4,24 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HidOutputConfigTest {
+    @Test fun finalSequenceRoundTripsAndFollowsLastField() {
+        val config = HidOutputConfig(ending = "\t\n\n")
+        assertEquals("PALLET123{TAB}LOC01{TAB}{ENTER}{ENTER}", config.preview())
+        assertEquals("LOC01{TAB}{ENTER}{ENTER}", config.copy(fields = "U").preview())
+        assertEquals(config, parseHidOutputConfig(config.wire()))
+        assertTrue(config.wire().contains(";ENDHEX=090A0A;"))
+        assertNull(parseHidOutputConfig(config.wire() + ";END=ENTER"))
+        for (hex in listOf("00", "0D", "98", "0a", "1", "", "09".repeat(33))) {
+            assertNull(parseHidOutputConfig(config.wire().replace("090A0A", hex)))
+        }
+        val longest = config.copy(prefix = "\t".repeat(32), separator = "\n".repeat(32),
+            ending = "\t".repeat(32), hotkey = "CTRL+ALT+SHIFT+F12")
+        assertEquals(longest, parseHidOutputConfig(longest.wire()))
+        val clear = config.copy(ending = "")
+        assertEquals(clear, parseHidOutputConfig(clear.wire(includeEndingSequence = true)))
+        assertEquals(clear, parseHidOutputConfig(clear.wire(includeEndingSequence = false)))
+    }
+
     @Test fun readShortcutRoundTripsWithoutChangingTheTypedSequence() {
         val config = HidOutputConfig(hotkey = "CTRL+ALT+L")
         assertEquals(config, parseHidOutputConfig(config.wire()))
@@ -18,14 +36,14 @@ class HidOutputConfigTest {
     @Test fun extendedKeysCanSeparateOrTerminate() {
         val pattern = "{ESC}{BACKSPACE}{DELETE}{INSERT}{HOME}{END}{PAGEUP}{PAGEDOWN}{F1}{F12}"
         val separator = decodeHidSeparator(pattern)!!
-        val config = HidOutputConfig(separator = separator, ending = "PAGEDOWN")
+        val config = HidOutputConfig(separator = separator, ending = "\u008b")
         assertEquals("HIDCFG=1;FIELDS=PU;SEPHEX=8485868788898A8B8C97;END=PAGEDOWN;LAYOUT=US", config.wire())
         assertEquals(config, parseHidOutputConfig(config.wire()))
         assertEquals("PALLET123${pattern}LOC01{PAGEDOWN}", config.preview())
         assertNull(decodeHidSeparator(pattern, extended = false))
         assertEquals(32, decodeHidSeparator("{BACKSPACE}".repeat(32))?.length)
         assertNull(decodeHidSeparator("{BACKSPACE}".repeat(33)))
-        assertFalse("PAGEDOWN" in hidEndingOptions(extended = false))
+        assertNull(legacyHidEnding(config.ending, extended = false))
     }
 
     @Test fun arrowsRoundTripAndRequireFirmwareSupport() {
@@ -59,7 +77,7 @@ class HidOutputConfigTest {
         assertTrue(config.wire(includePrefix = true).endsWith(";PREHEX=-"))
         assertEquals(config, parseHidOutputConfig(config.wire(includePrefix = true)))
         assertEquals(config, parseHidOutputConfig(config.wire()))
-        val longest = HidOutputConfig(prefix = "\t".repeat(32), separator = "\n".repeat(32), ending = "BACKSPACE")
+        val longest = HidOutputConfig(prefix = "\t".repeat(32), separator = "\n".repeat(32), ending = "\u0085")
         assertEquals(longest, parseHidOutputConfig(longest.wire()))
         listOf("", "00", "0a", "1", "98", "09;PREHEX=-", "09".repeat(33)).forEach { hex ->
             assertNull(parseHidOutputConfig(config.wire() + ";PREHEX=$hex"))
@@ -70,13 +88,13 @@ class HidOutputConfigTest {
         assertEquals(bytes, decodeHidSeparator(hidSeparatorPattern(bytes)))
         assertEquals("\n\n-\t ", decodeHidSeparator("{ENTER}{ENTER}-{TAB}{SPACE}"))
         assertEquals("{ENTER}", decodeHidSeparator("{{ENTER}"))
-        val cfg = HidOutputConfig(separator = bytes, layout = "ES", ending = "NONE")
+        val cfg = HidOutputConfig(separator = bytes, layout = "ES", ending = "")
         assertEquals(cfg, parseHidOutputConfig(cfg.wire()))
     }
     @Test fun modesAndIndependentEnding() {
-        assertEquals("PALLET123{TAB}", HidOutputConfig(fields = "P", ending = "TAB").preview())
-        assertEquals("LOC01", HidOutputConfig(fields = "U", ending = "NONE").preview())
-        assertEquals("PALLET123LOC01", HidOutputConfig(separator = "", ending = "NONE").preview())
+        assertEquals("PALLET123{TAB}", HidOutputConfig(fields = "P", ending = "\t").preview())
+        assertEquals("LOC01", HidOutputConfig(fields = "U", ending = "").preview())
+        assertEquals("PALLET123LOC01", HidOutputConfig(separator = "", ending = "").preview())
         assertEquals(HidOutputConfig(separator = ""), parseHidOutputConfig(HidOutputConfig(separator = "").wire()))
     }
     @Test fun invalidPatternsAreNotSilentlyChanged() {

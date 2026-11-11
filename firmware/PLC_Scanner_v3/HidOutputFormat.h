@@ -8,7 +8,8 @@ struct OutputFormat {
   uint8_t fields=3; // 1 pallet, 2 location, 3 both
   uint8_t separator[32]={'\t'};
   uint8_t separatorLength=1;
-  char ending='\n';
+  uint8_t ending[32]={'\n'};
+  uint8_t endingLength=1;
   KeyLayout layout=KeyLayout::US;
   uint8_t prefix[32]={};
   uint8_t prefixLength=0;
@@ -57,6 +58,11 @@ inline const char *endingName(char value) {
   if (value == ' ') return "SPACE";
   const auto *key = specialKey(static_cast<unsigned char>(value));
   return key ? key->name : "NONE";
+}
+
+inline bool needsEndingSequence(const OutputFormat &f) {
+  return f.endingLength > 1 ||
+      (f.endingLength == 1 && std::strcmp(endingName(static_cast<char>(f.ending[0])), "NONE") == 0);
 }
 
 inline bool parseEnding(const std::string &name, char &value) {
@@ -108,10 +114,16 @@ inline bool validHotkey(const std::string &shortcut) {
       (key.size() == 2 && key[0] == 'F' && key[1] >= '1' && key[1] <= '9') ||
       key == "F10" || key == "F11" || key == "F12";
 }
-inline std::string outputWire(const OutputFormat &f, bool includePrefix = false, bool includeHotkey = false) {
+inline std::string outputWire(const OutputFormat &f, bool includePrefix = false, bool includeHotkey = false, bool includeEndingSequence = false) {
   std::string s="HIDCFG=1;FIELDS=";s+=f.fields==1?"P":f.fields==2?"U":"PU";s+=";SEPHEX=";
   appendOutputHex(s, f.separator, f.separatorLength);
-  s+=";END=";s+=endingName(f.ending);
+  if (includeEndingSequence) {
+    s += ";ENDHEX=";
+    appendOutputHex(s, f.ending, f.endingLength);
+  } else {
+    s += ";END=";
+    s += f.endingLength == 1 ? endingName(static_cast<char>(f.ending[0])) : "NONE";
+  }
   s+=";LAYOUT=";s+=f.layout==KeyLayout::US?"US":"ES";
   if (includePrefix) {
     s += ";PREHEX=";
@@ -120,16 +132,28 @@ inline std::string outputWire(const OutputFormat &f, bool includePrefix = false,
   if (includeHotkey) s += ";HOTKEY=" + f.hotkey;
   return s;
 }
-inline bool parseOutputFormat(const std::string &s,OutputFormat &out, bool *prefixPresent = nullptr, bool *hotkeyPresent = nullptr) {
-  if(s.size()>224||s.rfind("HIDCFG=1;",0)!=0)return false;
+inline bool parseOutputFormat(const std::string &s,OutputFormat &out, bool *prefixPresent = nullptr, bool *hotkeyPresent = nullptr, bool *endingSequencePresent = nullptr) {
+  if(s.size()>288||s.rfind("HIDCFG=1;",0)!=0)return false;
   OutputFormat f;unsigned seen=0;size_t start=9;
+  bool endingSequence = false;
   while(start<s.size()) {
     size_t end=s.find(';',start);if(end==std::string::npos)end=s.size();
     auto field=s.substr(start,end-start);size_t split=field.find('=');if(split==std::string::npos)return false;
     auto key=field.substr(0,split),value=field.substr(split+1);unsigned bit=0;
     if(key=="FIELDS") {bit=1;if(value=="P")f.fields=1;else if(value=="U")f.fields=2;else if(value=="PU")f.fields=3;else return false;}
     else if(key=="SEPHEX") {bit=2;if(!parseOutputHex(value,f.separator,f.separatorLength))return false;}
-    else if(key=="END") {bit=4;if(!parseEnding(value,f.ending))return false;}
+    else if(key=="END") {
+      bit=4;
+      char legacyEnding;
+      if(!parseEnding(value,legacyEnding))return false;
+      f.ending[0]=static_cast<uint8_t>(legacyEnding);
+      f.endingLength=legacyEnding ? 1 : 0;
+    }
+    else if(key=="ENDHEX") {
+      bit=4;
+      if(!parseOutputHex(value,f.ending,f.endingLength))return false;
+      endingSequence=true;
+    }
     else if(key=="LAYOUT") {bit=8;if(value=="US")f.layout=KeyLayout::US;else if(value=="ES")f.layout=KeyLayout::ES;else return false;}
     else if(key=="PREHEX") {bit=16;if(!parseOutputHex(value,f.prefix,f.prefixLength))return false;}
     else if(key=="HOTKEY") {bit=32;if(!validHotkey(value))return false;f.hotkey=value;}
@@ -142,16 +166,18 @@ inline bool parseOutputFormat(const std::string &s,OutputFormat &out, bool *pref
   if((seen&15)!=15)return false;
   if(prefixPresent)*prefixPresent=(seen&16)!=0;
   if(hotkeyPresent)*hotkeyPresent=(seen&32)!=0;
+  if(endingSequencePresent)*endingSequencePresent=endingSequence;
   out=f;return true;
 }
 // A missing selected field rejects the whole reading; never substitute stale data.
 inline bool formatReading(const OutputFormat &f,const char *pallet,const char *location,std::string &out) {
   out.clear();
   if(f.fields<1||f.fields>3||f.separatorLength>32||f.prefixLength>32||
-      (f.ending && std::strcmp(endingName(f.ending), "NONE") == 0)||
+      f.endingLength>32||
       (f.layout!=KeyLayout::US && f.layout!=KeyLayout::ES))return false;
   for(unsigned i=0;i<f.separatorLength;++i)if(!validSeparatorByte(f.separator[i]))return false;
   for(unsigned i=0;i<f.prefixLength;++i)if(!validSeparatorByte(f.prefix[i]))return false;
+  for(unsigned i=0;i<f.endingLength;++i)if(!validSeparatorByte(f.ending[i]))return false;
   const auto validCode = [](const char *code) {
     if (!code || !*code || !std::strcmp(code, "-")) return false;
     for (const char *p = code; *p; ++p) {
@@ -164,7 +190,7 @@ inline bool formatReading(const OutputFormat &f,const char *pallet,const char *l
   if(f.fields&1)text+=pallet;
   if(f.fields==3)text.append((const char*)f.separator,f.separatorLength);
   if(f.fields&2)text+=location;
-  if(f.ending)text+=f.ending;
+  text.append(reinterpret_cast<const char *>(f.ending), f.endingLength);
   if(text.size()>512)return false;
   out=text;return true;
 }
