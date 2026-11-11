@@ -48,6 +48,18 @@ fun parseNetConfigLine(line: String): NetConfig? {
     )
 }
 
+internal fun parseTcpAdvanced(line: String): TcpAdvancedConfig? {
+    val values = when {
+        line.startsWith("TCPADV=") -> line.substringAfter('=')
+        else -> networkFields(line, "NET=")?.get("TCPADV") ?: return null
+    }.split(',')
+    if (values.size != 4 || values.take(2).any { it != "0" && it != "1" }) return null
+    val interval = values[2].toIntOrNull() ?: return null
+    val timeout = values[3].toIntOrNull() ?: return null
+    return TcpAdvancedConfig(values[0] == "1", values[1] == "1", interval, timeout)
+        .takeIf { it.valid && it.command() == "TCPADV=" + values.joinToString(",") }
+}
+
 fun parseNetStatusLine(line: String): NetStatus? {
     val fields = networkFields(line, "NETSTAT=") ?: return null
     val wifi =
@@ -73,7 +85,11 @@ fun parseNetStatusLine(line: String): NetStatus? {
     val ip = fields["IP"]
     if (ip != null && ipv4Value(ip) == null) return null
     val rssi = fields["RSSI"]?.let { it.toIntOrNull()?.takeIf { v -> v in -127..0 } ?: return null }
-    return NetStatus(wifi, link, tcp, ip, rssi)
+    return NetStatus(
+        wifi, link, tcp, ip, rssi,
+        fields["PONGAGE"]?.toLongOrNull()?.takeIf { it >= 0 },
+        fields["EVT_PENDING"]?.toIntOrNull()?.takeIf { it >= 0 },
+    )
 }
 
 // Construcción del comando para enviar al PLC

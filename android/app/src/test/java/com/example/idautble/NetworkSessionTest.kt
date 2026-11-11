@@ -57,6 +57,39 @@ class NetworkSessionTest {
         }
 
     @Test
+    fun tcpAdvancedRequiresExactReadbackAndReportsLiveDiagnostics() {
+        val r = loaded()
+        r.ack(configLine() + ";TCPADV=0,0,10,20")
+        val changed = TcpAdvancedConfig(true, true, 15, 45)
+        r.session.saveTcpAdvanced(changed)
+        assertEquals("TCPADV=1,1,15,45", r.commands.last().first)
+        assertTrue(requiresMaintenanceAuthorization("TCPADV=1,1,15,45\r\n".toByteArray()))
+        r.sent()
+        r.ack("OK")
+        assertFalse(r.session.state.tcpAdvanced!!.heartbeat)
+        r.ack("TCPADV=1,1,15,45")
+        assertEquals(changed, r.session.state.tcpAdvanced)
+        r.sent()
+        r.ack(connected + ";PONGAGE=2;EVT_PENDING=4")
+        assertEquals(2L, r.session.state.status!!.pongAgeSeconds)
+        assertEquals(4, r.session.state.status!!.pendingEvents)
+    }
+
+    @Test
+    fun tcpAdvancedRejectsInvalidTimingAndDoesNotOfferSettingsForOlderFirmware() {
+        val r = loaded()
+        val oldCount = r.commands.size
+        assertNull(r.session.state.tcpAdvanced)
+        r.session.saveTcpAdvanced(TcpAdvancedConfig(true, false, 10, 20))
+        assertEquals(oldCount, r.commands.size)
+        r.ack(configLine() + ";TCPADV=0,0,10,20")
+        r.session.saveTcpAdvanced(TcpAdvancedConfig(true, false, 10, 10))
+        assertEquals(oldCount, r.commands.size)
+        assertNull(parseTcpAdvanced("TCPADV=1,0,4,20"))
+        assertNull(parseTcpAdvanced("TCPADV=1,0,10,301"))
+    }
+
+    @Test
     fun openingReadsConfigurationOverBleWithWifiOffAndDoesNotEnableWifi() {
         val r = loaded()
         assertEquals(listOf("NET?", "NETSTAT?"), r.commands.map { it.first })

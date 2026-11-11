@@ -94,6 +94,7 @@ enum class NetworkOperation {
     READ_CONFIG,
     READ_STATUS,
     SAVE,
+    SAVE_TCP_ADVANCED,
     WIFI_ON,
     WIFI_OFF,
 }
@@ -108,6 +109,7 @@ data class NetworkPending(
     val readback: NetConfig? = null,
     val statusReadback: NetStatus? = null,
     val automatic: Boolean = false,
+    val expectedTcpAdvanced: TcpAdvancedConfig? = null,
 )
 
 data class NetworkUiState(
@@ -117,6 +119,7 @@ data class NetworkUiState(
     val draft: NetworkDraft = NetworkDraft(),
     val configReceivedAt: Long? = null,
     val status: NetStatus? = null,
+    val tcpAdvanced: TcpAdvancedConfig? = null,
     val statusReceivedAt: Long? = null,
     val pending: NetworkPending? = null,
     val saved: Boolean = false,
@@ -145,6 +148,7 @@ data class NetworkUiState(
                     setOf(
                         NetworkOperation.READ_CONFIG,
                         NetworkOperation.SAVE,
+                        NetworkOperation.SAVE_TCP_ADVANCED,
                         NetworkOperation.WIFI_ON,
                         NetworkOperation.WIFI_OFF,
                     )
@@ -264,6 +268,13 @@ class NetworkSession(private val now: () -> Long, private val send: (String, Lon
         issue(NetworkOperation.SAVE, buildNetSetCommand(state.draft.config()), state.draft.config())
     }
 
+    fun saveTcpAdvanced(config: TcpAdvancedConfig) {
+        if (!config.valid || state.tcpAdvanced == null || state.tcpAdvanced == config) return
+        if (!prepareUserOperation()) return
+        state = state.copy(error = null, notice = "Waiting for authorisation and PLC confirmation...")
+        issue(NetworkOperation.SAVE_TCP_ADVANCED, config.command(), expectedTcpAdvanced = config)
+    }
+
     fun toggleWifi() {
         if (!state.available || state.controlsBusy || state.config == null || state.status == null)
             return
@@ -286,6 +297,7 @@ class NetworkSession(private val now: () -> Long, private val send: (String, Lon
         command: String,
         expected: NetConfig? = null,
         automatic: Boolean = false,
+        expectedTcpAdvanced: TcpAdvancedConfig? = null,
     ) {
         val id = ++sequence
         state =
@@ -297,6 +309,7 @@ class NetworkSession(private val now: () -> Long, private val send: (String, Lon
                         now() + 60_000,
                         expected = expected,
                         automatic = automatic,
+                        expectedTcpAdvanced = expectedTcpAdvanced,
                     )
             )
         if (op == NetworkOperation.READ_STATUS) lastPoll = now()
@@ -327,6 +340,7 @@ class NetworkSession(private val now: () -> Long, private val send: (String, Lon
                 pending.operation in
                     setOf(
                         NetworkOperation.SAVE,
+                        NetworkOperation.SAVE_TCP_ADVANCED,
                         NetworkOperation.WIFI_ON,
                         NetworkOperation.WIFI_OFF,
                     )
@@ -408,6 +422,8 @@ class NetworkSession(private val now: () -> Long, private val send: (String, Lon
                         "ERR=AUTH_REQUIRED",
                         "ERR=AUTH_LOCKED" ->
                             "PLC authorisation is required. Enter the PIN and retry."
+                        "ERR=TCPADV_STORAGE" -> "The PLC could not save TCP settings."
+                        "ERR=TCPADV_INVALID" -> "The PLC rejected the heartbeat timing."
                         "BUSY",
                         "ERR=BUSY",
                         "ERR=ID_BUSY" ->
@@ -434,6 +450,20 @@ class NetworkSession(private val now: () -> Long, private val send: (String, Lon
                     completeChange()
                 }
             }
+            text.startsWith("TCPADV=") -> {
+                val config = parseTcpAdvanced(text) ?: return
+                if (p?.operation == NetworkOperation.SAVE_TCP_ADVANCED && p.sentAt != null) {
+                    if (config != p.expectedTcpAdvanced) {
+                        fail("The PLC returned different TCP settings.")
+                        return
+                    }
+                    state = state.copy(
+                        tcpAdvanced = config, pending = null,
+                        notice = "TCP settings saved and confirmed by PLC.",
+                    )
+                    if (foreground) refreshStatus(automatic = true)
+                }
+            }
             text.startsWith("NET=") -> {
                 val c = parseNetConfigLine(text)
                 if (c == null) {
@@ -444,6 +474,7 @@ class NetworkSession(private val now: () -> Long, private val send: (String, Lon
                 state =
                     state.copy(
                         config = c,
+                        tcpAdvanced = parseTcpAdvanced(text),
                         configReceivedAt = now(),
                         saved = state.saved && c == state.config,
                         draft = if (keepDraft) state.draft else NetworkDraft.from(c),

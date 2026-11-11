@@ -57,7 +57,7 @@ fun validMaintenancePin(pin: String): Boolean = pin.length == 6 && pin.all { it 
 fun requiresMaintenanceAuthorization(data: ByteArray): Boolean {
     if (data.contentEquals(byteArrayOf(0x1B, 'O'.code.toByte(), 13, 10))) return true
     val text = data.toString(Charsets.UTF_8).trim()
-    return listOf("ID=", "RTC=", "CFG=", "NET=", "WIFI=", "ALT=", "OTA=", "ACKMODE=", "HEARTBEAT=", "READERTIMEOUT=", "HIDPAIR=", "HIDFORGET=", "HIDTYPE=", "HIDCFG=")
+    return listOf("ID=", "RTC=", "CFG=", "NET=", "WIFI=", "ALT=", "OTA=", "ACKMODE=", "HEARTBEAT=", "TCPADV=", "READERTIMEOUT=", "HIDPAIR=", "HIDFORGET=", "HIDTYPE=", "HIDCFG=")
         .any { text.startsWith(it) } || text == "OTA!"
 }
 

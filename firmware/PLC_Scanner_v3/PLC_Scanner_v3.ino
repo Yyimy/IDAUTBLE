@@ -239,8 +239,7 @@ static bool gTcpConnectedPrev = false;
 WiFiClient gTcpClient;
 static unsigned long gLastTcpAttempt = 0;
 static unsigned long gLastTcpActivity = 0;
-static const unsigned long TCP_HEARTBEAT_MS = 10000;  // 10s
-static const unsigned long TCP_TIMEOUT_MS = 20000;  // 20s sin actividad = caída
+static uint32_t gTcpPingSeconds = 10, gTcpTimeoutSeconds = 20;
 static const unsigned long TCP_RETRY_MS = 3000;
 
 // -------------------------------
@@ -520,6 +519,16 @@ static String gMaintenancePin;
 static bool gPinChangedOnBoot = false;
 static uint32_t gWifiStartMs = 0, gLastTcpRxMs = 0, gLastTcpPingMs = 0;
 static bool gHeartbeatEnabled = false, gAckMode = false;
+static bool gTcpPongSeen = false;
+
+static bool validTcpTiming(uint32_t interval, uint32_t timeout) {
+  return interval >= 5 && interval <= 120 && timeout > interval && timeout <= 300;
+}
+
+static String tcpAdvancedValues() {
+  return String(gHeartbeatEnabled ? 1 : 0) + "," + String(gAckMode ? 1 : 0) +
+         "," + String(gTcpPingSeconds) + "," + String(gTcpTimeoutSeconds);
+}
 static std::atomic<bool> gNetworkRestorePending{false};
 static std::atomic<bool> gCutRequested{false};
 static bool gCutConfirmed = false;
@@ -1068,6 +1077,7 @@ static void tcpConnectTick() {
         gTcpConnected = true;
         gTcpState = TCP_CONNECTED;
         gLastTcpActivity = millis();
+        gTcpPongSeen = false;
         gLastTcpRxMs = millis();
         gLastTcpPingMs = millis();
         gTcpClient.setNoDelay(true);
@@ -1161,9 +1171,10 @@ static void tcpPollRx() {
     if (c == '\n') {
       if (used && !overflow) {
         line[used] = 0;
-        if (!strcmp(line, "PONG") || !strncmp(line, "PONG;", 5))
+        if (!strcmp(line, "PONG") || !strncmp(line, "PONG;", 5)) {
           gLastTcpRxMs = millis();
-        else {
+          gTcpPongSeen = true;
+        } else {
           BleCmd cmd = {};
           cmd.type = tcpTextCommandType(String(line));
           cmd.source = 1;
@@ -1197,11 +1208,12 @@ static void tcpWatchdog() {
   }
   // Optional application heartbeat, disabled until the server implements PONG.
   if (!gHeartbeatEnabled) return;
-  if (millis() - gLastTcpPingMs >= TCP_HEARTBEAT_MS) {
+  if (millis() - gLastTcpPingMs >= gTcpPingSeconds * 1000U) {
     gLastTcpPingMs = millis();
-    tcpWriteAvailable((const uint8_t *)"PING\r\n", 6);
+    const uint8_t ping[] = {'P', 'I', 'N', 'G', 13, 10};
+    queueTargetFrame(ping, sizeof(ping), nullptr, TX_TCP_ONLY, gTcpSession.load());
   }
-  if (millis() - gLastTcpRxMs > TCP_TIMEOUT_MS) {
+  if (millis() - gLastTcpRxMs > gTcpTimeoutSeconds * 1000U) {
     gTcpClient.stop();
     gTcpConnected = false;
     logLine("TCP: timeout PONG");
@@ -1677,6 +1689,7 @@ static void netSendCurrent() {
   s += ";MASK=" + gNetMask;
   s += ";HOST=" + gNetHost;
   s += ";PORT=" + String(gNetPort);
+  if (gReplyContext.target == TX_BLE_ONLY) s += ";TCPADV=" + tcpAdvancedValues();
   s += "\r\n";
 
   sendCommandReply((const uint8_t *)s.c_str(), s.length());
@@ -1695,6 +1708,13 @@ static void netSendStatus(bool unsolicited) {
 
   s += ";LINK=" + String(realLink ? "UP" : "DOWN");
   s += ";TCP=" + String(realTcp ? "UP" : "DOWN");
+
+  if (unsolicited || gReplyContext.target == TX_BLE_ONLY) {
+    s += ";PONGAGE=";
+    if (realTcp && gHeartbeatEnabled && gTcpPongSeen) s += String((millis() - gLastTcpRxMs) / 1000U);
+    else s += "-";
+    s += ";EVT_PENDING=" + String(gOutbox.count);
+  }
 
   if (gWifiConnected) {
     s += ";IP=" + WiFi.localIP().toString();
@@ -2139,7 +2159,7 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
   } else if (rxTrim == "OTA!") {
     cmd.type = BLECMD_OTA_ABORT;
   } else if (rxTrim.startsWith("AUTH=") || rxTrim.startsWith("ACK=") ||
-             rxTrim.startsWith("ACKMODE=") ||
+             rxTrim.startsWith("ACKMODE=") || rxTrim.startsWith("TCPADV=") ||
              rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" ||
              rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
              rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
@@ -3177,6 +3197,18 @@ static void runtimeLoad() {
   OTA_AP_PASS = PLC_OTA_WIFI_PASSWORD;
   gAckMode = p.getBool("ack", false);
   gHeartbeatEnabled = p.getBool("heartbeat", false);
+  const uint32_t tcpAdvanced = p.getUInt("tcp_adv", 0);
+  const uint32_t pingSeconds = (tcpAdvanced >> 2) & 0x7F;
+  const uint32_t timeoutSeconds = tcpAdvanced >> 9;
+  if (validTcpTiming(pingSeconds, timeoutSeconds)) {
+    gHeartbeatEnabled = (tcpAdvanced & 1U) != 0;
+    gAckMode = (tcpAdvanced & 2U) != 0;
+    gTcpPingSeconds = pingSeconds;
+    gTcpTimeoutSeconds = timeoutSeconds;
+  } else {
+    gTcpPingSeconds = 10;
+    gTcpTimeoutSeconds = 20;
+  }
   const auto readerTimeout = p.getUInt("reader_ms", DEFAULT_READER_TIMEOUT_MS);
   gReaderTimeoutMs = validReaderTimeout(readerTimeout) ? readerTimeout : DEFAULT_READER_TIMEOUT_MS;
   size_t stored = p.getBytesLength("outbox");
@@ -3318,6 +3350,28 @@ static void setReaderTimeout(const String &value, uint8_t source) {
   replyLine(true, "READERTIMEOUT=" + String(gReaderTimeoutMs));
 }
 
+static bool saveTcpAdvanced(bool heartbeat, bool ack, uint32_t interval, uint32_t timeout) {
+  if (heartbeat == gHeartbeatEnabled && ack == gAckMode &&
+      interval == gTcpPingSeconds && timeout == gTcpTimeoutSeconds) return true;
+  const uint32_t packed = (timeout << 9) | (interval << 2) |
+                          (ack ? 2U : 0U) | (heartbeat ? 1U : 0U);
+  Preferences p;
+  if (!p.begin("runtime3", false)) return false;
+  const bool saved = p.putUInt("tcp_adv", packed) == sizeof(packed);
+  p.end();
+  if (!saved) return false;
+  if (heartbeat != gHeartbeatEnabled || interval != gTcpPingSeconds || timeout != gTcpTimeoutSeconds) {
+    gTcpPongSeen = false;
+    gLastTcpRxMs = millis();
+    gLastTcpPingMs = gLastTcpRxMs;
+  }
+  gHeartbeatEnabled = heartbeat;
+  gAckMode = ack;
+  gTcpPingSeconds = interval;
+  gTcpTimeoutSeconds = timeout;
+  return true;
+}
+
 static void handleTextCommand(const BleCmd &cmd) {
   String s(cmd.payload);
   if (plcHid::handle(s, cmd.source)) return;
@@ -3381,6 +3435,23 @@ static void handleTextCommand(const BleCmd &cmd) {
     replyLine(false, "ERR=BUSY");
     return;
   }
+  if (s.startsWith("TCPADV=")) {
+    const int comma = s.indexOf(',', 11);
+    uint32_t interval, timeout;
+    if (s.length() < 13 || s[8] != ',' || s[10] != ',' ||
+        (s[7] != '0' && s[7] != '1') || (s[9] != '0' && s[9] != '1') ||
+        comma < 0 || !parseU32(s.substring(11, comma), interval) ||
+        !parseU32(s.substring(comma + 1), timeout) || !validTcpTiming(interval, timeout)) {
+      replyLine(false, "ERR=TCPADV_INVALID");
+      return;
+    }
+    if (!saveTcpAdvanced(s[7] == '1', s[9] == '1', interval, timeout)) {
+      replyLine(false, "ERR=TCPADV_STORAGE");
+      return;
+    }
+    replyLine(true, "TCPADV=" + tcpAdvancedValues());
+    return;
+  }
   bool ack = s.startsWith("ACKMODE="), heartbeat = s.startsWith("HEARTBEAT=");
   if (!ack && !heartbeat) {
     cfgSendErr();
@@ -3391,18 +3462,11 @@ static void handleTextCommand(const BleCmd &cmd) {
     cfgSendErr();
     return;
   }
-  Preferences p;
-  p.begin("runtime3", false);
-  if (ack) {
-    gAckMode = value == "1";
-    p.putBool("ack", gAckMode);
-  } else {
-    gHeartbeatEnabled = value == "1";
-    p.putBool("heartbeat", gHeartbeatEnabled);
-    gLastTcpRxMs = millis();
-    gLastTcpPingMs = millis();
+  if (!saveTcpAdvanced(heartbeat ? value == "1" : gHeartbeatEnabled,
+                       ack ? value == "1" : gAckMode, gTcpPingSeconds, gTcpTimeoutSeconds)) {
+    replyLine(false, "ERR=TCPADV_STORAGE");
+    return;
   }
-  p.end();
   cfgSendOk();
 }
 // ------------------------ Persistent event outbox ---------------------------
