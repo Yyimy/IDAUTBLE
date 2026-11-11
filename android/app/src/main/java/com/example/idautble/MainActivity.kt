@@ -2221,7 +2221,8 @@ class MainActivity : ComponentActivity() {
             val expandedSections = remember(expandedSectionIds) { TerminalSection.readExpanded(expandedSectionIds) }
             var keepScreenOn by remember { mutableStateOf(appSettings.getBoolean("keep_screen_on", false)) }
             var showAppSettings by rememberSaveable { mutableStateOf(false) }
-            val lightSystemBars = background.color?.let { it.luminance() > 0.179f } ?: !darkMode
+            val backgroundColor = background.resolveColor(darkMode)
+            val lightSystemBars = backgroundColor?.let { it.luminance() > 0.179f } ?: !darkMode
             SideEffect {
                 val controller = WindowCompat.getInsetsController(window, window.decorView)
                 controller.isAppearanceLightStatusBars = lightSystemBars
@@ -2276,7 +2277,7 @@ class MainActivity : ComponentActivity() {
                 }
                 PlcBleTesterLandscape(
                     onOpenAppSettings = { showAppSettings = true },
-                    backgroundColor = background.color,
+                    backgroundColor = backgroundColor,
                     terminalTextSize = terminalTextSize,
                     logView = logView,
                     terminalOrder = terminalOrder,
