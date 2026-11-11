@@ -3,6 +3,7 @@ package com.example.idautble
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -13,8 +14,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -56,12 +60,35 @@ internal enum class TerminalLogView(val label: String, val showAscii: Boolean, v
     BOTH("ASCII + HEX", true, true),
 }
 
+internal enum class TerminalSection(val label: String) {
+    BLUETOOTH("Bluetooth connection"),
+    BINARY_COMMANDS("Binary commands"),
+    READINGS("Readings"),
+    DEVICE_STATUS("Device status"),
+    PIN_ACCESS("PIN / Access"),
+    HID_RECEIVER("HID receiver"),
+    HID_OUTPUT("HID output"),
+    DEVICE_ID("Device ID"),
+    HEIGHT_MEASUREMENT("Height measurement"),
+    BARCODE_RTC("Barcode ID / RTC"),
+    MANUAL_TERMINAL("Manual terminal");
+
+    companion object {
+        fun readOrder(saved: String?): List<TerminalSection> {
+            val savedIds = saved.orEmpty().split(',')
+            val savedSections = savedIds.mapNotNull { id -> entries.firstOrNull { it.name == id } }
+            return (savedSections + entries).distinct()
+        }
+    }
+}
+
 private enum class SettingsPage(val title: String) {
     MAIN("App settings"),
     BACKGROUND("Background"),
     THEME("Theme"),
     TERMINAL_TEXT_SIZE("Terminal text size"),
     LOG_VIEW("Log view"),
+    TERMINAL_ORDER("Terminal section order"),
 }
 
 @Composable
@@ -71,6 +98,8 @@ internal fun AppSettingsDialog(
     terminalTextSize: TerminalTextSize,
     logView: TerminalLogView,
     keepScreenOn: Boolean,
+    terminalOrder: List<TerminalSection>,
+    onTerminalOrderChange: (List<TerminalSection>) -> Unit,
     onTerminalTextSizeChange: (TerminalTextSize) -> Unit,
     onLogViewChange: (TerminalLogView) -> Unit,
     onKeepScreenOnChange: (Boolean) -> Unit,
@@ -116,6 +145,12 @@ internal fun AppSettingsDialog(
                         modifier = Modifier.clickable { page = SettingsPage.LOG_VIEW },
                         headlineContent = { Text("Log view") },
                         supportingContent = { Text(logView.label) },
+                        trailingContent = { SettingsChevron() },
+                        colors = colors,
+                    )
+                    ListItem(
+                        modifier = Modifier.clickable { page = SettingsPage.TERMINAL_ORDER },
+                        headlineContent = { Text("Terminal section order") },
                         trailingContent = { SettingsChevron() },
                         colors = colors,
                     )
@@ -166,6 +201,31 @@ internal fun AppSettingsDialog(
                         )
                     }
                 }
+                SettingsPage.TERMINAL_ORDER -> Column(
+                    Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())
+                ) {
+                    terminalOrder.forEachIndexed { index, section ->
+                        fun moveTo(destination: Int) {
+                            val updated = terminalOrder.toMutableList()
+                            updated.add(destination, updated.removeAt(index))
+                            onTerminalOrderChange(updated)
+                        }
+                        ListItem(
+                            headlineContent = { Text(section.label) },
+                            trailingContent = {
+                                Row {
+                                    IconButton(onClick = { moveTo(index - 1) }, enabled = index > 0) {
+                                        Icon(Icons.Outlined.KeyboardArrowUp, "Move ${section.label} up")
+                                    }
+                                    IconButton(onClick = { moveTo(index + 1) }, enabled = index < terminalOrder.lastIndex) {
+                                        Icon(Icons.Outlined.KeyboardArrowDown, "Move ${section.label} down")
+                                    }
+                                }
+                            },
+                            colors = colors,
+                        )
+                    }
+                }
                 SettingsPage.THEME -> Column(Modifier.selectableGroup()) {
                     listOf(false to "Light", true to "Dark mode").forEach { (enabled, label) ->
                         val selected = darkMode == enabled
@@ -178,6 +238,14 @@ internal fun AppSettingsDialog(
                         )
                     }
                 }
+            }
+        },
+        dismissButton = {
+            if (page == SettingsPage.TERMINAL_ORDER) {
+                TextButton(
+                    onClick = { onTerminalOrderChange(TerminalSection.entries) },
+                    enabled = terminalOrder != TerminalSection.entries,
+                ) { Text("Reset order") }
             }
         },
         confirmButton = {

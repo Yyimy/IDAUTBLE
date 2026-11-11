@@ -2219,6 +2219,9 @@ class MainActivity : ComponentActivity() {
                 val saved = appSettings.getString("terminal_log_view", null)
                 mutableStateOf(TerminalLogView.entries.firstOrNull { it.name == saved } ?: TerminalLogView.BOTH)
             }
+            var terminalOrder by remember {
+                mutableStateOf(TerminalSection.readOrder(appSettings.getString("terminal_section_order", null)))
+            }
             var keepScreenOn by remember { mutableStateOf(appSettings.getBoolean("keep_screen_on", false)) }
             var showAppSettings by rememberSaveable { mutableStateOf(false) }
             val lightSystemBars = background.color?.let { it.luminance() > 0.179f } ?: !darkMode
@@ -2240,6 +2243,11 @@ class MainActivity : ComponentActivity() {
                         terminalTextSize = terminalTextSize,
                         logView = logView,
                         keepScreenOn = keepScreenOn,
+                        terminalOrder = terminalOrder,
+                        onTerminalOrderChange = { order ->
+                            terminalOrder = order
+                            appSettings.edit { putString("terminal_section_order", order.joinToString(",") { it.name }) }
+                        },
                         onTerminalTextSizeChange = { option ->
                             terminalTextSize = option
                             appSettings.edit { putString("terminal_text_size", option.name) }
@@ -2268,6 +2276,7 @@ class MainActivity : ComponentActivity() {
                     backgroundColor = background.color,
                     terminalTextSize = terminalTextSize,
                     logView = logView,
+                    terminalOrder = terminalOrder,
                     networkSession = networkSession,
                     maintenanceStatus = uiMaintenanceStatus.value,
                     maintenanceAuthorised = maintenanceSession.isAuthorized(),
@@ -2437,6 +2446,7 @@ private fun PlcBleTesterLandscape(
     backgroundColor: Color?,
     terminalTextSize: TerminalTextSize,
     logView: TerminalLogView,
+    terminalOrder: List<TerminalSection>,
     networkSession: NetworkSession,
     maintenanceStatus: String,
     maintenanceAuthorised: Boolean,
@@ -2599,545 +2609,564 @@ private fun PlcBleTesterLandscape(
                                         .verticalScroll(leftScroll),
                                 verticalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
-                                CollapsibleSettingsSection(
-                                    title = "BLUETOOTH CONNECTION",
-                                    summary =
-                                        if (scanning) "Scanning... ${scanRemainSec}s"
-                                        else if (connected) "Connected: ${selected?.name ?: "PLC"}"
-                                        else "Disconnected",
-                                    expanded = connectionSectionExpanded,
-                                    onToggle = {
-                                        connectionSectionExpanded = !connectionSectionExpanded
-                                    },
-                                ) {
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement =
-                                            Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-                                    ) {
-                                        Button(
-                                            shape = RoundedCornerShape(6.dp),
-                                            onClick = {
-                                                showDevices = true
-                                                onScan5s()
-                                            },
-                                            enabled = !scanning,
-                                            contentPadding = PaddingValues(10.dp, 6.dp),
-                                            colors =
-                                                ButtonDefaults.buttonColors(
-                                                    containerColor =
-                                                        if (!scanning)
-                                                            Color(0xFFFFC107) // Amarillo normal
-                                                        else
-                                                            Color(
-                                                                0xFFFFA000
-                                                            ), // Amarillo oscuro mientras
-                                                    // escanea
-                                                    contentColor = Color(0xFF212121),
-                                                ),
-                                        ) {
-                                            Text(
-                                                if (!scanning) "Scan 5s" else "Scanning...",
-                                                fontSize = 11.sp,
-                                                maxLines = 1,
-                                                softWrap = false,
-                                            )
-                                        }
-
-                                        OutlinedButton(
-                                            shape = RoundedCornerShape(6.dp),
-                                            onClick = { showDevices = !showDevices },
-                                            contentPadding = PaddingValues(10.dp, 6.dp),
-                                        ) {
-                                            Text(
-                                                if (showDevices) "Hide Devices" else "Show Devices",
-                                                fontSize = 11.sp,
-                                                maxLines = 1,
-                                                softWrap = false,
-                                            )
-                                        }
-                                        Button(
-                                            shape = RoundedCornerShape(6.dp),
-                                            onClick = { onConnect() },
-                                            enabled = (!connected && selected != null),
-                                            contentPadding = PaddingValues(10.dp, 6.dp),
-                                            colors =
-                                                ButtonDefaults.buttonColors(
-                                                    containerColor =
-                                                        Color(0xFF2E7D32), // Verde técnico
-                                                    contentColor = Color.White,
-                                                ),
-                                        ) {
-                                            Text(
-                                                "Connect",
-                                                fontSize = 11.sp,
-                                                maxLines = 1,
-                                                softWrap = false,
-                                            )
-                                        }
-
-                                        Button(
-                                            shape = RoundedCornerShape(6.dp),
-                                            onClick = onDisconnect,
-                                            enabled = connected,
-                                            contentPadding = PaddingValues(10.dp, 6.dp),
-                                            colors =
-                                                ButtonDefaults.buttonColors(
-                                                    containerColor =
-                                                        Color(0xFFC62828), // Rojo industrial
-                                                    contentColor = Color.White,
-                                                ),
-                                        ) {
-                                            Text(
-                                                "Disconnect",
-                                                fontSize = 11.sp,
-                                                maxLines = 1,
-                                                softWrap = false,
-                                            )
-                                        }
-                                    }
-
-                                    if (selected != null) {
-                                        val observation = selected.rssi?.let { " | RSSI:$it" }
-                                            ?: if (devices.any { it.address == selected.address && it.rssi == null }) {
-                                                " | Last connected PLC"
-                                            } else ""
-                                        Text(
-                                            text = "${selected.name} | ${selected.address}$observation",
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                        )
-                                    }
-
-                                    if (showDevices) {
-                                        MaintenanceCard(Modifier.fillMaxWidth()) {
-                                            Column(
-                                                Modifier.padding(6.dp),
-                                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                                            ) {
-                                                if (scanning) {
-                                                    Text(
-                                                        text =
-                                                            "Scanning, Please Wait... ${scanRemainSec}s",
-                                                        fontSize = 11.sp,
-                                                    )
-                                                    Box(
-                                                        modifier =
-                                                            Modifier.fillMaxWidth()
-                                                                .height(6.dp)
-                                                                .background(
-                                                                    Color(0xFFE0E0E0),
-                                                                    RoundedCornerShape(3.dp),
-                                                                )
+                                terminalOrder.forEach { section ->
+                                    key(section) {
+                                        when (section) {
+                                            TerminalSection.BLUETOOTH -> {
+                                                CollapsibleSettingsSection(
+                                                    title = "BLUETOOTH CONNECTION",
+                                                    summary =
+                                                        if (scanning) "Scanning... ${scanRemainSec}s"
+                                                        else if (connected) "Connected: ${selected?.name ?: "PLC"}"
+                                                        else "Disconnected",
+                                                    expanded = connectionSectionExpanded,
+                                                    onToggle = {
+                                                        connectionSectionExpanded = !connectionSectionExpanded
+                                                    },
+                                                ) {
+                                                    Row(
+                                                        Modifier.fillMaxWidth(),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement =
+                                                            Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
                                                     ) {
-                                                        Box(
-                                                            modifier =
-                                                                Modifier.fillMaxHeight()
-                                                                    .fillMaxWidth(
-                                                                        scanProgress.coerceIn(
-                                                                            0f,
-                                                                            1f,
-                                                                        )
-                                                                    )
-                                                                    .background(
-                                                                        Color(0xFF1976D2),
-                                                                        RoundedCornerShape(3.dp),
-                                                                    )
-                                                        )
-                                                    }
-                                                    Spacer(Modifier.height(4.dp))
-                                                }
-                                                Text(
-                                                    "Visible devices: ${devices.count { it.rssi != null }}",
-                                                    fontSize = 11.sp,
-                                                )
-                                                LazyColumn(Modifier.heightIn(max = 180.dp)) {
-                                                    itemsIndexed(devices) { _, d ->
-                                                        Row(
-                                                            Modifier.fillMaxWidth()
-                                                                .clickable { onSelectDevice(d) }
-                                                                .padding(vertical = 4.dp),
-                                                            horizontalArrangement =
-                                                                Arrangement.SpaceBetween,
+                                                        Button(
+                                                            shape = RoundedCornerShape(6.dp),
+                                                            onClick = {
+                                                                showDevices = true
+                                                                onScan5s()
+                                                            },
+                                                            enabled = !scanning,
+                                                            contentPadding = PaddingValues(10.dp, 6.dp),
+                                                            colors =
+                                                                ButtonDefaults.buttonColors(
+                                                                    containerColor =
+                                                                        if (!scanning)
+                                                                            Color(0xFFFFC107) // Amarillo normal
+                                                                        else
+                                                                            Color(
+                                                                                0xFFFFA000
+                                                                            ), // Amarillo oscuro mientras
+                                                                    // escanea
+                                                                    contentColor = Color(0xFF212121),
+                                                                ),
                                                         ) {
                                                             Text(
-                                                                d.name,
+                                                                if (!scanning) "Scan 5s" else "Scanning...",
                                                                 fontSize = 11.sp,
                                                                 maxLines = 1,
-                                                                overflow = TextOverflow.Ellipsis,
+                                                                softWrap = false,
                                                             )
-                                                            Text(d.address, fontSize = 11.sp)
-                                                            Text(d.rssi?.let { "RSSI:$it" } ?: "Last PLC", fontSize = 11.sp)
                                                         }
-                                                        Divider()
+
+                                                        OutlinedButton(
+                                                            shape = RoundedCornerShape(6.dp),
+                                                            onClick = { showDevices = !showDevices },
+                                                            contentPadding = PaddingValues(10.dp, 6.dp),
+                                                        ) {
+                                                            Text(
+                                                                if (showDevices) "Hide Devices" else "Show Devices",
+                                                                fontSize = 11.sp,
+                                                                maxLines = 1,
+                                                                softWrap = false,
+                                                            )
+                                                        }
+                                                        Button(
+                                                            shape = RoundedCornerShape(6.dp),
+                                                            onClick = { onConnect() },
+                                                            enabled = (!connected && selected != null),
+                                                            contentPadding = PaddingValues(10.dp, 6.dp),
+                                                            colors =
+                                                                ButtonDefaults.buttonColors(
+                                                                    containerColor =
+                                                                        Color(0xFF2E7D32), // Verde técnico
+                                                                    contentColor = Color.White,
+                                                                ),
+                                                        ) {
+                                                            Text(
+                                                                "Connect",
+                                                                fontSize = 11.sp,
+                                                                maxLines = 1,
+                                                                softWrap = false,
+                                                            )
+                                                        }
+
+                                                        Button(
+                                                            shape = RoundedCornerShape(6.dp),
+                                                            onClick = onDisconnect,
+                                                            enabled = connected,
+                                                            contentPadding = PaddingValues(10.dp, 6.dp),
+                                                            colors =
+                                                                ButtonDefaults.buttonColors(
+                                                                    containerColor =
+                                                                        Color(0xFFC62828), // Rojo industrial
+                                                                    contentColor = Color.White,
+                                                                ),
+                                                        ) {
+                                                            Text(
+                                                                "Disconnect",
+                                                                fontSize = 11.sp,
+                                                                maxLines = 1,
+                                                                softWrap = false,
+                                                            )
+                                                        }
+                                                    }
+
+                                                    if (selected != null) {
+                                                        val observation = selected.rssi?.let { " | RSSI:$it" }
+                                                            ?: if (devices.any { it.address == selected.address && it.rssi == null }) {
+                                                                " | Last connected PLC"
+                                                            } else ""
+                                                        Text(
+                                                            text = "${selected.name} | ${selected.address}$observation",
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                        )
+                                                    }
+
+                                                    if (showDevices) {
+                                                        MaintenanceCard(Modifier.fillMaxWidth()) {
+                                                            Column(
+                                                                Modifier.padding(6.dp),
+                                                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                                            ) {
+                                                                if (scanning) {
+                                                                    Text(
+                                                                        text =
+                                                                            "Scanning, Please Wait... ${scanRemainSec}s",
+                                                                        fontSize = 11.sp,
+                                                                    )
+                                                                    Box(
+                                                                        modifier =
+                                                                            Modifier.fillMaxWidth()
+                                                                                .height(6.dp)
+                                                                                .background(
+                                                                                    Color(0xFFE0E0E0),
+                                                                                    RoundedCornerShape(3.dp),
+                                                                                )
+                                                                    ) {
+                                                                        Box(
+                                                                            modifier =
+                                                                                Modifier.fillMaxHeight()
+                                                                                    .fillMaxWidth(
+                                                                                        scanProgress.coerceIn(
+                                                                                            0f,
+                                                                                            1f,
+                                                                                        )
+                                                                                    )
+                                                                                    .background(
+                                                                                        Color(0xFF1976D2),
+                                                                                        RoundedCornerShape(3.dp),
+                                                                                    )
+                                                                        )
+                                                                    }
+                                                                    Spacer(Modifier.height(4.dp))
+                                                                }
+                                                                Text(
+                                                                    "Visible devices: ${devices.count { it.rssi != null }}",
+                                                                    fontSize = 11.sp,
+                                                                )
+                                                                LazyColumn(Modifier.heightIn(max = 180.dp)) {
+                                                                    itemsIndexed(devices) { _, d ->
+                                                                        Row(
+                                                                            Modifier.fillMaxWidth()
+                                                                                .clickable { onSelectDevice(d) }
+                                                                                .padding(vertical = 4.dp),
+                                                                            horizontalArrangement =
+                                                                                Arrangement.SpaceBetween,
+                                                                        ) {
+                                                                            Text(
+                                                                                d.name,
+                                                                                fontSize = 11.sp,
+                                                                                maxLines = 1,
+                                                                                overflow = TextOverflow.Ellipsis,
+                                                                            )
+                                                                            Text(d.address, fontSize = 11.sp)
+                                                                            Text(d.rssi?.let { "RSSI:$it" } ?: "Last PLC", fontSize = 11.sp)
+                                                                        }
+                                                                        Divider()
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
-                                        }
-                                    }
-                                }
-
-                                CollapsibleSettingsSection(
-                                    title = "BINARY COMMANDS",
-                                    summary = "Commands sent to the PLC",
-                                    expanded = binarySectionExpanded,
-                                    onToggle = { binarySectionExpanded = !binarySectionExpanded },
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement =
-                                            Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-                                    ) {
-                                        CmdBtn("L") { onCmd('L') }
-                                        CmdBtn("B") { onCmd('B') }
-                                        CmdBtn("A") { onCmd('A') }
-                                        CmdBtn("P") { onCmd('P') }
-                                    }
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement =
-                                            Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-                                    ) {
-                                        CmdBtn("D") { onCmd('D') }
-                                        CmdBtn("I") { onCmd('I') }
-                                        CmdBtn("C") { onCmd('C') }
-                                        CmdBtn("O") { onCmd('O') }
-                                    }
-                                }
-
-                                ReadingResultsSection(readings)
-
-                                DeviceStatusSection(
-                                    status = deviceStatus,
-                                    counters = deviceCounters,
-                                    receivedMs = deviceStatusReceived,
-                                    ready = deviceStatusReady,
-                                    busy = deviceStatusBusy,
-                                    message = deviceStatusMessage,
-                                    onRefresh = onStatusRefresh,
-                                    refreshAfterReads = refreshAfterReads,
-                                    onRefreshAfterReadsChange = onRefreshAfterReadsChange,
-                                    autoRefreshEnabled = autoRefreshEnabled,
-                                    onAutoRefreshChange = onAutoRefreshChange,
-                                )
-
-                                CollapsibleSettingsSection(
-                                    title = "PIN / ACCESS",
-                                    summary = maintenanceStatus,
-                                    summaryContent = {
-                                        MaintenanceAccessBadge(
-                                            authorised = maintenanceAuthorised,
-                                            label = maintenanceStatus,
-                                        )
-                                    },
-                                    expanded = pinSectionExpanded,
-                                    onToggle = { pinSectionExpanded = !pinSectionExpanded },
-                                ) {
-                                    MaintenanceActionButton(
-                                        text = "Enter PIN / Authorise",
-                                        onClick = onMaintenanceClick,
-                                        tone = MaintenanceActionTone.SUCCESS,
-                                        enabled = connected,
-                                        modifier = Modifier.fillMaxWidth(),
-                                    )
-                                    MaintenanceActionButton(
-                                        text = "Lock access",
-                                        onClick = onLockMaintenance,
-                                        tone = MaintenanceActionTone.WARNING,
-                                        enabled = connected,
-                                        modifier = Modifier.fillMaxWidth(),
-                                    )
-                                    MaintenanceActionButton(
-                                        text = "Forget saved PIN",
-                                        onClick = onForgetPin,
-                                        tone = MaintenanceActionTone.DANGER,
-                                        enabled = connected,
-                                        modifier = Modifier.fillMaxWidth(),
-                                    )
-                                }
-
-                                HidReceiverSection(hidReceiver, connected, maintenanceAuthorised, onHidReceiverAction, hidOutput.supported)
-                                HidOutputSection(hidOutput, connected, hidReceiver.production, onHidOutputAction)
-
-                                CollapsibleSettingsSection(
-                                    title = "DEVICE ID",
-                                    summary = equipmentId ?: "ID not queried",
-                                    expanded = equipmentSectionExpanded,
-                                    onToggle = {
-                                        equipmentSectionExpanded = !equipmentSectionExpanded
-                                    },
-                                ) {
-                                    Text(
-                                        "ID used for the Bluetooth name and PLC data frames.",
-                                        fontSize = 11.sp,
-                                    )
-                                    MaintenanceActionButton(
-                                        text = "Configure ID",
-                                        onClick = onIdentityClick,
-                                        tone = MaintenanceActionTone.INFO,
-                                        enabled = connected,
-                                        modifier = Modifier.fillMaxWidth(),
-                                    )
-                                }
-
-                                CollapsibleSettingsSection(
-                                    title = "HEIGHT MEASUREMENT",
-                                    summary =
-                                        if (!altKnown) "Status not queried"
-                                        else if (altState == true) "Enabled" else "Disabled",
-                                    expanded = heightSectionExpanded,
-                                    onToggle = { heightSectionExpanded = !heightSectionExpanded },
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement =
-                                            Arrangement.spacedBy(
-                                                8.dp,
-                                                Alignment.CenterHorizontally,
-                                            ),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-
-                                        // GET STATUS
-                                        Button(
-                                            shape = RoundedCornerShape(6.dp),
-                                            onClick = onAltQuery,
-                                            contentPadding = PaddingValues(10.dp, 6.dp),
-                                            colors =
-                                                ButtonDefaults.buttonColors(
-                                                    containerColor = Color(0xFF1976D2),
-                                                    contentColor = Color.White,
-                                                ),
-                                        ) {
-                                            Text("Get Status", fontSize = 11.sp)
-                                        }
-
-                                        if (altKnown) {
-
-                                            val isEnabled = altState == true
-
-                                            Button(
-                                                shape = RoundedCornerShape(6.dp),
-                                                onClick = {
-                                                    if (isEnabled) onAltDisable() else onAltEnable()
-                                                },
-                                                contentPadding = PaddingValues(10.dp, 6.dp),
-                                                colors =
-                                                    ButtonDefaults.buttonColors(
-                                                        containerColor =
-                                                            if (isEnabled) Color(0xFFC62828)
-                                                            else Color(0xFF2E7D32),
-                                                        contentColor = Color.White,
-                                                    ),
-                                            ) {
-                                                Text(
-                                                    if (isEnabled) "Disable Height Measurement"
-                                                    else "Enable Height Measurement",
-                                                    fontSize = 11.sp,
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-
-                                CollapsibleSettingsSection(
-                                    title = "BARCODE ID / RTC",
-                                    summary = "Barcode prefixes and date/time",
-                                    expanded = textSectionExpanded,
-                                    onToggle = { textSectionExpanded = !textSectionExpanded },
-                                ) {
-                                    Row(
-                                        modifier =
-                                            Modifier.align(Alignment.CenterHorizontally)
-                                                .widthIn(max = 560.dp)
-                                                .fillMaxWidth(),
-                                        horizontalArrangement =
-                                            Arrangement.spacedBy(
-                                                10.dp,
-                                                Alignment.CenterHorizontally,
-                                            ),
-                                    ) {
-
-                                        // ===== LEFT COLUMN (READ ACTIONS)
-                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            // Fila Pallet
-                                            Button(
-                                                shape = RoundedCornerShape(6.dp),
-                                                onClick = onCfgQuery,
-                                                modifier =
-                                                    Modifier.width(BTN_ACTION_W).height(ROW_H),
-                                                contentPadding = PaddingValues(10.dp, 6.dp),
-                                                colors =
-                                                    ButtonDefaults.buttonColors(
-                                                        containerColor = Color(0xFF1976D2),
-                                                        contentColor = Color.White,
-                                                    ),
-                                            ) {
-                                                Text("Get ID", fontSize = 11.sp)
-                                            }
-
-                                            // Fila Spot (vacía)
-                                            Spacer(modifier = Modifier.height(ROW_H))
-
-                                            // Fila RTC
-                                            Button(
-                                                shape = RoundedCornerShape(6.dp),
-                                                onClick = onRefreshRtc,
-                                                modifier =
-                                                    Modifier.width(BTN_ACTION_W).height(ROW_H),
-                                                contentPadding = PaddingValues(10.dp, 6.dp),
-                                                colors =
-                                                    ButtonDefaults.buttonColors(
-                                                        containerColor = Color(0xFF1976D2),
-                                                        contentColor = Color.White,
-                                                    ),
-                                            ) {
-                                                Text("Refresh", fontSize = 11.sp)
-                                            }
-                                        }
-
-                                        // ===== CENTER COLUMN (FIELDS)
-                                        Column(
-                                            modifier = Modifier.weight(1f),
-                                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                                        ) {
-
-                                            // ====== FILA 1: PALLET
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth().height(ROW_H),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            ) {
-                                                Text(
-                                                    "Pallet",
-                                                    fontSize = 11.sp,
-                                                    modifier = Modifier.width(LABEL_W),
-                                                    maxLines = 1,
-                                                )
-
-                                                CompactOutlinedField(
-                                                    value = pfxP,
-                                                    onValueChange = onPfxPChanged,
-                                                    modifier = Modifier.weight(1f),
-                                                )
-
-                                                Button(
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    onClick = { showPrefixDialogFor = "PFXP" },
-                                                    modifier = Modifier.width(70.dp).height(ROW_H),
-                                                    contentPadding = PaddingValues(6.dp),
-                                                    colors =
-                                                        ButtonDefaults.buttonColors(
-                                                            containerColor = Color(0xFF1976D2),
-                                                            contentColor = Color.White,
-                                                        ),
+                                            TerminalSection.BINARY_COMMANDS -> {
+                                                CollapsibleSettingsSection(
+                                                    title = "BINARY COMMANDS",
+                                                    summary = "Commands sent to the PLC",
+                                                    expanded = binarySectionExpanded,
+                                                    onToggle = { binarySectionExpanded = !binarySectionExpanded },
                                                 ) {
-                                                    Text("Select", fontSize = 11.sp)
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement =
+                                                            Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                                                    ) {
+                                                        CmdBtn("L") { onCmd('L') }
+                                                        CmdBtn("B") { onCmd('B') }
+                                                        CmdBtn("A") { onCmd('A') }
+                                                        CmdBtn("P") { onCmd('P') }
+                                                    }
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement =
+                                                            Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                                                    ) {
+                                                        CmdBtn("D") { onCmd('D') }
+                                                        CmdBtn("I") { onCmd('I') }
+                                                        CmdBtn("C") { onCmd('C') }
+                                                        CmdBtn("O") { onCmd('O') }
+                                                    }
                                                 }
                                             }
-
-                                            // ====== FILA 2: SPOT
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth().height(ROW_H),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            ) {
-                                                Text(
-                                                    "Spot",
-                                                    fontSize = 11.sp,
-                                                    modifier = Modifier.width(LABEL_W),
-                                                    maxLines = 1,
+                                            TerminalSection.READINGS -> {
+                                                ReadingResultsSection(readings)
+                                            }
+                                            TerminalSection.DEVICE_STATUS -> {
+                                                DeviceStatusSection(
+                                                    status = deviceStatus,
+                                                    counters = deviceCounters,
+                                                    receivedMs = deviceStatusReceived,
+                                                    ready = deviceStatusReady,
+                                                    busy = deviceStatusBusy,
+                                                    message = deviceStatusMessage,
+                                                    onRefresh = onStatusRefresh,
+                                                    refreshAfterReads = refreshAfterReads,
+                                                    onRefreshAfterReadsChange = onRefreshAfterReadsChange,
+                                                    autoRefreshEnabled = autoRefreshEnabled,
+                                                    onAutoRefreshChange = onAutoRefreshChange,
                                                 )
-
-                                                CompactOutlinedField(
-                                                    value = pfxU,
-                                                    onValueChange = onPfxUChanged,
-                                                    modifier = Modifier.weight(1f),
-                                                )
-
-                                                Button(
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    onClick = { showPrefixDialogFor = "PFXU" },
-                                                    modifier = Modifier.width(70.dp).height(ROW_H),
-                                                    contentPadding = PaddingValues(6.dp),
-                                                    colors =
-                                                        ButtonDefaults.buttonColors(
-                                                            containerColor = Color(0xFF1976D2),
-                                                            contentColor = Color.White,
-                                                        ),
+                                            }
+                                            TerminalSection.PIN_ACCESS -> {
+                                                CollapsibleSettingsSection(
+                                                    title = "PIN / ACCESS",
+                                                    summary = maintenanceStatus,
+                                                    summaryContent = {
+                                                        MaintenanceAccessBadge(
+                                                            authorised = maintenanceAuthorised,
+                                                            label = maintenanceStatus,
+                                                        )
+                                                    },
+                                                    expanded = pinSectionExpanded,
+                                                    onToggle = { pinSectionExpanded = !pinSectionExpanded },
                                                 ) {
-                                                    Text("Select", fontSize = 11.sp)
+                                                    MaintenanceActionButton(
+                                                        text = "Enter PIN / Authorise",
+                                                        onClick = onMaintenanceClick,
+                                                        tone = MaintenanceActionTone.SUCCESS,
+                                                        enabled = connected,
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                    )
+                                                    MaintenanceActionButton(
+                                                        text = "Lock access",
+                                                        onClick = onLockMaintenance,
+                                                        tone = MaintenanceActionTone.WARNING,
+                                                        enabled = connected,
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                    )
+                                                    MaintenanceActionButton(
+                                                        text = "Forget saved PIN",
+                                                        onClick = onForgetPin,
+                                                        tone = MaintenanceActionTone.DANGER,
+                                                        enabled = connected,
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                    )
                                                 }
                                             }
-
-                                            // ====== FILA 2: RTC (altura fija)
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth().height(ROW_H),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            ) {
-                                                Text(
-                                                    "  RTC",
-                                                    fontSize = 11.sp,
-                                                    modifier = Modifier.width(LABEL_W),
-                                                    maxLines = 1,
-                                                )
-                                                CompactOutlinedField(
-                                                    value = rtcIso,
-                                                    onValueChange = onRtcIsoChanged,
-                                                    modifier = Modifier.weight(3f),
-                                                )
+                                            TerminalSection.HID_RECEIVER -> {
+                                                HidReceiverSection(hidReceiver, connected, maintenanceAuthorised, onHidReceiverAction, hidOutput.supported)
                                             }
-                                        }
-
-                                        // ===== RIGHT COLUMN (WRITE ACTIONS)
-                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            Button(
-                                                shape = RoundedCornerShape(6.dp),
-                                                onClick = onSetCfg,
-                                                modifier = Modifier.width(BTN_SET_W).height(ROW_H),
-                                                contentPadding = PaddingValues(10.dp, 6.dp),
-                                                colors =
-                                                    ButtonDefaults.buttonColors(
-                                                        containerColor = Color(0xFF2E7D32),
-                                                        contentColor = Color.White,
-                                                    ),
-                                            ) {
-                                                Text("Set", fontSize = 11.sp)
+                                            TerminalSection.HID_OUTPUT -> {
+                                                HidOutputSection(hidOutput, connected, hidReceiver.production, onHidOutputAction)
                                             }
+                                            TerminalSection.DEVICE_ID -> {
+                                                CollapsibleSettingsSection(
+                                                    title = "DEVICE ID",
+                                                    summary = equipmentId ?: "ID not queried",
+                                                    expanded = equipmentSectionExpanded,
+                                                    onToggle = {
+                                                        equipmentSectionExpanded = !equipmentSectionExpanded
+                                                    },
+                                                ) {
+                                                    Text(
+                                                        "ID used for the Bluetooth name and PLC data frames.",
+                                                        fontSize = 11.sp,
+                                                    )
+                                                    MaintenanceActionButton(
+                                                        text = "Configure ID",
+                                                        onClick = onIdentityClick,
+                                                        tone = MaintenanceActionTone.INFO,
+                                                        enabled = connected,
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                    )
+                                                }
+                                            }
+                                            TerminalSection.HEIGHT_MEASUREMENT -> {
+                                                CollapsibleSettingsSection(
+                                                    title = "HEIGHT MEASUREMENT",
+                                                    summary =
+                                                        if (!altKnown) "Status not queried"
+                                                        else if (altState == true) "Enabled" else "Disabled",
+                                                    expanded = heightSectionExpanded,
+                                                    onToggle = { heightSectionExpanded = !heightSectionExpanded },
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement =
+                                                            Arrangement.spacedBy(
+                                                                8.dp,
+                                                                Alignment.CenterHorizontally,
+                                                            ),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                    ) {
 
-                                            // 🔹 Placeholder para que Spot no tenga Set
-                                            Spacer(modifier = Modifier.height(ROW_H))
+                                                        // GET STATUS
+                                                        Button(
+                                                            shape = RoundedCornerShape(6.dp),
+                                                            onClick = onAltQuery,
+                                                            contentPadding = PaddingValues(10.dp, 6.dp),
+                                                            colors =
+                                                                ButtonDefaults.buttonColors(
+                                                                    containerColor = Color(0xFF1976D2),
+                                                                    contentColor = Color.White,
+                                                                ),
+                                                        ) {
+                                                            Text("Get Status", fontSize = 11.sp)
+                                                        }
 
-                                            Button(
-                                                shape = RoundedCornerShape(6.dp),
-                                                onClick = onSetRtc,
-                                                modifier = Modifier.width(BTN_SET_W).height(ROW_H),
-                                                contentPadding = PaddingValues(10.dp, 6.dp),
-                                                colors =
-                                                    ButtonDefaults.buttonColors(
-                                                        containerColor = Color(0xFF2E7D32),
-                                                        contentColor = Color.White,
-                                                    ),
-                                            ) {
-                                                Text("Set", fontSize = 11.sp)
+                                                        if (altKnown) {
+
+                                                            val isEnabled = altState == true
+
+                                                            Button(
+                                                                shape = RoundedCornerShape(6.dp),
+                                                                onClick = {
+                                                                    if (isEnabled) onAltDisable() else onAltEnable()
+                                                                },
+                                                                contentPadding = PaddingValues(10.dp, 6.dp),
+                                                                colors =
+                                                                    ButtonDefaults.buttonColors(
+                                                                        containerColor =
+                                                                            if (isEnabled) Color(0xFFC62828)
+                                                                            else Color(0xFF2E7D32),
+                                                                        contentColor = Color.White,
+                                                                    ),
+                                                            ) {
+                                                                Text(
+                                                                    if (isEnabled) "Disable Height Measurement"
+                                                                    else "Enable Height Measurement",
+                                                                    fontSize = 11.sp,
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            TerminalSection.BARCODE_RTC -> {
+                                                CollapsibleSettingsSection(
+                                                    title = "BARCODE ID / RTC",
+                                                    summary = "Barcode prefixes and date/time",
+                                                    expanded = textSectionExpanded,
+                                                    onToggle = { textSectionExpanded = !textSectionExpanded },
+                                                ) {
+                                                    Row(
+                                                        modifier =
+                                                            Modifier.align(Alignment.CenterHorizontally)
+                                                                .widthIn(max = 560.dp)
+                                                                .fillMaxWidth(),
+                                                        horizontalArrangement =
+                                                            Arrangement.spacedBy(
+                                                                10.dp,
+                                                                Alignment.CenterHorizontally,
+                                                            ),
+                                                    ) {
+
+                                                        // ===== LEFT COLUMN (READ ACTIONS)
+                                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                            // Fila Pallet
+                                                            Button(
+                                                                shape = RoundedCornerShape(6.dp),
+                                                                onClick = onCfgQuery,
+                                                                modifier =
+                                                                    Modifier.width(BTN_ACTION_W).height(ROW_H),
+                                                                contentPadding = PaddingValues(10.dp, 6.dp),
+                                                                colors =
+                                                                    ButtonDefaults.buttonColors(
+                                                                        containerColor = Color(0xFF1976D2),
+                                                                        contentColor = Color.White,
+                                                                    ),
+                                                            ) {
+                                                                Text("Get ID", fontSize = 11.sp)
+                                                            }
+
+                                                            // Fila Spot (vacía)
+                                                            Spacer(modifier = Modifier.height(ROW_H))
+
+                                                            // Fila RTC
+                                                            Button(
+                                                                shape = RoundedCornerShape(6.dp),
+                                                                onClick = onRefreshRtc,
+                                                                modifier =
+                                                                    Modifier.width(BTN_ACTION_W).height(ROW_H),
+                                                                contentPadding = PaddingValues(10.dp, 6.dp),
+                                                                colors =
+                                                                    ButtonDefaults.buttonColors(
+                                                                        containerColor = Color(0xFF1976D2),
+                                                                        contentColor = Color.White,
+                                                                    ),
+                                                            ) {
+                                                                Text("Refresh", fontSize = 11.sp)
+                                                            }
+                                                        }
+
+                                                        // ===== CENTER COLUMN (FIELDS)
+                                                        Column(
+                                                            modifier = Modifier.weight(1f),
+                                                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                                                        ) {
+
+                                                            // ====== FILA 1: PALLET
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth().height(ROW_H),
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                            ) {
+                                                                Text(
+                                                                    "Pallet",
+                                                                    fontSize = 11.sp,
+                                                                    modifier = Modifier.width(LABEL_W),
+                                                                    maxLines = 1,
+                                                                )
+
+                                                                CompactOutlinedField(
+                                                                    value = pfxP,
+                                                                    onValueChange = onPfxPChanged,
+                                                                    modifier = Modifier.weight(1f),
+                                                                )
+
+                                                                Button(
+                                                                    shape = RoundedCornerShape(6.dp),
+                                                                    onClick = { showPrefixDialogFor = "PFXP" },
+                                                                    modifier = Modifier.width(70.dp).height(ROW_H),
+                                                                    contentPadding = PaddingValues(6.dp),
+                                                                    colors =
+                                                                        ButtonDefaults.buttonColors(
+                                                                            containerColor = Color(0xFF1976D2),
+                                                                            contentColor = Color.White,
+                                                                        ),
+                                                                ) {
+                                                                    Text("Select", fontSize = 11.sp)
+                                                                }
+                                                            }
+
+                                                            // ====== FILA 2: SPOT
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth().height(ROW_H),
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                            ) {
+                                                                Text(
+                                                                    "Spot",
+                                                                    fontSize = 11.sp,
+                                                                    modifier = Modifier.width(LABEL_W),
+                                                                    maxLines = 1,
+                                                                )
+
+                                                                CompactOutlinedField(
+                                                                    value = pfxU,
+                                                                    onValueChange = onPfxUChanged,
+                                                                    modifier = Modifier.weight(1f),
+                                                                )
+
+                                                                Button(
+                                                                    shape = RoundedCornerShape(6.dp),
+                                                                    onClick = { showPrefixDialogFor = "PFXU" },
+                                                                    modifier = Modifier.width(70.dp).height(ROW_H),
+                                                                    contentPadding = PaddingValues(6.dp),
+                                                                    colors =
+                                                                        ButtonDefaults.buttonColors(
+                                                                            containerColor = Color(0xFF1976D2),
+                                                                            contentColor = Color.White,
+                                                                        ),
+                                                                ) {
+                                                                    Text("Select", fontSize = 11.sp)
+                                                                }
+                                                            }
+
+                                                            // ====== FILA 2: RTC (altura fija)
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth().height(ROW_H),
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                            ) {
+                                                                Text(
+                                                                    "  RTC",
+                                                                    fontSize = 11.sp,
+                                                                    modifier = Modifier.width(LABEL_W),
+                                                                    maxLines = 1,
+                                                                )
+                                                                CompactOutlinedField(
+                                                                    value = rtcIso,
+                                                                    onValueChange = onRtcIsoChanged,
+                                                                    modifier = Modifier.weight(3f),
+                                                                )
+                                                            }
+                                                        }
+
+                                                        // ===== RIGHT COLUMN (WRITE ACTIONS)
+                                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                            Button(
+                                                                shape = RoundedCornerShape(6.dp),
+                                                                onClick = onSetCfg,
+                                                                modifier = Modifier.width(BTN_SET_W).height(ROW_H),
+                                                                contentPadding = PaddingValues(10.dp, 6.dp),
+                                                                colors =
+                                                                    ButtonDefaults.buttonColors(
+                                                                        containerColor = Color(0xFF2E7D32),
+                                                                        contentColor = Color.White,
+                                                                    ),
+                                                            ) {
+                                                                Text("Set", fontSize = 11.sp)
+                                                            }
+
+                                                            // 🔹 Placeholder para que Spot no tenga Set
+                                                            Spacer(modifier = Modifier.height(ROW_H))
+
+                                                            Button(
+                                                                shape = RoundedCornerShape(6.dp),
+                                                                onClick = onSetRtc,
+                                                                modifier = Modifier.width(BTN_SET_W).height(ROW_H),
+                                                                contentPadding = PaddingValues(10.dp, 6.dp),
+                                                                colors =
+                                                                    ButtonDefaults.buttonColors(
+                                                                        containerColor = Color(0xFF2E7D32),
+                                                                        contentColor = Color.White,
+                                                                    ),
+                                                            ) {
+                                                                Text("Set", fontSize = 11.sp)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            TerminalSection.MANUAL_TERMINAL -> {
+                                                ManualTerminalSection(
+                                                    lines = manualLines,
+                                                    onEdit = onManualEdit,
+                                                    onAdd = onManualAdd,
+                                                    onRemoveLast = onManualRemoveLast,
+                                                    connected = connected,
+                                                    onSendText = onSendText,
+                                                    onSendHex = onSendHex,
+                                                )
                                             }
                                         }
                                     }
                                 }
-
-                                ManualTerminalSection(
-                                    lines = manualLines,
-                                    onEdit = onManualEdit,
-                                    onAdd = onManualAdd,
-                                    onRemoveLast = onManualRemoveLast,
-                                    connected = connected,
-                                    onSendText = onSendText,
-                                    onSendHex = onSendHex,
-                                )
 
                                 Spacer(Modifier.height(60.dp))
                             }
