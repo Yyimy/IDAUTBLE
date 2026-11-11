@@ -25,6 +25,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.WindowInsets
@@ -46,6 +47,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -58,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.idautble.ui.theme.IDAUTBLETheme
 import java.text.SimpleDateFormat
@@ -90,18 +93,14 @@ private val BTN_ACTION_W: Dp = 90.dp
 private val LABEL_W: Dp = 52.dp // ancho fijo para "Pallet"/"Spot"/"RTC"
 private val ROW_H: Dp = 40.dp // igual que tus campos
 
-// ============================
-// LOG COLORS (tema SIEMPRE CLARO)
-// ============================
-private object LogColors {
-    val neutralText = Color(0xFF111111)
-    val txBlue = Color(0xFF1E88E5)
-    val rxGreen = Color(0xFF2E7D32) // Para el header RX
-    val asciiPurple = Color(0xFF7B1FA2) // NUEVO
-    val rxLabelRed = Color(0xFFD32F2F)
-    val rxHexOrange = Color(0xFFF57C00)
-    val warnAmber = Color(0xFFF9A825)
-    val errRed = Color(0xFFD32F2F)
+private class LogColors(dark: Boolean, val neutralText: Color) {
+    val txBlue = if (dark) Color(0xFF90CAF9) else Color(0xFF1E88E5)
+    val rxGreen = if (dark) Color(0xFFA5D6A7) else Color(0xFF2E7D32)
+    val asciiPurple = if (dark) Color(0xFFCE93D8) else Color(0xFF7B1FA2)
+    val rxLabelRed = if (dark) Color(0xFFFFABAB) else Color(0xFFD32F2F)
+    val rxHexOrange = if (dark) Color(0xFFFFCC80) else Color(0xFFF57C00)
+    val warnAmber = if (dark) Color(0xFFFFD166) else Color(0xFFF9A825)
+    val errRed = rxLabelRed
 }
 
 data class BleDevice(val name: String, val address: String, val rssi: Int?)
@@ -2200,9 +2199,29 @@ class MainActivity : ComponentActivity() {
         initBluetooth()
 
         enableEdgeToEdge()
+        val appSettings = getSharedPreferences("app_settings", Context.MODE_PRIVATE)
         setContent {
-            IDAUTBLETheme {
+            var graphite by remember { mutableStateOf(appSettings.getBoolean("graphite_background", false)) }
+            var showAppSettings by rememberSaveable { mutableStateOf(false) }
+            val lightSystemBars = !graphite && !isSystemInDarkTheme()
+            SideEffect {
+                val controller = WindowCompat.getInsetsController(window, window.decorView)
+                controller.isAppearanceLightStatusBars = lightSystemBars
+                controller.isAppearanceLightNavigationBars = lightSystemBars
+            }
+            IDAUTBLETheme(graphite = graphite) {
+                if (showAppSettings) {
+                    AppSettingsDialog(
+                        graphite = graphite,
+                        onSelect = { enabled ->
+                            graphite = enabled
+                            appSettings.edit { putBoolean("graphite_background", enabled) }
+                        },
+                        onDismiss = { showAppSettings = false },
+                    )
+                }
                 PlcBleTesterLandscape(
+                    onOpenAppSettings = { showAppSettings = true },
                     networkSession = networkSession,
                     maintenanceStatus = uiMaintenanceStatus.value,
                     maintenanceAuthorised = maintenanceSession.isAuthorized(),
@@ -2357,6 +2376,7 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlcBleTesterLandscape(
+    onOpenAppSettings: () -> Unit,
     networkSession: NetworkSession,
     maintenanceStatus: String,
     maintenanceAuthorised: Boolean,
@@ -2449,6 +2469,10 @@ private fun PlcBleTesterLandscape(
     var showPrefixDialogFor by remember { mutableStateOf<String?>(null) }
 
     val leftScroll = rememberScrollState()
+    val scheme = MaterialTheme.colorScheme
+    val logColors = remember(scheme) {
+        LogColors(scheme.background.luminance() < 0.5f, scheme.onSurface)
+    }
 
     // TopBar eliminado + sin insets reservados
     Scaffold(
@@ -2465,6 +2489,7 @@ private fun PlcBleTesterLandscape(
                 selectedIndex = selectedTab,
                 otaLabel = if (otaSession.busy && otaPct != null) "OTA · $otaPct%" else "OTA",
                 onSelect = { selectedTab = it },
+                onOpenSettings = onOpenAppSettings,
             )
 
             Spacer(Modifier.height(6.dp))
@@ -3066,7 +3091,7 @@ private fun PlcBleTesterLandscape(
                                             fontSize = 12.sp,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
-                                            color = LogColors.neutralText,
+                                            color = logColors.neutralText,
                                         )
                                     }
                                     OutlinedButton(
@@ -3098,9 +3123,9 @@ private fun PlcBleTesterLandscape(
 
                                                     val color =
                                                         when (entry.lvl) {
-                                                            LogLevel.WARN -> LogColors.warnAmber
-                                                            LogLevel.ERR -> LogColors.errRed
-                                                            else -> LogColors.neutralText
+                                                            LogLevel.WARN -> logColors.warnAmber
+                                                            LogLevel.ERR -> logColors.errRed
+                                                            else -> logColors.neutralText
                                                         }
 
                                                     Text(
@@ -3120,8 +3145,8 @@ private fun PlcBleTesterLandscape(
 
                                                     val bgColor =
                                                         if (isTx)
-                                                            LogColors.txBlue.copy(alpha = 0.06f)
-                                                        else LogColors.rxGreen.copy(alpha = 0.06f)
+                                                            logColors.txBlue.copy(alpha = 0.06f)
+                                                        else logColors.rxGreen.copy(alpha = 0.06f)
 
                                                     MaintenanceCard(
                                                         modifier = Modifier.fillMaxWidth(),
@@ -3142,8 +3167,8 @@ private fun PlcBleTesterLandscape(
                                                                 fontFamily = FontFamily.Monospace,
                                                                 fontSize = 12.sp,
                                                                 color =
-                                                                    if (isTx) LogColors.txBlue
-                                                                    else LogColors.rxGreen,
+                                                                    if (isTx) logColors.txBlue
+                                                                    else logColors.rxGreen,
                                                             )
 
                                                             Spacer(Modifier.height(1.dp))
@@ -3155,7 +3180,7 @@ private fun PlcBleTesterLandscape(
                                                                         withStyle(
                                                                             SpanStyle(
                                                                                 color =
-                                                                                    LogColors
+                                                                                    logColors
                                                                                         .rxLabelRed
                                                                             )
                                                                         ) {
@@ -3164,7 +3189,7 @@ private fun PlcBleTesterLandscape(
                                                                         withStyle(
                                                                             SpanStyle(
                                                                                 color =
-                                                                                    LogColors
+                                                                                    logColors
                                                                                         .asciiPurple
                                                                             )
                                                                         ) {
@@ -3182,7 +3207,7 @@ private fun PlcBleTesterLandscape(
                                                                         withStyle(
                                                                             SpanStyle(
                                                                                 color =
-                                                                                    LogColors
+                                                                                    logColors
                                                                                         .rxLabelRed
                                                                             )
                                                                         ) {
@@ -3191,7 +3216,7 @@ private fun PlcBleTesterLandscape(
                                                                         withStyle(
                                                                             SpanStyle(
                                                                                 color =
-                                                                                    LogColors
+                                                                                    logColors
                                                                                         .rxHexOrange
                                                                             )
                                                                         ) {
@@ -3284,7 +3309,7 @@ internal fun CompactOutlinedFieldTFV(
 ) {
     val shape = RoundedCornerShape(6.dp)
     val outline = MaterialTheme.colorScheme.outline
-    val textColor = LogColors.neutralText
+    val textColor = MaterialTheme.colorScheme.onSurface
     val cursor = MaterialTheme.colorScheme.primary
 
     Box(
@@ -3322,7 +3347,7 @@ private fun CompactOutlinedField(
 ) {
     val shape = RoundedCornerShape(6.dp)
     val outline = MaterialTheme.colorScheme.outline
-    val textColor = LogColors.neutralText
+    val textColor = MaterialTheme.colorScheme.onSurface
     val cursor = MaterialTheme.colorScheme.primary
 
     Box(
