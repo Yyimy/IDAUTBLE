@@ -260,13 +260,17 @@ fun NetworkScreen(session: NetworkSession) {
         },
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (!state.ready || state.paused)
-            Text(
-                if (state.paused) "Network controls are paused during OTA."
-                else "Connect Bluetooth and wait for the PLC to be ready.",
-                fontSize = 12.sp,
-                color = Color(0xFFB66A00),
-            )
+        if (!state.ready || state.paused) {
+            MaintenanceCard(Modifier.fillMaxWidth()) {
+                Text(
+                    if (state.paused) "Network controls are paused during OTA."
+                    else "Connect Bluetooth and wait for the PLC to be ready.",
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             if (landscape && maxWidth >= 700.dp) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
