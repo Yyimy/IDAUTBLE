@@ -46,6 +46,7 @@ internal enum class AppBackground(val label: String, val color: Color?) {
     SAGE("Sage", Color(0xFF96A69D)),
     SLATE("Slate blue", Color(0xFF778A9E)),
     GRAPHITE("Graphite", Color(0xFF4C535D)),
+    PURE_BLACK("Pure black", Color.Black),
 }
 
 internal enum class TerminalTextSize(val label: String, val fontSizeSp: Int) {
