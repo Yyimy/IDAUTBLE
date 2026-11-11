@@ -86,16 +86,6 @@ private const val ESC: Byte = 0x1B
 private const val CR: Byte = 0x0D
 private const val LF: Byte = 0x0A
 
-// ============================
-// UI CONSTANTS (ancho fijo)
-// ============================
-private val PFX_W: Dp = 70.dp
-private val BTN_SET_W: Dp = 64.dp
-private val BTN_REFRESH_W: Dp = 80.dp
-private val BTN_ACTION_W: Dp = 90.dp
-private val LABEL_W: Dp = 52.dp // ancho fijo para "Pallet"/"Spot"/"RTC"
-private val ROW_H: Dp = 40.dp // igual que tus campos
-
 private class LogColors(dark: Boolean, val neutralText: Color) {
     val txBlue = if (dark) Color(0xFF90CAF9) else Color(0xFF1E88E5)
     val rxGreen = if (dark) Color(0xFFA5D6A7) else Color(0xFF2E7D32)
@@ -2527,7 +2517,8 @@ private fun PlcBleTesterLandscape(
     var pinSectionExpanded by rememberSaveable { mutableStateOf(false) }
     var connectionSectionExpanded by rememberSaveable { mutableStateOf(true) }
     var heightSectionExpanded by rememberSaveable { mutableStateOf(false) }
-    var textSectionExpanded by rememberSaveable { mutableStateOf(false) }
+    var barcodeSectionExpanded by rememberSaveable { mutableStateOf(false) }
+    var rtcSectionExpanded by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(connected) {
         if (connected) {
@@ -2966,190 +2957,36 @@ private fun PlcBleTesterLandscape(
                                                     }
                                                 }
                                             }
-                                            TerminalSection.BARCODE_RTC -> {
+                                            TerminalSection.BARCODE_ID -> {
                                                 CollapsibleSettingsSection(
-                                                    title = "BARCODE ID / RTC",
-                                                    summary = "Barcode prefixes and date/time",
-                                                    expanded = textSectionExpanded,
-                                                    onToggle = { textSectionExpanded = !textSectionExpanded },
+                                                    title = "BARCODE ID",
+                                                    summary = "Barcode prefixes",
+                                                    expanded = barcodeSectionExpanded,
+                                                    onToggle = { barcodeSectionExpanded = !barcodeSectionExpanded },
                                                 ) {
-                                                    Row(
-                                                        modifier =
-                                                            Modifier.align(Alignment.CenterHorizontally)
-                                                                .widthIn(max = 560.dp)
-                                                                .fillMaxWidth(),
-                                                        horizontalArrangement =
-                                                            Arrangement.spacedBy(
-                                                                10.dp,
-                                                                Alignment.CenterHorizontally,
-                                                            ),
-                                                    ) {
-
-                                                        // ===== LEFT COLUMN (READ ACTIONS)
-                                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                            // Fila Pallet
-                                                            Button(
-                                                                shape = RoundedCornerShape(6.dp),
-                                                                onClick = onCfgQuery,
-                                                                modifier =
-                                                                    Modifier.width(BTN_ACTION_W).height(ROW_H),
-                                                                contentPadding = PaddingValues(10.dp, 6.dp),
-                                                                colors =
-                                                                    ButtonDefaults.buttonColors(
-                                                                        containerColor = Color(0xFF1976D2),
-                                                                        contentColor = Color.White,
-                                                                    ),
-                                                            ) {
-                                                                Text("Get ID", fontSize = 11.sp)
-                                                            }
-
-                                                            // Fila Spot (vacía)
-                                                            Spacer(modifier = Modifier.height(ROW_H))
-
-                                                            // Fila RTC
-                                                            Button(
-                                                                shape = RoundedCornerShape(6.dp),
-                                                                onClick = onRefreshRtc,
-                                                                modifier =
-                                                                    Modifier.width(BTN_ACTION_W).height(ROW_H),
-                                                                contentPadding = PaddingValues(10.dp, 6.dp),
-                                                                colors =
-                                                                    ButtonDefaults.buttonColors(
-                                                                        containerColor = Color(0xFF1976D2),
-                                                                        contentColor = Color.White,
-                                                                    ),
-                                                            ) {
-                                                                Text("Refresh", fontSize = 11.sp)
-                                                            }
-                                                        }
-
-                                                        // ===== CENTER COLUMN (FIELDS)
-                                                        Column(
-                                                            modifier = Modifier.weight(1f),
-                                                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                                                        ) {
-
-                                                            // ====== FILA 1: PALLET
-                                                            Row(
-                                                                modifier = Modifier.fillMaxWidth().height(ROW_H),
-                                                                verticalAlignment = Alignment.CenterVertically,
-                                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                                            ) {
-                                                                Text(
-                                                                    "Pallet",
-                                                                    fontSize = 11.sp,
-                                                                    modifier = Modifier.width(LABEL_W),
-                                                                    maxLines = 1,
-                                                                )
-
-                                                                CompactOutlinedField(
-                                                                    value = pfxP,
-                                                                    onValueChange = onPfxPChanged,
-                                                                    modifier = Modifier.weight(1f),
-                                                                )
-
-                                                                Button(
-                                                                    shape = RoundedCornerShape(6.dp),
-                                                                    onClick = { showPrefixDialogFor = "PFXP" },
-                                                                    modifier = Modifier.width(70.dp).height(ROW_H),
-                                                                    contentPadding = PaddingValues(6.dp),
-                                                                    colors =
-                                                                        ButtonDefaults.buttonColors(
-                                                                            containerColor = Color(0xFF1976D2),
-                                                                            contentColor = Color.White,
-                                                                        ),
-                                                                ) {
-                                                                    Text("Select", fontSize = 11.sp)
-                                                                }
-                                                            }
-
-                                                            // ====== FILA 2: SPOT
-                                                            Row(
-                                                                modifier = Modifier.fillMaxWidth().height(ROW_H),
-                                                                verticalAlignment = Alignment.CenterVertically,
-                                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                                            ) {
-                                                                Text(
-                                                                    "Spot",
-                                                                    fontSize = 11.sp,
-                                                                    modifier = Modifier.width(LABEL_W),
-                                                                    maxLines = 1,
-                                                                )
-
-                                                                CompactOutlinedField(
-                                                                    value = pfxU,
-                                                                    onValueChange = onPfxUChanged,
-                                                                    modifier = Modifier.weight(1f),
-                                                                )
-
-                                                                Button(
-                                                                    shape = RoundedCornerShape(6.dp),
-                                                                    onClick = { showPrefixDialogFor = "PFXU" },
-                                                                    modifier = Modifier.width(70.dp).height(ROW_H),
-                                                                    contentPadding = PaddingValues(6.dp),
-                                                                    colors =
-                                                                        ButtonDefaults.buttonColors(
-                                                                            containerColor = Color(0xFF1976D2),
-                                                                            contentColor = Color.White,
-                                                                        ),
-                                                                ) {
-                                                                    Text("Select", fontSize = 11.sp)
-                                                                }
-                                                            }
-
-                                                            // ====== FILA 2: RTC (altura fija)
-                                                            Row(
-                                                                modifier = Modifier.fillMaxWidth().height(ROW_H),
-                                                                verticalAlignment = Alignment.CenterVertically,
-                                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                                            ) {
-                                                                Text(
-                                                                    "  RTC",
-                                                                    fontSize = 11.sp,
-                                                                    modifier = Modifier.width(LABEL_W),
-                                                                    maxLines = 1,
-                                                                )
-                                                                CompactOutlinedField(
-                                                                    value = rtcIso,
-                                                                    onValueChange = onRtcIsoChanged,
-                                                                    modifier = Modifier.weight(3f),
-                                                                )
-                                                            }
-                                                        }
-
-                                                        // ===== RIGHT COLUMN (WRITE ACTIONS)
-                                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                            Button(
-                                                                shape = RoundedCornerShape(6.dp),
-                                                                onClick = onSetCfg,
-                                                                modifier = Modifier.width(BTN_SET_W).height(ROW_H),
-                                                                contentPadding = PaddingValues(10.dp, 6.dp),
-                                                                colors =
-                                                                    ButtonDefaults.buttonColors(
-                                                                        containerColor = Color(0xFF2E7D32),
-                                                                        contentColor = Color.White,
-                                                                    ),
-                                                            ) {
-                                                                Text("Set", fontSize = 11.sp)
-                                                            }
-
-                                                            // 🔹 Placeholder para que Spot no tenga Set
-                                                            Spacer(modifier = Modifier.height(ROW_H))
-
-                                                            Button(
-                                                                shape = RoundedCornerShape(6.dp),
-                                                                onClick = onSetRtc,
-                                                                modifier = Modifier.width(BTN_SET_W).height(ROW_H),
-                                                                contentPadding = PaddingValues(10.dp, 6.dp),
-                                                                colors =
-                                                                    ButtonDefaults.buttonColors(
-                                                                        containerColor = Color(0xFF2E7D32),
-                                                                        contentColor = Color.White,
-                                                                    ),
-                                                            ) {
-                                                                Text("Set", fontSize = 11.sp)
-                                                            }
-                                                        }
+                                                    BarcodePrefixField("Pallet", pfxP, onPfxPChanged) {
+                                                        showPrefixDialogFor = "PFXP"
+                                                    }
+                                                    BarcodePrefixField("Spot", pfxU, onPfxUChanged) {
+                                                        showPrefixDialogFor = "PFXU"
+                                                    }
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                        MaintenanceActionButton("Get ID", onCfgQuery, MaintenanceActionTone.INFO)
+                                                        MaintenanceActionButton("Set", onSetCfg, MaintenanceActionTone.SUCCESS)
+                                                    }
+                                                }
+                                            }
+                                            TerminalSection.RTC -> {
+                                                CollapsibleSettingsSection(
+                                                    title = "RTC",
+                                                    summary = "Date and time",
+                                                    expanded = rtcSectionExpanded,
+                                                    onToggle = { rtcSectionExpanded = !rtcSectionExpanded },
+                                                ) {
+                                                    CompactOutlinedField(rtcIso, onRtcIsoChanged, Modifier.fillMaxWidth())
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                        MaintenanceActionButton("Refresh", onRefreshRtc, MaintenanceActionTone.INFO)
+                                                        MaintenanceActionButton("Set", onSetRtc, MaintenanceActionTone.SUCCESS)
                                                     }
                                                 }
                                             }
@@ -3412,6 +3249,24 @@ internal fun CompactOutlinedFieldTFV(
             cursorBrush = SolidColor(cursor),
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+@Composable
+private fun BarcodePrefixField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSelect: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(label, modifier = Modifier.width(52.dp), fontSize = 11.sp)
+        CompactOutlinedField(value, onValueChange, Modifier.weight(1f))
+        MaintenanceActionButton("Select", onSelect, MaintenanceActionTone.INFO)
     }
 }
 
