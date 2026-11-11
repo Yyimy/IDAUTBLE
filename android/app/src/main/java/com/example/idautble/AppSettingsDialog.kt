@@ -52,7 +52,9 @@ internal enum class AppBackground(val label: String, val color: Color?) {
     SAGE("Sage", Color(0xFF96A69D)),
     SLATE("Slate blue", Color(0xFF778A9E)),
     GRAPHITE("Graphite", Color(0xFF4C535D)),
-    PURE_BLACK("Pure black", Color.Black),
+    PURE_BLACK("Pure black", Color.Black);
+
+    fun resolveColor(darkMode: Boolean): Color? = color ?: if (darkMode) null else Color.Black
 }
 
 internal enum class TerminalTextSize(val label: String, val fontSizeSp: Int, val lineHeightSp: Int) {
@@ -143,7 +145,7 @@ internal fun AppSettingsDialog(
                     Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())
                 ) {
                     SettingsRow("Background", background.label, Modifier.clickable { page = SettingsPage.BACKGROUND }) {
-                        BackgroundSwatch(background, Modifier.size(18.dp))
+                        BackgroundSwatch(background, darkMode, Modifier.size(18.dp))
                         SettingsChevron()
                     }
                     HorizontalDivider()
@@ -183,7 +185,7 @@ internal fun AppSettingsDialog(
                             selected = background == option,
                             onClick = { onBackgroundChange(option) },
                             divider = index < AppBackground.entries.lastIndex,
-                            leading = { BackgroundSwatch(option, Modifier.size(18.dp)) },
+                            leading = { BackgroundSwatch(option, darkMode, Modifier.size(18.dp)) },
                         )
                     }
                 }
@@ -331,11 +333,11 @@ private fun SettingsRow(
 }
 
 @Composable
-private fun BackgroundSwatch(background: AppBackground, modifier: Modifier) {
+private fun BackgroundSwatch(background: AppBackground, darkMode: Boolean, modifier: Modifier) {
     Surface(
         modifier = modifier,
         shape = CircleShape,
-        color = background.color ?: MaterialTheme.colorScheme.background,
+        color = background.resolveColor(darkMode) ?: MaterialTheme.colorScheme.background,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     ) {}
 }
