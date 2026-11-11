@@ -16,9 +16,10 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt "pyinstaller>=6,<7"
-      - run: python -m PyInstaller --noconfirm --onefile --windowed --name IDAUT_Lectura --collect-submodules bleak.backends.winrt --collect-submodules pystray idaut_lectura.py
+      - run: python -c "from idaut_lectura import barcode_icon; barcode_icon().save('shortcut.ico')"
+      - run: python -m PyInstaller --noconfirm --onefile --windowed --icon shortcut.ico --name "IS-P Shortcut" --collect-submodules bleak.backends.winrt --collect-submodules pystray idaut_lectura.py
       - uses: actions/upload-artifact@v4
         with:
-          name: IDAUT-Lectura-Windows
-          path: tools/windows-hid-shortcut/dist/IDAUT_Lectura.exe
+          name: IS-P-Shortcut-Windows
+          path: tools/windows-hid-shortcut/dist/IS-P Shortcut.exe
           if-no-files-found: error
