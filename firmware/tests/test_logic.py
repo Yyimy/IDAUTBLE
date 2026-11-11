@@ -79,7 +79,7 @@ void powerCut(const char*){gCutRequested=true;}
 '''
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
 outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
-names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
+names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
 using std::min;
@@ -122,12 +122,15 @@ shim += r'''
 std::atomic<bool> gMaintenanceAuthorized{false};uint32_t gAuthBlockedUntil=0;uint8_t gAuthFails=0;
 String gMaintenancePin,gOtaApPass,gOtaApSsid;bool gPinChangedOnBoot=false,gHeartbeatEnabled=false;
 const char* OTA_AP_PASS=nullptr;
+uint32_t gTcpPingSeconds=10,gTcpTimeoutSeconds=20,gLastTcpRxMs=0,gLastTcpPingMs=0;
+bool gTcpPongSeen=false,failUIntWrite=false;
 std::map<std::string,String> storedSettings;
 std::map<std::string,uint32_t> storedUIntSettings;
 struct Preferences {
  bool begin(const char*,bool){return true;} void end(){}
  String getString(const char*k,const char* def){auto it=storedSettings.find(k);return it==storedSettings.end()?String(def):it->second;}
  uint32_t getUInt(const char*k,uint32_t def){auto it=storedUIntSettings.find(k);return it==storedUIntSettings.end()?def:it->second;}
+ size_t putUInt(const char*k,uint32_t value){if(failUIntWrite)return 0;storedUIntSettings[k]=value;return sizeof(value);}
  size_t putString(const char*k,const String&v){storedSettings[k]=v;return v.length();}
  bool getBool(const char*,bool def){return def;}size_t getBytesLength(const char*){return 0;}
  size_t getBytes(const char*,void*,size_t){return 0;}
@@ -243,6 +246,17 @@ int main(){
  CHECK(gTcpClient.sent==payload);
  gTcpClient.blockedCalls=100;sendFrame(msg,sizeof(msg));++nowMs;txTick();CHECK(gTcpClient.up);
  nowMs+=2101;txTick();CHECK(!gTcpClient.up&&!gTcpConnected);
+
+ // TCP settings are validated, stored together and recovered without resetting live settings on write failure.
+ CHECK(validTcpTiming(5,6));CHECK(validTcpTiming(120,300));
+ CHECK(!validTcpTiming(4,20));CHECK(!validTcpTiming(10,10));CHECK(!validTcpTiming(10,301));
+ runtimeLoad();CHECK(!gHeartbeatEnabled&&!gAckMode&&gTcpPingSeconds==10&&gTcpTimeoutSeconds==20);
+ gTcpPongSeen=true;CHECK(saveTcpAdvanced(true,true,15,45));CHECK(!gTcpPongSeen);
+ failUIntWrite=true;CHECK(!saveTcpAdvanced(false,false,10,20));failUIntWrite=false;
+ CHECK(gHeartbeatEnabled&&gAckMode&&gTcpPingSeconds==15&&gTcpTimeoutSeconds==45);
+ gTcpPingSeconds=10;gTcpTimeoutSeconds=20;gHeartbeatEnabled=false;gAckMode=false;runtimeLoad();
+ CHECK(gHeartbeatEnabled&&gAckMode&&gTcpPingSeconds==15&&gTcpTimeoutSeconds==45);
+ storedUIntSettings.erase("tcp_adv");runtimeLoad();
 
  // The compiled PIN wins over any prior NVS value and invalidates old bonds.
  storedSettings["pin"]="987654";storedSettings["apkey"]="ABCDEF0123456789";

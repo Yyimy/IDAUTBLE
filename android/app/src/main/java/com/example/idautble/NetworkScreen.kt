@@ -317,6 +317,12 @@ private fun LiveConnectionPanel(
     val controls = state.available && !state.controlsBusy
     NetworkPanel(modifier, scrollable) {
         NetworkHeading("LIVE CONNECTION")
+        if (!stale && state.tcpAdvanced != null && status != null) {
+            if (state.tcpAdvanced.heartbeat) {
+                NetworkValue("Last PONG", status.pongAgeSeconds?.let { "${it + (age ?: 0)} s ago" } ?: "—")
+            }
+            NetworkValue("Pending events", status.pendingEvents?.toString() ?: "—")
+        }
         NetworkValue(
             "WiFi",
             when (status?.wifiEnabled) {
@@ -526,6 +532,9 @@ private fun NetworkConfigurationPanel(
                 session.edit { it.copy(port = value) }
             }
         }
+        state.tcpAdvanced?.let {
+            TcpAdvancedSettings(it, controls, session::saveTcpAdvanced)
+        }
         if (state.dirty)
             errors.forEach { Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.error) }
         Row(
@@ -581,4 +590,70 @@ private fun NetworkConfigurationPanel(
         Text(state.notice, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         state.error?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
     }
+}
+
+@Composable
+private fun TcpAdvancedSettings(
+    config: TcpAdvancedConfig,
+    enabled: Boolean,
+    onSave: (TcpAdvancedConfig) -> Unit,
+) {
+    var open by remember(config) { mutableStateOf(false) }
+    val heartbeatSummary = if (config.heartbeat) "Heartbeat on" else "Heartbeat off"
+    val ackSummary = if (config.acknowledgements) "ACK required" else "ACK off"
+    OutlinedButton(
+        onClick = { open = true },
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text("TCP advanced · $heartbeatSummary · $ackSummary", fontSize = 11.sp)
+    }
+    if (!open) return
+
+    var heartbeat by remember { mutableStateOf(config.heartbeat) }
+    var acknowledgements by remember { mutableStateOf(config.acknowledgements) }
+    var interval by remember { mutableStateOf(config.intervalSeconds.toString()) }
+    var timeout by remember { mutableStateOf(config.timeoutSeconds.toString()) }
+    val draft = TcpAdvancedConfig(
+        heartbeat, acknowledgements, interval.toIntOrNull() ?: 0, timeout.toIntOrNull() ?: 0,
+    )
+    AlertDialog(
+        onDismissRequest = { open = false },
+        title = { Text("TCP advanced") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Enable heartbeat", Modifier.weight(1f))
+                    Switch(checked = heartbeat, onCheckedChange = { heartbeat = it })
+                }
+                Text("The server must reply PONG to PING.", fontSize = 12.sp)
+                NetworkInput("Ping interval (s)", interval, true, keyboard = KeyboardType.Number) {
+                    interval = it.filter { c -> c in '0'..'9' }.take(3)
+                }
+                NetworkInput("Response timeout (s)", timeout, true, keyboard = KeyboardType.Number) {
+                    timeout = it.filter { c -> c in '0'..'9' }.take(3)
+                }
+                if (!draft.valid) Text(
+                    "Interval must be 5–120 s. Timeout must exceed the interval and be at most 300 s.",
+                    color = MaterialTheme.colorScheme.error, fontSize = 12.sp,
+                )
+                HorizontalDivider()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Require event acknowledgement", Modifier.weight(1f))
+                    Switch(checked = acknowledgements, onCheckedChange = { acknowledgements = it })
+                }
+                Text("Enable only if the server stores and deduplicates events and replies with ACK=<id>.", fontSize = 12.sp)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = enabled && draft.valid && draft != config,
+                onClick = { open = false; onSave(draft) },
+            ) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = { open = false }) { Text("Cancel") } },
+    )
 }
