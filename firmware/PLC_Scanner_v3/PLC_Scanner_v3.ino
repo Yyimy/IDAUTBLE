@@ -445,7 +445,12 @@ static const unsigned long FOTO_STABLE_MS = 1500;  // 1.5 s
 #define TX0 43
 
 HardwareSerial PLCSerial(0);
-const uint32_t LECTOR_TIMEOUT_MS = 2000;
+static constexpr uint32_t DEFAULT_READER_TIMEOUT_MS = 2000;
+static uint32_t gReaderTimeoutMs = DEFAULT_READER_TIMEOUT_MS;
+
+static bool validReaderTimeout(uint32_t ms) {
+  return ms == 1000 || ms == 2000 || ms == 3000 || ms == 5000;
+}
 const char LECTOR_TERMINADOR =
     '\n';  // trama termina en CR LF (cortamos por LF)
 
@@ -2137,7 +2142,7 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
              rxTrim.startsWith("ACKMODE=") ||
              rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" ||
              rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
-             rxTrim.startsWith("ID=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
+             rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
     cmd.type = BLECMD_TEXT;
     strlcpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload));
   } else {
@@ -3172,6 +3177,8 @@ static void runtimeLoad() {
   OTA_AP_PASS = PLC_OTA_WIFI_PASSWORD;
   gAckMode = p.getBool("ack", false);
   gHeartbeatEnabled = p.getBool("heartbeat", false);
+  const auto readerTimeout = p.getUInt("reader_ms", DEFAULT_READER_TIMEOUT_MS);
+  gReaderTimeoutMs = validReaderTimeout(readerTimeout) ? readerTimeout : DEFAULT_READER_TIMEOUT_MS;
   size_t stored = p.getBytesLength("outbox");
   bool valid = false;
   if (stored == sizeof(gOutbox)) {
@@ -3285,9 +3292,39 @@ static void sendCounters() {
   else replyLine(false, "ERR=COUNTERS_TOO_LONG");
 }
 
+static void setReaderTimeout(const String &value, uint8_t source) {
+  if (source != 0 || !maintenanceAuthorized()) {
+    replyLine(false, "ERR=READER_AUTH");
+    return;
+  }
+  if (gScanActive || gScanCount || gOtaTaskHandle || gCutRequested) {
+    replyLine(false, "ERR=READER_BUSY");
+    return;
+  }
+  uint32_t ms;
+  if (!parseU32(value, ms) || !validReaderTimeout(ms)) {
+    replyLine(false, "ERR=READER_TIMEOUT_INVALID");
+    return;
+  }
+  if (ms != gReaderTimeoutMs) {
+    Preferences preferences;
+    if (!preferences.begin("runtime3", false) || preferences.putUInt("reader_ms", ms) != sizeof(ms)) {
+      replyLine(false, "ERR=READER_STORAGE");
+      return;
+    }
+    preferences.end();
+    gReaderTimeoutMs = ms;
+  }
+  replyLine(true, "READERTIMEOUT=" + String(gReaderTimeoutMs));
+}
+
 static void handleTextCommand(const BleCmd &cmd) {
   String s(cmd.payload);
   if (plcHid::handle(s, cmd.source)) return;
+  if (s.startsWith("READERTIMEOUT=")) {
+    setReaderTimeout(s.substring(sizeof("READERTIMEOUT=") - 1), cmd.source);
+    return;
+  }
   if (s == "ID?" || s.startsWith("ID=")) {
     handleIdentityCommand(s, cmd.source);
     return;
@@ -3306,7 +3343,7 @@ static void handleTextCommand(const BleCmd &cmd) {
     replyLine(true, "FW=" FIRMWARE_VERSION ";PROTO=V2;ACKMODE=" +
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
-                        (cmd.source == 0 ? ";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1" : ""));
+                        (cmd.source == 0 ? String(";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1;READERTIMEOUT=") + String(gReaderTimeoutMs) : String()));
     return;
   }
   if (s == "STATUS?") {
@@ -3749,7 +3786,7 @@ static void scanTick() {
       else
         gReaderOverflow = true;
     }
-    if (complete || millis() - gScanStarted >= LECTOR_TIMEOUT_MS) {
+    if (complete || millis() - gScanStarted >= gReaderTimeoutMs) {
       if (!complete || gReaderOverflow || !parseReaderFrame(gReaderBuffer)) {
         gCodPalet = "-";
         gCodUbic = "-";

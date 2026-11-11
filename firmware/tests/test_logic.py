@@ -59,7 +59,8 @@ String gNetSsid="old",gNetPwd="oldpass",gNetIp="192.168.1.10",gNetGw="192.168.1.
 uint16_t gNetPort=9000;NetMode gNetMode=NETMODE_DHCP;
 String gPfxPalet="]d1",gPfxUbic="]Q1",gCodPalet="-",gCodUbic="-",gOtaUrl,gOtaSha256;uint32_t gOtaSize=0;
 String gAltura="-",gNivelBat4="6598",gId="AABBCCDDEEFF";
-#define LECTOR_TIMEOUT_MS 2000
+constexpr uint32_t DEFAULT_READER_TIMEOUT_MS=2000;
+uint32_t gReaderTimeoutMs=DEFAULT_READER_TIMEOUT_MS;
 String formatAltura(float m){char b[20];snprintf(b,sizeof(b),"%05.2f",m);return b;}
 struct UARTMock {std::string rx;int triggers=0;int available(){return rx.size();}int read(){char c=rx[0];rx.erase(0,1);return (unsigned char)c;}void print(const char*){++triggers;}void write(uint8_t*,size_t){} } PLCSerial,RS485;
 void clearRxBuffer_RS485(){RS485.rx.clear();}
@@ -78,7 +79,7 @@ void powerCut(const char*){gCutRequested=true;}
 '''
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
 outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
-names=['handleAuthCommand','maintenanceAuthorized','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
+names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
 using std::min;
@@ -122,9 +123,11 @@ std::atomic<bool> gMaintenanceAuthorized{false};uint32_t gAuthBlockedUntil=0;uin
 String gMaintenancePin,gOtaApPass,gOtaApSsid;bool gPinChangedOnBoot=false,gHeartbeatEnabled=false;
 const char* OTA_AP_PASS=nullptr;
 std::map<std::string,String> storedSettings;
+std::map<std::string,uint32_t> storedUIntSettings;
 struct Preferences {
  bool begin(const char*,bool){return true;} void end(){}
  String getString(const char*k,const char* def){auto it=storedSettings.find(k);return it==storedSettings.end()?String(def):it->second;}
+ uint32_t getUInt(const char*k,uint32_t def){auto it=storedUIntSettings.find(k);return it==storedUIntSettings.end()?def:it->second;}
  size_t putString(const char*k,const String&v){storedSettings[k]=v;return v.length();}
  bool getBool(const char*,bool def){return def;}size_t getBytesLength(const char*){return 0;}
  size_t getBytes(const char*,void*,size_t){return 0;}
@@ -199,6 +202,12 @@ int main(){
  CHECK(!otaParseStart("OTA=URL=http://192.168.4.2:8080/x;SIZE=-1;SHA256="));
  resetScanner();nowMs=0;gRtcIso="2026-10-29T12:00:00";gFotoEstado='1';enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx="]d1PARTIAL";nowMs=2001;scanTick();
  CHECK(!gScanActive);CHECK(failCount==1);CHECK(gCodPalet=="-"&&gCodUbic=="-");CHECK(emitted.size()==1);
+ storedUIntSettings["reader_ms"]=5000;runtimeLoad();CHECK(gReaderTimeoutMs==5000);
+ resetScanner();nowMs=10000;enqueueScan(BLECMD_L,true);scanTick();
+ nowMs=14999;scanTick();CHECK(gScanActive);
+ nowMs=15000;scanTick();CHECK(!gScanActive);
+ storedUIntSettings["reader_ms"]=4000;runtimeLoad();CHECK(gReaderTimeoutMs==2000);
+ storedUIntSettings.erase("reader_ms");
  resetScanner();plcHid::readings.clear();nowMs=3000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx="]d1PAL;]Q1LOC\r\n";nowMs=3020;scanTick();CHECK(!gScanActive);CHECK(gCodPalet=="PAL"&&gCodUbic=="LOC");CHECK(failCount==0);
  CHECK(plcHid::readings.size()==1&&plcHid::readings[0].first=="PAL"&&plcHid::readings[0].second=="LOC");
  resetScanner();nowMs=4000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx=std::string(330,'A')+"\n";scanTick();CHECK(failCount==1);CHECK(gCodPalet=="-");
