@@ -22,6 +22,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -3096,25 +3097,31 @@ private fun PlcBleTesterLandscape(
                             // RIGHT fixed log
                             Column(modifier = Modifier.weight(0.60f).fillMaxHeight()) {
                                 Row(
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    MaintenanceCard(Modifier.weight(1f)) {
-                                        Text(
-                                            text = "Status: $statusLine",
-                                            modifier = Modifier.padding(6.dp),
-                                            fontSize = 12.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            color = logColors.neutralText,
-                                        )
+                                    MaintenanceCard(Modifier.weight(1f).fillMaxHeight()) {
+                                        Box(
+                                            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp),
+                                            contentAlignment = Alignment.CenterStart,
+                                        ) {
+                                            Text(
+                                                text = "Status: $statusLine",
+                                                fontSize = 12.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                color = logColors.neutralText,
+                                            )
+                                        }
                                     }
                                     OutlinedButton(
-                                        shape = RoundedCornerShape(6.dp),
+                                        shape = RoundedCornerShape(8.dp),
                                         onClick = onClearLog,
                                         contentPadding = PaddingValues(10.dp, 6.dp),
-                                        modifier = Modifier.widthIn(min = 90.dp),
+                                        modifier = Modifier.widthIn(min = 90.dp).fillMaxHeight(),
+                                        border = BorderStroke(1.dp, scheme.outlineVariant),
+                                        colors = ButtonDefaults.outlinedButtonColors(containerColor = scheme.surfaceContainerLow),
                                     ) {
                                         Text(
                                             "Clear Log",
