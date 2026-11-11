@@ -2,7 +2,11 @@ package com.example.idautble
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
@@ -17,6 +21,7 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -32,6 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
@@ -49,10 +55,10 @@ internal enum class AppBackground(val label: String, val color: Color?) {
     PURE_BLACK("Pure black", Color.Black),
 }
 
-internal enum class TerminalTextSize(val label: String, val fontSizeSp: Int) {
-    NORMAL("Normal", 12),
-    LARGE("Large", 15),
-    EXTRA_LARGE("Extra large", 18),
+internal enum class TerminalTextSize(val label: String, val fontSizeSp: Int, val lineHeightSp: Int) {
+    NORMAL("Normal", 12, 16),
+    LARGE("Large", 15, 20),
+    EXTRA_LARGE("Extra large", 18, 24),
 }
 
 internal enum class TerminalLogView(val label: String, val showAscii: Boolean, val showHex: Boolean) {
@@ -119,49 +125,36 @@ internal fun AppSettingsDialog(
         title = { Text(page.title) },
         text = {
             when (page) {
-                SettingsPage.MAIN -> Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
-                    ListItem(
-                        modifier = Modifier.clickable { page = SettingsPage.BACKGROUND },
-                        headlineContent = { Text("Background") },
-                        supportingContent = { Text(background.label) },
-                        leadingContent = { BackgroundSwatch(background) },
-                        trailingContent = { SettingsChevron() },
-                        colors = colors,
-                    )
-                    ListItem(
-                        modifier = Modifier.clickable { page = SettingsPage.THEME },
-                        headlineContent = { Text("Theme") },
-                        supportingContent = { Text(themeLabel) },
-                        trailingContent = { SettingsChevron() },
-                        colors = colors,
-                    )
-                    ListItem(
-                        modifier = Modifier.clickable { page = SettingsPage.TERMINAL_TEXT_SIZE },
-                        headlineContent = { Text("Terminal text size") },
-                        supportingContent = { Text(terminalTextSize.label) },
-                        trailingContent = { SettingsChevron() },
-                        colors = colors,
-                    )
-                    ListItem(
-                        modifier = Modifier.clickable { page = SettingsPage.LOG_VIEW },
-                        headlineContent = { Text("Log view") },
-                        supportingContent = { Text(logView.label) },
-                        trailingContent = { SettingsChevron() },
-                        colors = colors,
-                    )
-                    ListItem(
-                        modifier = Modifier.clickable { page = SettingsPage.TERMINAL_ORDER },
-                        headlineContent = { Text("Terminal section order") },
-                        trailingContent = { SettingsChevron() },
-                        colors = colors,
-                    )
-                    ListItem(
+                SettingsPage.MAIN -> Column(
+                    Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())
+                ) {
+                    SettingsRow("Background", background.label, Modifier.clickable { page = SettingsPage.BACKGROUND }) {
+                        BackgroundSwatch(background, Modifier.size(18.dp))
+                        SettingsChevron()
+                    }
+                    HorizontalDivider()
+                    SettingsRow("Theme", themeLabel, Modifier.clickable { page = SettingsPage.THEME }) {
+                        SettingsChevron()
+                    }
+                    HorizontalDivider()
+                    SettingsRow(
+                        "Terminal text size",
+                        terminalTextSize.label,
+                        Modifier.clickable { page = SettingsPage.TERMINAL_TEXT_SIZE },
+                    ) { SettingsChevron() }
+                    HorizontalDivider()
+                    SettingsRow("Log view", logView.label, Modifier.clickable { page = SettingsPage.LOG_VIEW }) {
+                        SettingsChevron()
+                    }
+                    HorizontalDivider()
+                    SettingsRow("Terminal section order", modifier = Modifier.clickable { page = SettingsPage.TERMINAL_ORDER }) {
+                        SettingsChevron()
+                    }
+                    HorizontalDivider()
+                    SettingsRow(
+                        "Keep screen on",
                         modifier = Modifier.toggleable(keepScreenOn, role = Role.Switch, onValueChange = onKeepScreenOnChange),
-                        headlineContent = { Text("Keep screen on") },
-                        supportingContent = { Text("While this app is on screen") },
-                        trailingContent = { Switch(checked = keepScreenOn, onCheckedChange = null) },
-                        colors = colors,
-                    )
+                    ) { Switch(checked = keepScreenOn, onCheckedChange = null) }
                 }
                 SettingsPage.BACKGROUND -> Column(
                     Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()).selectableGroup()
@@ -184,7 +177,7 @@ internal fun AppSettingsDialog(
                         ListItem(
                             modifier = Modifier.selectable(selected, role = Role.RadioButton,
                                 onClick = { onTerminalTextSizeChange(option) }),
-                            headlineContent = { Text(option.label, fontSize = option.fontSizeSp.sp) },
+                            headlineContent = { Text(option.label, fontSize = option.fontSizeSp.sp, lineHeight = option.lineHeightSp.sp) },
                             trailingContent = { RadioButton(selected, onClick = null) },
                             colors = colors,
                         )
@@ -260,9 +253,34 @@ internal fun AppSettingsDialog(
 }
 
 @Composable
-private fun BackgroundSwatch(background: AppBackground) {
+private fun SettingsRow(
+    label: String,
+    value: String? = null,
+    modifier: Modifier = Modifier,
+    trailing: @Composable () -> Unit,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        if (value != null) {
+            Text(
+                value,
+                modifier = Modifier.widthIn(max = 88.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        trailing()
+    }
+}
+
+@Composable
+private fun BackgroundSwatch(background: AppBackground, modifier: Modifier = Modifier.size(26.dp)) {
     Surface(
-        modifier = Modifier.size(26.dp),
+        modifier = modifier,
         shape = CircleShape,
         color = background.color ?: MaterialTheme.colorScheme.background,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
