@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import subprocess
 import sys
 import threading
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ READ = b"HIDREAD\r\n"
 HOTKEY = re.compile(r"(?:(CTRL\+)(ALT\+)?|(ALT\+))(SHIFT\+)?([A-Z0-9]|F(?:[1-9]|1[0-2]))")
 WM_HOTKEY = 0x0312
 APP_NAME = "IS-P Shortcut"
+RECOVERY_FLAGS = ("--recover-visible", "--recover-hidden")
 
 
 def hotkey_codes(value):
@@ -60,7 +62,7 @@ class Hotkey:
 
 
 class Connection:
-    def __init__(self, emit, last_device):
+    def __init__(self, emit, last_device, recovered=False):
         self.emit = emit
         self.last_device = last_device
         self.transition = asyncio.Lock()
@@ -70,6 +72,8 @@ class Connection:
         self.received = asyncio.Event()
         self.buffer = bytearray()
         self.reading = False
+        self.target = None
+        self.recovered = recovered
 
     async def paired(self, reconnect=False):
         from winrt.windows.devices.bluetooth import BluetoothLEDevice
@@ -80,10 +84,7 @@ class Connection:
             found = await asyncio.wait_for(DeviceInformation.find_all_async_with_kind_aqs_filter_and_additional_properties(
                 selector, [], DeviceInformationKind.ASSOCIATION_ENDPOINT), timeout=10)
             devices = [(item.id, item.name or "Sin nombre") for item in found]
-            try:
-                saved = self.last_device.read_text(encoding="utf-8")
-            except (OSError, UnicodeError):
-                saved = None
+            saved = self.saved_device_id()
             self.emit("devices", (devices, saved))
             self.emit("status", "Selecciona el PLC emparejado en Windows.")
             if reconnect:
@@ -93,10 +94,43 @@ class Connection:
         except Exception as exc:
             self.emit("status", f"Error al consultar Bluetooth: {exc}")
 
+    def saved_device_id(self):
+        try:
+            return self.last_device.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return None
+
     async def connect(self, device_id, name):
+        self.target = (device_id, name)
         async with self.transition:
-            if self.client is None:
+            if self.client is None and self.target == (device_id, name):
                 await self._connect(device_id, name)
+
+    async def follow_windows_connection(self):
+        while True:
+            target = self.target
+            if target is not None and self.client is None and not self.transition.locked():
+                try:
+                    connected = await self._windows_connected(target[0])
+                except Exception:
+                    connected = False
+                if connected:
+                    async with self.transition:
+                        if self.target == target and self.client is None:
+                            await self._connect(*target)
+            await asyncio.sleep(4)
+
+    @staticmethod
+    async def _windows_connected(device_id):
+        from winrt.windows.devices.bluetooth import BluetoothConnectionStatus, BluetoothLEDevice
+
+        device = await asyncio.wait_for(BluetoothLEDevice.from_id_async(device_id), timeout=5)
+        if device is None:
+            return False
+        try:
+            return device.connection_status == BluetoothConnectionStatus.CONNECTED
+        finally:
+            device.close()
 
     async def _connect(self, device_id, name):
         from bleak.exc import BleakCharacteristicNotFoundError
@@ -114,6 +148,7 @@ class Connection:
                     await self._close_client()
                     self.emit("status", f"Conectando a {name}… Esperando el canal de lectura del PLC.")
                     await asyncio.sleep(retry_delay)
+            self.recovered = False
             self.sync = asyncio.create_task(self.keep_in_sync(client))
             self.emit("device", name)
             self.emit("link", "connected")
@@ -127,7 +162,11 @@ class Connection:
             raise
         except BleakCharacteristicNotFoundError:
             await self._disconnect()
-            self.emit("status", "El canal de lectura del PLC aún no está disponible. Espera unos segundos y pulsa Conectar.")
+            if not self.recovered and self.target is not None and self.target[0] == self.saved_device_id():
+                self.recovered = True
+                self.emit("recover")
+            else:
+                self.emit("status", "Esperando a que Windows vuelva a abrir el canal de lectura del PLC…")
         except Exception as exc:
             await self._disconnect()
             self.emit("status", f"No se pudo abrir el canal de lectura: {exc}. Comprueba que este PC está asignado como HID.")
@@ -175,6 +214,7 @@ class Connection:
         self.emit("hotkey", "—")
 
     async def disconnect(self):
+        self.target = None
         async with self.transition:
             await self._disconnect()
 
@@ -314,7 +354,8 @@ def main():
     emit = lambda kind, value=None: events.put((kind, value))
     loop = asyncio.new_event_loop()
     settings = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "IDAUT Lectura"
-    connection = Connection(emit, settings / "last-device.txt")
+    connection = Connection(emit, settings / "last-device.txt",
+                            recovered=any(flag in sys.argv for flag in RECOVERY_FLAGS))
 
     def worker():
         asyncio.set_event_loop(loop)
@@ -331,6 +372,8 @@ def main():
     root.minsize(410, 208)
     root.configure(bg="#12181d")
     root.columnconfigure(0, weight=1)
+    if "--recover-hidden" in sys.argv:
+        root.withdraw()
 
     panel = "#1d272e"
     border = "#34444e"
@@ -442,8 +485,10 @@ def main():
     threading.Thread(target=tray.run, daemon=True).start()
     root.protocol("WM_DELETE_WINDOW", root.withdraw)
 
+    restart_mode = None
+
     def update():
-        nonlocal devices, link
+        nonlocal devices, link, restart_mode
         while not events.empty():
             kind, value = events.get()
             if kind == "devices":
@@ -486,24 +531,38 @@ def main():
             elif kind == "show":
                 root.deiconify()
                 root.lift()
+            elif kind == "recover":
+                restart_mode = "--recover-hidden" if root.state() == "withdrawn" else "--recover-visible"
+                root.destroy()
+                return
             elif kind == "quit":
                 root.destroy()
                 return
         root.after(80, update)
 
     startup = run(connection.paired(reconnect=True))
+    reconnect = run(connection.follow_windows_connection())
     root.after(80, update)
     try:
         root.mainloop()
     finally:
         try:
             startup.cancel()
+            reconnect.cancel()
             if pending_connection is not None:
                 pending_connection.cancel()
             run(connection.disconnect()).result(timeout=3)
+        except TimeoutError:
+            pass
         finally:
             loop.call_soon_threadsafe(loop.stop)
             tray.stop()
+            if restart_mode is not None:
+                launch = [sys.executable]
+                if not getattr(sys, "frozen", False):
+                    launch.append(str(Path(__file__).resolve()))
+                subprocess.Popen([*launch, restart_mode],
+                                 env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
 
 
 if __name__ == "__main__":
