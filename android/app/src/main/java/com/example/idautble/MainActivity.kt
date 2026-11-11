@@ -3186,6 +3186,7 @@ private fun PlcBleTesterLandscape(
                                             Text(
                                                 text = "Status: $statusLine",
                                                 fontSize = terminalTextSize.fontSizeSp.sp,
+                                                lineHeight = terminalTextSize.lineHeightSp.sp,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                                 color = logColors.neutralText,
@@ -3233,6 +3234,7 @@ private fun PlcBleTesterLandscape(
                                                             "$t  ${entry.lvl.name}  ${entry.msg}",
                                                         fontFamily = FontFamily.Monospace,
                                                         fontSize = terminalTextSize.fontSizeSp.sp,
+                                                        lineHeight = terminalTextSize.lineHeightSp.sp,
                                                         color = color,
                                                     )
                                                 }
@@ -3266,6 +3268,7 @@ private fun PlcBleTesterLandscape(
                                                                     "$t  $arrow  (${entry.size}B)",
                                                                 fontFamily = FontFamily.Monospace,
                                                                 fontSize = terminalTextSize.fontSizeSp.sp,
+                                                                lineHeight = terminalTextSize.lineHeightSp.sp,
                                                                 color =
                                                                     if (isTx) logColors.txBlue
                                                                     else logColors.rxGreen,
@@ -3339,6 +3342,7 @@ private fun TerminalLogPayload(
         },
         fontFamily = FontFamily.Monospace,
         fontSize = textSize.fontSizeSp.sp,
+        lineHeight = textSize.lineHeightSp.sp,
     )
 }
 
