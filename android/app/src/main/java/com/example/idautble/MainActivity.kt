@@ -930,14 +930,19 @@ class MainActivity : ComponentActivity() {
         val prefixKeys = uiHidOutput.value.prefixKeys
         val readHotkey = uiHidOutput.value.readHotkey
         val endingSequence = uiHidOutput.value.endingSequence
+        val outputOptions = uiHidOutput.value.outputOptions
         val command = if (config == null) {
             when {
+                outputOptions -> "HIDCFG5?"
                 endingSequence -> "HIDCFG4?"
                 readHotkey -> "HIDCFG3?"
                 prefixKeys -> "HIDCFG2?"
                 else -> "HIDCFG?"
             }
-        } else runCatching { config.wire(includePrefix = prefixKeys, includeHotkey = readHotkey, includeEndingSequence = endingSequence) }.getOrNull() ?: return
+        } else runCatching {
+            config.wire(includePrefix = prefixKeys, includeHotkey = readHotkey,
+                includeEndingSequence = endingSequence, includeOutputOptions = outputOptions)
+        }.getOrNull() ?: return
         hidOutputExpected = config
         val request = ++hidOutputRequest
         uiHidOutput.value = uiHidOutput.value.copy(busy = true, message = "Waiting for the PLC...")
@@ -961,6 +966,7 @@ class MainActivity : ComponentActivity() {
                 prefixKeys = "HIDPREFIX=1" in text.split(';'),
                 readHotkey = "HIDHOTKEY=1" in text.split(';'),
                 endingSequence = "HIDENDSEQ=1" in text.split(';'),
+                outputOptions = "HIDOUTPUT5=1" in text.split(';'),
             )
             hidOutputRequest++; hidOutputExpected = null
             if (supported) requestHidOutput(null)

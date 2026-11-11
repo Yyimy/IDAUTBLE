@@ -50,7 +50,7 @@ inline bool asciiReport(char c, bool capsLock, uint8_t (&report)[8], KeyLayout l
   return true;
 }
 
-// One bounded text at a time; press/release every 30 ms, never replay a text.
+// One bounded text at a time; send each key press and release without replay.
 class Keyboard {
  public:
   bool busy() const { return phase_ != Phase::Idle; }
@@ -59,8 +59,9 @@ class Keyboard {
   bool start(Token host, Token owner, bool usb, uint32_t now, const Sessions &s) {
     return startText(host,owner,usb,now,s,kTestText,KeyLayout::US);
   }
-  bool startText(Token host,Token owner,bool usb,uint32_t now,const Sessions &s,const char *text,KeyLayout layout) {
-    if (busy() || !text || !*text || (layout!=KeyLayout::US && layout!=KeyLayout::ES) || !s.keyboardReady(host) || (!usb && !s.authorized(owner))) return false;
+  bool startText(Token host,Token owner,bool usb,uint32_t now,const Sessions &s,const char *text,KeyLayout layout,
+      TypingTiming timing = {}) {
+    if (busy() || !text || !*text || !validTypingTiming(timing) || (layout!=KeyLayout::US && layout!=KeyLayout::ES) || !s.keyboardReady(host) || (!usb && !s.authorized(owner))) return false;
     size_t used=0;
     for(size_t i=0;text[i];++i) {
       if(i>=512)return false;
@@ -73,7 +74,9 @@ class Keyboard {
     host_ = host; owner_ = owner; usb_ = usb;
     index_ = 0; pressed_ = false; result_ = TypingResult::None;
     phase_ = Phase::InitialRelease;
-    last_ = now - 30; retrySince_ = now;
+    timing_ = timing;
+    waitMs_ = timing.reportMs;
+    last_ = now - waitMs_; retrySince_ = now;
     return true;
   }
   void cancel() { if (busy()) abort(TypingResult::Cancelled); }
@@ -85,7 +88,7 @@ class Keyboard {
     if (!s.keyboardTarget(host_)) { finish(TypingResult::Cancelled); return; }
     if (!s.keyboardReady(host_) || (!usb_ && !s.authorized(owner_))) abort(TypingResult::Cancelled);
     if (!busy()) return;
-    if (uint32_t(now - last_) < 30) return;
+    if (uint32_t(now - last_) < waitMs_) return;
     uint8_t report[8] = {};
     if (phase_ == Phase::Press) {
       if (!asciiReport(text_[index_], s.find(host_)->capsLock, report, layout_)) { abort(TypingResult::Failed); return; }
@@ -104,13 +107,22 @@ class Keyboard {
       return;
     }
     last_ = retrySince_ = now;
+    waitMs_ = timing_.reportMs;
     if (phase_ == Phase::Aborting) { finish(abortResult_); return; }
     if (phase_ == Phase::InitialRelease) phase_ = Phase::Press;
     else if (phase_ == Phase::Press) { pressed_ = true; phase_ = Phase::Release; }
     else {
       pressed_ = false;
-      if (!text_[++index_]) finish(TypingResult::Done);
-      else phase_ = Phase::Press;
+      const char released = text_[index_++];
+      if (!text_[index_]) {
+        finish(TypingResult::Done);
+      } else {
+        phase_ = Phase::Press;
+        if (released == '\t' || released == '\n') {
+          waitMs_ += timing_.navigationPauseMs;
+          retrySince_ += timing_.navigationPauseMs;
+        }
+      }
     }
   }
  private:
@@ -121,6 +133,8 @@ class Keyboard {
   size_t index_ = 0;
   char text_[1026]={};
   KeyLayout layout_=KeyLayout::US;
+  TypingTiming timing_;
+  uint16_t waitMs_ = 0;
   uint32_t last_ = 0, retrySince_ = 0;
   TypingResult result_ = TypingResult::None, abortResult_ = TypingResult::Cancelled;
   void abort(TypingResult reason) {

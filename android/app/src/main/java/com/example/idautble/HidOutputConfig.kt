@@ -45,6 +45,9 @@ internal fun hidSeparatorOptions(allowArrows: Boolean, extended: Boolean) =
     hidBaseTokens.keys + (if (allowArrows || extended) hidArrowTokens.keys else emptySet()) +
         (if (extended) hidExtendedTokens.keys else emptySet())
 
+internal val hidTypingSpeeds = mapOf(50 to "Slow", 30 to "Normal", 20 to "Fast")
+internal val hidNavigationPauses = mapOf(0 to "Off", 100 to "100 ms", 250 to "250 ms")
+
 data class HidOutputConfig(
     val fields: String = "PU",
     val separator: String = "\t",
@@ -52,13 +55,18 @@ data class HidOutputConfig(
     val layout: String = "US",
     val prefix: String = "",
     val hotkey: String = "NONE",
+    val locationFirst: Boolean = false,
+    val reportMs: Int = 30,
+    val navigationPauseMs: Int = 0,
 ) {
     fun wire(
         includePrefix: Boolean = prefix.isNotEmpty(),
         includeHotkey: Boolean = hotkey != "NONE",
         includeEndingSequence: Boolean = legacyHidEnding(ending) == null,
+        includeOutputOptions: Boolean = locationFirst || reportMs != 30 || navigationPauseMs != 0,
     ): String {
         require(fields in setOf("P", "U", "PU") && layout in setOf("US", "ES"))
+        require(reportMs in hidTypingSpeeds && navigationPauseMs in hidNavigationPauses)
         val end = if (includeEndingSequence) "ENDHEX=${encodeHidSequence(ending)}"
             else "END=${requireNotNull(legacyHidEnding(ending))}"
         val base = "HIDCFG=1;FIELDS=$fields;SEPHEX=${encodeHidSequence(separator)};$end;LAYOUT=$layout"
@@ -69,13 +77,23 @@ data class HidOutputConfig(
                 require(validHidHotkey(hotkey))
                 append(";HOTKEY=$hotkey")
             }
+            if (includeOutputOptions) {
+                append(if (locationFirst) ";ORDER=UP" else ";ORDER=PU")
+                append(";TIMING=$reportMs,$navigationPauseMs")
+            }
         }
     }
     fun preview(): String = buildString {
         append(prefix)
-        if (fields != "U") append("PALLET123")
-        if (fields == "PU") append(separator)
-        if (fields != "P") append("LOC01")
+        when (fields) {
+            "P" -> append("PALLET123")
+            "U" -> append("LOC01")
+            else -> {
+                append(if (locationFirst) "LOC01" else "PALLET123")
+                append(separator)
+                append(if (locationFirst) "PALLET123" else "LOC01")
+            }
+        }
         append(ending)
     }.let(::hidSeparatorPattern)
 }
@@ -91,6 +109,7 @@ data class HidOutputState(
     val prefixKeys: Boolean = false,
     val readHotkey: Boolean = false,
     val endingSequence: Boolean = false,
+    val outputOptions: Boolean = false,
 )
 
 private val hidHotkeyPattern = Regex("(?:CTRL\\+(?:ALT\\+)?|ALT\\+)(?:SHIFT\\+)?(?:[A-Z0-9]|F(?:[1-9]|1[0-2]))")
@@ -141,14 +160,14 @@ fun decodeHidSeparator(pattern: String, allowArrows: Boolean = true, extended: B
 }
 
 fun parseHidOutputConfig(text: String): HidOutputConfig? {
-    if (text.length > 288 || !text.startsWith("HIDCFG=1;")) return null
+    if (text.length > 320 || !text.startsWith("HIDCFG=1;")) return null
     val values = linkedMapOf<String, String>()
     for (part in text.substring(9).split(';')) {
         val pair = part.split('=', limit = 2)
         if (pair.size != 2 || values.put(pair[0], pair[1]) != null) return null
     }
     val required = setOf("FIELDS", "SEPHEX", "LAYOUT")
-    val endingKeys = values.keys - required - setOf("PREHEX", "HOTKEY")
+    val endingKeys = values.keys - required - setOf("PREHEX", "HOTKEY", "ORDER", "TIMING")
     if (!values.keys.containsAll(required) || endingKeys != setOf("END") && endingKeys != setOf("ENDHEX")) return null
     val ending = if ("ENDHEX" in values) decodeHidSequence(values.getValue("ENDHEX")) ?: return null
         else when (val name = values.getValue("END")) {
@@ -158,6 +177,17 @@ fun parseHidOutputConfig(text: String): HidOutputConfig? {
     val separator = decodeHidSequence(values.getValue("SEPHEX")) ?: return null
     val prefix = decodeHidSequence(values["PREHEX"] ?: "-") ?: return null
     val hotkey = values["HOTKEY"] ?: "NONE"
-    val result = HidOutputConfig(values.getValue("FIELDS"), separator, ending, values.getValue("LAYOUT"), prefix, hotkey)
+    val order = values["ORDER"]
+    val timing = values["TIMING"]
+    if ((order == null) != (timing == null)) return null
+    if (order != null && order != "PU" && order != "UP") return null
+    val reportMs = if (timing == null) 30 else hidTypingSpeeds.keys.firstOrNull {
+        timing.substringBefore(',') == it.toString()
+    } ?: return null
+    val pauseMs = if (timing == null) 0 else hidNavigationPauses.keys.firstOrNull {
+        timing.substringAfter(',') == it.toString()
+    } ?: return null
+    val result = HidOutputConfig(values.getValue("FIELDS"), separator, ending, values.getValue("LAYOUT"),
+        prefix, hotkey, order == "UP", reportMs, pauseMs)
     return runCatching { result.wire(); result }.getOrNull()
 }

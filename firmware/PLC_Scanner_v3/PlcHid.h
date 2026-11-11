@@ -246,7 +246,8 @@ static void loadOutputFormat() {
 }
 static bool saveOutputFormat(const probe::OutputFormat &candidate) {
   const std::string canonical = probe::outputWire(candidate, candidate.prefixLength != 0, candidate.hotkey != "NONE",
-      probe::needsEndingSequence(candidate));
+      probe::needsEndingSequence(candidate),
+      candidate.locationFirst || candidate.timing.reportMs != 30 || candidate.timing.navigationPauseMs != 0);
   if (!receiverStorageReady || receiverPreferences.putString("format", canonical.c_str()) != canonical.size()) return false;
   outputFormat = candidate;
   return true;
@@ -1011,7 +1012,8 @@ static bool handle(const String &text, uint8_t source) {
     if (error) replyLine(false, error);
     return true;
   }
-  const bool endingSequenceQuery = text == "HIDCFG4?";
+  const bool outputOptionsQuery = text == "HIDCFG5?";
+  const bool endingSequenceQuery = outputOptionsQuery || text == "HIDCFG4?";
   const bool hotkeyQuery = endingSequenceQuery || text == "HIDCFG3?";
   const bool formatQuery = hotkeyQuery || text == "HIDCFG2?" || text == "HIDCFG?";
   const bool getter = text == "HIDRECEIVER?" || text == "HIDRECEIVER2?" || formatQuery;
@@ -1028,15 +1030,16 @@ static bool handle(const String &text, uint8_t source) {
   if (text == "HIDRECEIVER?" || text == "HIDRECEIVER2?")
     replyLine(true, receiverText(text == "HIDRECEIVER2?"));
   else if (formatQuery)
-    replyLine(true, probe::outputWire(outputFormat, text != "HIDCFG?", hotkeyQuery, endingSequenceQuery).c_str());
+    replyLine(true, probe::outputWire(outputFormat, text != "HIDCFG?", hotkeyQuery, endingSequenceQuery, outputOptionsQuery).c_str());
   else if (blocked()) replyLine(false, "ERR=BUSY");
   else if (text.startsWith("HIDCFG=")) {
     probe::OutputFormat candidate;
     bool prefixPresent = false;
     bool hotkeyPresent = false;
     bool endingSequencePresent = false;
+    bool outputOptionsPresent = false;
     if (keyboard.busy() || pendingCount) replyLine(false, "ERR=HIDCFG_BUSY");
-    else if (!probe::parseOutputFormat(text.c_str(), candidate, &prefixPresent, &hotkeyPresent, &endingSequencePresent))
+    else if (!probe::parseOutputFormat(text.c_str(), candidate, &prefixPresent, &hotkeyPresent, &endingSequencePresent, &outputOptionsPresent))
       replyLine(false, "ERR=HIDCFG_INVALID");
     else {
       // An older app can edit its fields without discarding an existing prefix.
@@ -1050,10 +1053,14 @@ static bool handle(const String &text, uint8_t source) {
         candidate.endingLength = outputFormat.endingLength;
         memcpy(candidate.ending, outputFormat.ending, candidate.endingLength);
       }
+      if (!outputOptionsPresent) {
+        candidate.locationFirst = outputFormat.locationFirst;
+        candidate.timing = outputFormat.timing;
+      }
       const bool hotkeyChanged = candidate.hotkey != outputFormat.hotkey;
       if (!saveOutputFormat(candidate)) replyLine(false, "ERR=HIDCFG_STORAGE");
       else {
-        replyLine(true, probe::outputWire(outputFormat, prefixPresent, hotkeyPresent, endingSequencePresent).c_str());
+        replyLine(true, probe::outputWire(outputFormat, prefixPresent, hotkeyPresent, endingSequencePresent, outputOptionsPresent).c_str());
         if (hotkeyChanged) {
           const auto receiver = shortcutReceiver();
           if (receiver.generation) sendHotkey(receiver);
@@ -1149,7 +1156,7 @@ static bool handle(const String &text, uint8_t source) {
     std::string formatted;
     if (!pendingCount && probe::formatReading(outputFormat, "PALLET123", "LOC01", formatted) &&
         keyboard.startText(state.role(probe::Role::Keyboard), owner, false, millis(), state,
-                           formatted.c_str(), outputFormat.layout)) {
+                           formatted.c_str(), outputFormat.layout, outputFormat.timing)) {
       testActive = true;
       replyLine(true, "HIDTEST=QUEUED");
     } else replyLine(false, "ERR=HID_NOT_READY_OR_BUSY");
@@ -1302,7 +1309,7 @@ static void tick() {
     if (pendingCount && !keyboard.busy()) {
       auto &job = pending[pendingHead];
       if (!keyboard.startText(job.receiver, {}, true, millis(), state,
-                              job.text.c_str(), outputFormat.layout))
+                              job.text.c_str(), outputFormat.layout, outputFormat.timing))
         Serial.println("HID READING skipped: invalid keyboard payload");
       job.text.clear();
       pendingHead = (pendingHead + 1) % pendingCapacity;

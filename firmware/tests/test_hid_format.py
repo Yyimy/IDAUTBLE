@@ -128,6 +128,31 @@ int main(){
  CHECK(parseOutputFormat(legacy,f,nullptr,nullptr,&endingSequencePresent)&&!endingSequencePresent);
  CHECK(f.endingLength==1&&f.ending[0]=='\n');
 
+ const std::string options=";ORDER=UP;TIMING=20,100";
+ bool outputOptionsPresent=false;
+ CHECK(parseOutputFormat(legacy+options,f,nullptr,nullptr,nullptr,&outputOptionsPresent)&&outputOptionsPresent);
+ CHECK(f.locationFirst&&f.timing.reportMs==20&&f.timing.navigationPauseMs==100);
+ CHECK(outputWire(f)==legacy);CHECK(outputWire(f,false,false,false,true)==legacy+options);
+ CHECK(formatReading(f,"P","U",text));CHECK(text=="U\tP\n");
+ CHECK(!formatReading(f,nullptr,"U",text));
+ f.fields=2;CHECK(formatReading(f,nullptr,"U",text));CHECK(text=="U\n");
+ CHECK(parseOutputFormat(allMax+options,f));CHECK(outputWire(f,true,true,true,true)==allMax+options);
+ for(const auto *invalid:{";ORDER=UP", ";TIMING=20,100", ";ORDER=U;TIMING=20,100",
+                         ";ORDER=UP;TIMING=0,100", ";ORDER=UP;TIMING=20,99", ";ORDER=UP;TIMING=20,100,0"})
+   CHECK(!parseOutputFormat(legacy+invalid,f));
+ CHECK(k.startText(hid,{},true,7000,s,"U\tP\nX",KeyLayout::US,f.timing));
+ std::vector<unsigned> times;
+ keys.clear();
+ for(unsigned now=7000;now<7450;++now)k.tick(now,s,[&](Token,const uint8_t(&r)[8]){
+   times.push_back(now-7000);keys.push_back(r[2]);
+   return SendResult::Accepted;
+ });
+ CHECK(k.takeResult()==TypingResult::Done);
+ CHECK(times==std::vector<unsigned>({0,20,40,60,80,200,220,240,260,380,400}));
+ CHECK(keys==std::vector<unsigned>({0,24,0,43,0,19,0,40,0,27,0}));
+ CHECK(parseOutputFormat(legacy,f,nullptr,nullptr,nullptr,&outputOptionsPresent)&&!outputOptionsPresent);
+ CHECK(!f.locationFirst&&f.timing.reportMs==30&&f.timing.navigationPauseMs==0);
+
 #endif
  printf("PASS: %u HID format/payload/report assertions\n",checks);
 }
