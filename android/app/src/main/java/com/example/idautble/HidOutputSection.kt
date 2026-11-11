@@ -29,9 +29,8 @@ private val shortcutKeys = mapOf(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Boolean, onAction: (HidOutputConfig?) -> Unit) {
+fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Boolean, onAction: (HidOutputConfig?) -> Unit, expanded: Boolean, onToggle: () -> Unit) {
     if (!state.supported) return
-    var expanded by rememberSaveable { mutableStateOf(false) }
     var fields by remember { mutableStateOf("PU") }
     var prefixPattern by remember { mutableStateOf("") }
     var shortcut by remember { mutableStateOf("NONE") }
@@ -61,7 +60,7 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
     val enabled = connected && !state.busy
     CollapsibleSettingsSection(
         if (production) "HID OUTPUT" else "HID OUTPUT · PROTOTYPE",
-        "Pallet / location · keyboard format", expanded, { expanded = !expanded },
+        "Pallet / location · keyboard format", expanded, onToggle,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             HidSettingsGroup("Fields") {
