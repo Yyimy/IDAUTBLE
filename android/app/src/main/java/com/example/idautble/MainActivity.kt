@@ -25,7 +25,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.WindowInsets
@@ -2201,27 +2200,38 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val appSettings = getSharedPreferences("app_settings", Context.MODE_PRIVATE)
         setContent {
-            var graphite by remember { mutableStateOf(appSettings.getBoolean("graphite_background", false)) }
+            // The previous Graphite preference selected the full dark theme.
+            var darkMode by remember { mutableStateOf(appSettings.getBoolean("graphite_background", false)) }
+            var background by remember {
+                val saved = appSettings.getString("background_color", null)
+                mutableStateOf(AppBackground.entries.firstOrNull { it.name == saved } ?: AppBackground.DEFAULT)
+            }
             var showAppSettings by rememberSaveable { mutableStateOf(false) }
-            val lightSystemBars = !graphite && !isSystemInDarkTheme()
+            val lightSystemBars = background.color?.let { it.luminance() > 0.179f } ?: !darkMode
             SideEffect {
                 val controller = WindowCompat.getInsetsController(window, window.decorView)
                 controller.isAppearanceLightStatusBars = lightSystemBars
                 controller.isAppearanceLightNavigationBars = lightSystemBars
             }
-            IDAUTBLETheme(graphite = graphite) {
+            IDAUTBLETheme(darkTheme = darkMode) {
                 if (showAppSettings) {
                     AppSettingsDialog(
-                        graphite = graphite,
-                        onSelect = { enabled ->
-                            graphite = enabled
+                        darkMode = darkMode,
+                        background = background,
+                        onDarkModeChange = { enabled ->
+                            darkMode = enabled
                             appSettings.edit { putBoolean("graphite_background", enabled) }
+                        },
+                        onBackgroundChange = { option ->
+                            background = option
+                            appSettings.edit { putString("background_color", option.name) }
                         },
                         onDismiss = { showAppSettings = false },
                     )
                 }
                 PlcBleTesterLandscape(
                     onOpenAppSettings = { showAppSettings = true },
+                    backgroundColor = background.color,
                     networkSession = networkSession,
                     maintenanceStatus = uiMaintenanceStatus.value,
                     maintenanceAuthorised = maintenanceSession.isAuthorized(),
@@ -2377,6 +2387,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PlcBleTesterLandscape(
     onOpenAppSettings: () -> Unit,
+    backgroundColor: Color?,
     networkSession: NetworkSession,
     maintenanceStatus: String,
     maintenanceAuthorised: Boolean,
@@ -2477,7 +2488,12 @@ private fun PlcBleTesterLandscape(
     // TopBar eliminado + sin insets reservados
     Scaffold(
         topBar = {},
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = backgroundColor ?: scheme.background,
+        contentColor = when {
+            backgroundColor == null -> scheme.onBackground
+            backgroundColor.luminance() > 0.179f -> Color.Black
+            else -> Color.White
+        },
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { inner ->
         Column(modifier = Modifier.padding(inner).padding(6.dp).fillMaxSize()) {
