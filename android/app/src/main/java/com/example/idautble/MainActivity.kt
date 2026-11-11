@@ -17,6 +17,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -2210,18 +2211,47 @@ class MainActivity : ComponentActivity() {
                 val saved = appSettings.getString("background_color", null)
                 mutableStateOf(AppBackground.entries.firstOrNull { it.name == saved } ?: AppBackground.DEFAULT)
             }
+            var terminalTextSize by remember {
+                val saved = appSettings.getString("terminal_text_size", null)
+                mutableStateOf(TerminalTextSize.entries.firstOrNull { it.name == saved } ?: TerminalTextSize.NORMAL)
+            }
+            var logView by remember {
+                val saved = appSettings.getString("terminal_log_view", null)
+                mutableStateOf(TerminalLogView.entries.firstOrNull { it.name == saved } ?: TerminalLogView.BOTH)
+            }
+            var keepScreenOn by remember { mutableStateOf(appSettings.getBoolean("keep_screen_on", false)) }
             var showAppSettings by rememberSaveable { mutableStateOf(false) }
             val lightSystemBars = background.color?.let { it.luminance() > 0.179f } ?: !darkMode
             SideEffect {
                 val controller = WindowCompat.getInsetsController(window, window.decorView)
                 controller.isAppearanceLightStatusBars = lightSystemBars
                 controller.isAppearanceLightNavigationBars = lightSystemBars
+                if (keepScreenOn) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
             }
             IDAUTBLETheme(darkTheme = darkMode) {
                 if (showAppSettings) {
                     AppSettingsDialog(
                         darkMode = darkMode,
                         background = background,
+                        terminalTextSize = terminalTextSize,
+                        logView = logView,
+                        keepScreenOn = keepScreenOn,
+                        onTerminalTextSizeChange = { option ->
+                            terminalTextSize = option
+                            appSettings.edit { putString("terminal_text_size", option.name) }
+                        },
+                        onLogViewChange = { option ->
+                            logView = option
+                            appSettings.edit { putString("terminal_log_view", option.name) }
+                        },
+                        onKeepScreenOnChange = { enabled ->
+                            keepScreenOn = enabled
+                            appSettings.edit { putBoolean("keep_screen_on", enabled) }
+                        },
                         onDarkModeChange = { enabled ->
                             darkMode = enabled
                             appSettings.edit { putBoolean("graphite_background", enabled) }
@@ -2236,6 +2266,8 @@ class MainActivity : ComponentActivity() {
                 PlcBleTesterLandscape(
                     onOpenAppSettings = { showAppSettings = true },
                     backgroundColor = background.color,
+                    terminalTextSize = terminalTextSize,
+                    logView = logView,
                     networkSession = networkSession,
                     maintenanceStatus = uiMaintenanceStatus.value,
                     maintenanceAuthorised = maintenanceSession.isAuthorized(),
@@ -2403,6 +2435,8 @@ class MainActivity : ComponentActivity() {
 private fun PlcBleTesterLandscape(
     onOpenAppSettings: () -> Unit,
     backgroundColor: Color?,
+    terminalTextSize: TerminalTextSize,
+    logView: TerminalLogView,
     networkSession: NetworkSession,
     maintenanceStatus: String,
     maintenanceAuthorised: Boolean,
@@ -3122,7 +3156,7 @@ private fun PlcBleTesterLandscape(
                                         ) {
                                             Text(
                                                 text = "Status: $statusLine",
-                                                fontSize = 12.sp,
+                                                fontSize = terminalTextSize.fontSizeSp.sp,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                                 color = logColors.neutralText,
@@ -3169,7 +3203,7 @@ private fun PlcBleTesterLandscape(
                                                         text =
                                                             "$t  ${entry.lvl.name}  ${entry.msg}",
                                                         fontFamily = FontFamily.Monospace,
-                                                        fontSize = 12.sp,
+                                                        fontSize = terminalTextSize.fontSizeSp.sp,
                                                         color = color,
                                                     )
                                                 }
@@ -3202,7 +3236,7 @@ private fun PlcBleTesterLandscape(
                                                                 text =
                                                                     "$t  $arrow  (${entry.size}B)",
                                                                 fontFamily = FontFamily.Monospace,
-                                                                fontSize = 12.sp,
+                                                                fontSize = terminalTextSize.fontSizeSp.sp,
                                                                 color =
                                                                     if (isTx) logColors.txBlue
                                                                     else logColors.rxGreen,
@@ -3210,59 +3244,14 @@ private fun PlcBleTesterLandscape(
 
                                                             Spacer(Modifier.height(1.dp))
 
-                                                            // ASCII
-                                                            Text(
-                                                                text =
-                                                                    buildAnnotatedString {
-                                                                        withStyle(
-                                                                            SpanStyle(
-                                                                                color =
-                                                                                    logColors
-                                                                                        .rxLabelRed
-                                                                            )
-                                                                        ) {
-                                                                            append("ASCII: ")
-                                                                        }
-                                                                        withStyle(
-                                                                            SpanStyle(
-                                                                                color =
-                                                                                    logColors
-                                                                                        .asciiPurple
-                                                                            )
-                                                                        ) {
-                                                                            append(entry.ascii)
-                                                                        }
-                                                                    },
-                                                                fontFamily = FontFamily.Monospace,
-                                                                fontSize = 12.sp,
-                                                            )
-
-                                                            // HEX
-                                                            Text(
-                                                                text =
-                                                                    buildAnnotatedString {
-                                                                        withStyle(
-                                                                            SpanStyle(
-                                                                                color =
-                                                                                    logColors
-                                                                                        .rxLabelRed
-                                                                            )
-                                                                        ) {
-                                                                            append("HEX:   ")
-                                                                        }
-                                                                        withStyle(
-                                                                            SpanStyle(
-                                                                                color =
-                                                                                    logColors
-                                                                                        .rxHexOrange
-                                                                            )
-                                                                        ) {
-                                                                            append(entry.hex)
-                                                                        }
-                                                                    },
-                                                                fontFamily = FontFamily.Monospace,
-                                                                fontSize = 12.sp,
-                                                            )
+                                                            if (logView.showAscii) {
+                                                                TerminalLogPayload("ASCII: ", entry.ascii, logColors.rxLabelRed,
+                                                                    logColors.asciiPurple, terminalTextSize)
+                                                            }
+                                                            if (logView.showHex) {
+                                                                TerminalLogPayload("HEX:   ", entry.hex, logColors.rxLabelRed,
+                                                                    logColors.rxHexOrange, terminalTextSize)
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -3304,6 +3293,24 @@ private fun PlcBleTesterLandscape(
             }
         }
     }
+}
+
+@Composable
+private fun TerminalLogPayload(
+    label: String,
+    value: String,
+    labelColor: Color,
+    valueColor: Color,
+    textSize: TerminalTextSize,
+) {
+    Text(
+        text = buildAnnotatedString {
+            withStyle(SpanStyle(color = labelColor)) { append(label) }
+            withStyle(SpanStyle(color = valueColor)) { append(value) }
+        },
+        fontFamily = FontFamily.Monospace,
+        fontSize = textSize.fontSizeSp.sp,
+    )
 }
 
 @Composable

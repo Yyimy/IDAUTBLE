@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -19,6 +20,7 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -30,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 internal enum class AppBackground(val label: String, val color: Color?) {
     DEFAULT("Default", null),
@@ -41,16 +44,36 @@ internal enum class AppBackground(val label: String, val color: Color?) {
     GRAPHITE("Graphite", Color(0xFF4C535D)),
 }
 
+internal enum class TerminalTextSize(val label: String, val fontSizeSp: Int) {
+    NORMAL("Normal", 12),
+    LARGE("Large", 15),
+    EXTRA_LARGE("Extra large", 18),
+}
+
+internal enum class TerminalLogView(val label: String, val showAscii: Boolean, val showHex: Boolean) {
+    ASCII("ASCII", true, false),
+    HEX("HEX", false, true),
+    BOTH("ASCII + HEX", true, true),
+}
+
 private enum class SettingsPage(val title: String) {
     MAIN("App settings"),
     BACKGROUND("Background"),
     THEME("Theme"),
+    TERMINAL_TEXT_SIZE("Terminal text size"),
+    LOG_VIEW("Log view"),
 }
 
 @Composable
 internal fun AppSettingsDialog(
     darkMode: Boolean,
     background: AppBackground,
+    terminalTextSize: TerminalTextSize,
+    logView: TerminalLogView,
+    keepScreenOn: Boolean,
+    onTerminalTextSizeChange: (TerminalTextSize) -> Unit,
+    onLogViewChange: (TerminalLogView) -> Unit,
+    onKeepScreenOnChange: (Boolean) -> Unit,
     onDarkModeChange: (Boolean) -> Unit,
     onBackgroundChange: (AppBackground) -> Unit,
     onDismiss: () -> Unit,
@@ -66,7 +89,7 @@ internal fun AppSettingsDialog(
         title = { Text(page.title) },
         text = {
             when (page) {
-                SettingsPage.MAIN -> Column {
+                SettingsPage.MAIN -> Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
                     ListItem(
                         modifier = Modifier.clickable { page = SettingsPage.BACKGROUND },
                         headlineContent = { Text("Background") },
@@ -82,6 +105,27 @@ internal fun AppSettingsDialog(
                         trailingContent = { SettingsChevron() },
                         colors = colors,
                     )
+                    ListItem(
+                        modifier = Modifier.clickable { page = SettingsPage.TERMINAL_TEXT_SIZE },
+                        headlineContent = { Text("Terminal text size") },
+                        supportingContent = { Text(terminalTextSize.label) },
+                        trailingContent = { SettingsChevron() },
+                        colors = colors,
+                    )
+                    ListItem(
+                        modifier = Modifier.clickable { page = SettingsPage.LOG_VIEW },
+                        headlineContent = { Text("Log view") },
+                        supportingContent = { Text(logView.label) },
+                        trailingContent = { SettingsChevron() },
+                        colors = colors,
+                    )
+                    ListItem(
+                        modifier = Modifier.toggleable(keepScreenOn, role = Role.Switch, onValueChange = onKeepScreenOnChange),
+                        headlineContent = { Text("Keep screen on") },
+                        supportingContent = { Text("While this app is on screen") },
+                        trailingContent = { Switch(checked = keepScreenOn, onCheckedChange = null) },
+                        colors = colors,
+                    )
                 }
                 SettingsPage.BACKGROUND -> Column(
                     Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()).selectableGroup()
@@ -93,6 +137,30 @@ internal fun AppSettingsDialog(
                                 onClick = { onBackgroundChange(option) }),
                             headlineContent = { Text(option.label) },
                             leadingContent = { BackgroundSwatch(option) },
+                            trailingContent = { RadioButton(selected, onClick = null) },
+                            colors = colors,
+                        )
+                    }
+                }
+                SettingsPage.TERMINAL_TEXT_SIZE -> Column(Modifier.selectableGroup()) {
+                    TerminalTextSize.entries.forEach { option ->
+                        val selected = terminalTextSize == option
+                        ListItem(
+                            modifier = Modifier.selectable(selected, role = Role.RadioButton,
+                                onClick = { onTerminalTextSizeChange(option) }),
+                            headlineContent = { Text(option.label, fontSize = option.fontSizeSp.sp) },
+                            trailingContent = { RadioButton(selected, onClick = null) },
+                            colors = colors,
+                        )
+                    }
+                }
+                SettingsPage.LOG_VIEW -> Column(Modifier.selectableGroup()) {
+                    TerminalLogView.entries.forEach { option ->
+                        val selected = logView == option
+                        ListItem(
+                            modifier = Modifier.selectable(selected, role = Role.RadioButton,
+                                onClick = { onLogViewChange(option) }),
+                            headlineContent = { Text(option.label) },
                             trailingContent = { RadioButton(selected, onClick = null) },
                             colors = colors,
                         )
