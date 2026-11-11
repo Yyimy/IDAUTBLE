@@ -123,6 +123,7 @@ class Connection:
             if self.client is not client:
                 raise RuntimeError("se perdió el enlace Bluetooth")
             self.sync = asyncio.create_task(self.keep_in_sync(client))
+            self.emit("device", name)
             self.emit("link", "connected")
             try:
                 self.last_device.parent.mkdir(parents=True, exist_ok=True)
@@ -249,7 +250,7 @@ def main():
     import tkinter as tk
     from tkinter import ttk
     import pystray
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageTk
 
     events = queue.SimpleQueue()
     emit = lambda kind, value=None: events.put((kind, value))
@@ -269,15 +270,92 @@ def main():
 
     root = tk.Tk()
     root.title("IDAUT Lectura")
-    frame = ttk.Frame(root, padding=12)
+    root.minsize(460, 400)
+    root.configure(bg="#12181d")
+    root.columnconfigure(0, weight=1)
+
+    panel = "#1d272e"
+    border = "#34444e"
+    ink = "#eef3f5"
+    muted = "#aabac4"
+    amber = "#ffc166"
+    green = "#87dda9"
+    style = ttk.Style(root)
+    style.theme_use("clam")
+    style.configure("Control.TButton", background=panel, foreground=ink, bordercolor=border,
+                    padding=(14, 8), font=("Segoe UI", 10))
+    style.map("Control.TButton", background=[("active", "#30424e")],
+              foreground=[("disabled", "#778994")], bordercolor=[("focus", amber)])
+    style.configure("Connect.TButton", background=amber, foreground="#171b1e", bordercolor=amber,
+                    padding=(14, 8), font=("Segoe UI", 10, "bold"))
+    style.map("Connect.TButton", background=[("disabled", "#394852"), ("active", "#ffdb9c")],
+              foreground=[("disabled", "#b5c2c9")], bordercolor=[("focus", ink)])
+    style.configure("Device.TCombobox", fieldbackground=panel, background=panel, foreground=ink,
+                    arrowcolor=ink, bordercolor=border, padding=7, font=("Segoe UI", 10))
+    style.map("Device.TCombobox", fieldbackground=[("readonly", panel), ("disabled", panel)],
+              foreground=[("readonly", ink), ("disabled", muted)],
+              bordercolor=[("focus", amber)])
+    root.option_add("*TCombobox*Listbox.background", panel)
+    root.option_add("*TCombobox*Listbox.foreground", ink)
+    root.option_add("*TCombobox*Listbox.selectBackground", "#435763")
+    root.option_add("*TCombobox*Listbox.selectForeground", ink)
+
+    image = Image.new("RGBA", (64, 64))
+    mark = ImageDraw.Draw(image)
+    mark.rounded_rectangle((1, 1, 62, 62), radius=12, fill="#27343e")
+    for x, top in ((15, 30), (27, 23), (39, 16)):
+        mark.rounded_rectangle((x, top, x + 8, 47), radius=2, fill=amber)
+    icon = ImageTk.PhotoImage(image)
+    root.iconphoto(True, icon)
+    small_icon = ImageTk.PhotoImage(image.resize((42, 42), Image.Resampling.LANCZOS))
+
+    frame = tk.Frame(root, bg="#12181d", padx=22, pady=18)
     frame.grid(sticky="nsew")
+    frame.columnconfigure(0, weight=1)
+    header = tk.Frame(frame, bg=frame["bg"])
+    header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+    tk.Label(header, image=small_icon, bg=header["bg"]).pack(side="left", padx=(0, 10))
+    tk.Label(header, text="IDAUT Lectura", bg=header["bg"], fg=ink,
+             font=("Segoe UI", 18, "bold")).pack(side="left")
+
+    def card(row, title):
+        body = tk.Frame(frame, bg=panel, padx=15, pady=10, highlightthickness=1, highlightbackground=border)
+        body.grid(row=row, column=0, sticky="ew", pady=(0, 8))
+        tk.Label(body, text=title, bg=panel, fg=muted, font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        return body
+
+    equipment = card(1, "Equipo conectado")
+    device_name = tk.StringVar(value="—")
+    tk.Label(equipment, textvariable=device_name, bg=panel, fg=ink, wraplength=390, justify="left",
+             font=("Segoe UI", 20, "bold")).pack(anchor="w")
+    indicator = tk.Label(equipment, text="Desconectado", bg=panel, fg=muted, font=("Segoe UI", 10, "bold"))
+    indicator.pack(anchor="w")
+
+    shortcut = card(2, "Atajo activo")
+    keys = tk.Frame(shortcut, bg=panel)
+    keys.pack(anchor="w", pady=(6, 1))
+
+    def show_hotkey(value):
+        for child in keys.winfo_children():
+            child.destroy()
+        if value in ("—", "Desactivado"):
+            tk.Label(keys, text=value, bg=panel, fg=muted, font=("Segoe UI", 11)).pack(side="left")
+            return
+        for index, key in enumerate(value.split("+")):
+            if index:
+                tk.Label(keys, text="+", bg=panel, fg=muted).pack(side="left", padx=5)
+            tk.Label(keys, text=key.title() if len(key) > 1 else key, padx=10, pady=4, bg="#30424e",
+                     fg=amber, font=("Consolas", 12, "bold")).pack(side="left")
+
+    show_hotkey("—")
     devices = []
-    picker = ttk.Combobox(frame, state="readonly", width=35)
-    picker.grid(row=0, column=0, columnspan=2, sticky="ew")
-    status = tk.StringVar(value="Buscando dispositivos emparejados…")
-    hotkey = tk.StringVar(value="—")
-    reload_button = ttk.Button(frame, text="Emparejados", command=lambda: run(connection.paired()))
-    reload_button.grid(row=1, column=0, sticky="ew", pady=6)
+    picker = ttk.Combobox(frame, state="readonly", style="Device.TCombobox", font=("Segoe UI", 10))
+    picker.grid(row=3, column=0, sticky="ew", pady=(4, 7))
+    actions = tk.Frame(frame, bg=frame["bg"])
+    actions.grid(row=4, column=0, sticky="ew")
+    reload_button = ttk.Button(actions, text="Emparejados", style="Control.TButton",
+                               command=lambda: run(connection.paired()))
+    reload_button.pack(side="left")
     link = "idle"
     pending_connection = None
 
@@ -290,15 +368,14 @@ def main():
             button.configure(state="disabled")
             pending_connection = run(connection.connect(*devices[picker.current()]))
 
-    button = ttk.Button(frame, text="Conectar", command=toggle, state="disabled")
-    button.grid(row=1, column=1, sticky="ew", pady=6)
-    ttk.Label(frame, text="Atajo activo").grid(row=2, column=0, sticky="w")
-    ttk.Label(frame, textvariable=hotkey).grid(row=2, column=1, sticky="w")
-    ttk.Label(frame, textvariable=status, wraplength=320).grid(row=3, column=0, columnspan=2, sticky="w", pady=6)
-    ttk.Button(frame, text="Ocultar en la bandeja", command=root.withdraw).grid(row=4, column=0, columnspan=2)
+    button = ttk.Button(actions, text="Conectar", command=toggle, state="disabled", style="Connect.TButton")
+    button.pack(side="right")
+    status = tk.StringVar(value="Buscando dispositivos emparejados…")
+    tk.Label(frame, textvariable=status, bg=frame["bg"], fg=muted, wraplength=400, justify="left",
+             font=("Segoe UI", 10)).grid(row=5, column=0, sticky="w", pady=8)
+    ttk.Button(frame, text="Ocultar en la bandeja", command=root.withdraw,
+               style="Control.TButton").grid(row=6, column=0, sticky="w")
 
-    image = Image.new("RGB", (64, 64), "#164465")
-    ImageDraw.Draw(image).text((24, 24), "L", fill="white")
     tray = pystray.Icon("idaut-lectura", image, "IDAUT Lectura", pystray.Menu(
         pystray.MenuItem("Abrir", lambda: emit("show"), default=True),
         pystray.MenuItem("Salir", lambda: emit("quit")),
@@ -327,9 +404,17 @@ def main():
             elif kind == "status":
                 status.set(value)
             elif kind == "hotkey":
-                hotkey.set(value)
+                show_hotkey(value)
+            elif kind == "device":
+                device_name.set(value)
             elif kind == "link":
                 link = value
+                if link == "idle":
+                    device_name.set("—")
+                indicator.configure(
+                    text={"connected": "Conectado", "busy": "Bluetooth en curso…", "idle": "Desconectado"}[link],
+                    fg={"connected": green, "busy": amber, "idle": muted}[link],
+                )
                 button.configure(text="Desconectar" if link == "connected" else "Conectar",
                                  state="disabled" if link == "busy" else "normal")
                 reload_button.configure(state="normal" if link == "idle" else "disabled")
