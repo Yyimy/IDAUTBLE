@@ -43,7 +43,7 @@ class HidOutputConfigTest {
         assertNull(decodeHidSeparator(pattern, extended = false))
         assertEquals(32, decodeHidSeparator("{BACKSPACE}".repeat(32))?.length)
         assertNull(decodeHidSeparator("{BACKSPACE}".repeat(33)))
-        assertFalse("PAGEDOWN" in hidEndingOptions(extended = false))
+        assertNull(legacyHidEnding(config.ending, extended = false))
     }
 
     @Test fun arrowsRoundTripAndRequireFirmwareSupport() {
