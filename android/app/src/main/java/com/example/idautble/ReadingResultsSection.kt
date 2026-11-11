@@ -8,7 +8,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -21,8 +20,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 @Composable
-fun ReadingResultsSection(state: PlcReadingsState) {
-    var expanded by rememberSaveable { mutableStateOf(true) }
+fun ReadingResultsSection(state: PlcReadingsState, expanded: Boolean, onToggle: () -> Unit) {
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     LaunchedEffect(state.receivedMs) {
         if (state.receivedMs == null) return@LaunchedEffect
@@ -37,7 +35,7 @@ fun ReadingResultsSection(state: PlcReadingsState) {
         title = "READINGS",
         summary = if (reading == null) "No reading received" else "Latest frame • ${age ?: 0}s ago",
         expanded = expanded,
-        onToggle = { expanded = !expanded },
+        onToggle = onToggle,
     ) {
         ProvideTextStyle(
             MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 13.sp)

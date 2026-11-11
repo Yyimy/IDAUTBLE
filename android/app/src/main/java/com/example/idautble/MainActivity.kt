@@ -2212,6 +2212,13 @@ class MainActivity : ComponentActivity() {
             var terminalOrder by remember {
                 mutableStateOf(TerminalSection.readOrder(appSettings.getString("terminal_section_order", null)))
             }
+            var defaultExpanded by remember {
+                mutableStateOf(TerminalSection.readExpanded(appSettings.getString("terminal_expanded_sections", null)))
+            }
+            var expandedSectionIds by rememberSaveable {
+                mutableStateOf(defaultExpanded.joinToString(",") { it.name })
+            }
+            val expandedSections = remember(expandedSectionIds) { TerminalSection.readExpanded(expandedSectionIds) }
             var keepScreenOn by remember { mutableStateOf(appSettings.getBoolean("keep_screen_on", false)) }
             var showAppSettings by rememberSaveable { mutableStateOf(false) }
             val lightSystemBars = background.color?.let { it.luminance() > 0.179f } ?: !darkMode
@@ -2234,6 +2241,12 @@ class MainActivity : ComponentActivity() {
                         logView = logView,
                         keepScreenOn = keepScreenOn,
                         terminalOrder = terminalOrder,
+                        defaultExpanded = defaultExpanded,
+                        onDefaultExpandedChange = { sections ->
+                            defaultExpanded = sections
+                            expandedSectionIds = sections.joinToString(",") { it.name }
+                            appSettings.edit { putString("terminal_expanded_sections", expandedSectionIds) }
+                        },
                         onTerminalOrderChange = { order ->
                             terminalOrder = order
                             appSettings.edit { putString("terminal_section_order", order.joinToString(",") { it.name }) }
@@ -2267,6 +2280,11 @@ class MainActivity : ComponentActivity() {
                     terminalTextSize = terminalTextSize,
                     logView = logView,
                     terminalOrder = terminalOrder,
+                    expandedSections = expandedSections,
+                    onToggleSection = { section ->
+                        val updated = if (section in expandedSections) expandedSections - section else expandedSections + section
+                        expandedSectionIds = updated.joinToString(",") { it.name }
+                    },
                     networkSession = networkSession,
                     maintenanceStatus = uiMaintenanceStatus.value,
                     maintenanceAuthorised = maintenanceSession.isAuthorized(),
@@ -2437,6 +2455,8 @@ private fun PlcBleTesterLandscape(
     terminalTextSize: TerminalTextSize,
     logView: TerminalLogView,
     terminalOrder: List<TerminalSection>,
+    expandedSections: Set<TerminalSection>,
+    onToggleSection: (TerminalSection) -> Unit,
     networkSession: NetworkSession,
     maintenanceStatus: String,
     maintenanceAuthorised: Boolean,
@@ -2512,13 +2532,6 @@ private fun PlcBleTesterLandscape(
     onAbortOta: () -> Unit,
 ) {
     var showDevices by remember { mutableStateOf(false) } // oculto por defecto
-    var binarySectionExpanded by rememberSaveable { mutableStateOf(true) }
-    var equipmentSectionExpanded by rememberSaveable { mutableStateOf(false) }
-    var pinSectionExpanded by rememberSaveable { mutableStateOf(false) }
-    var connectionSectionExpanded by rememberSaveable { mutableStateOf(true) }
-    var heightSectionExpanded by rememberSaveable { mutableStateOf(false) }
-    var barcodeSectionExpanded by rememberSaveable { mutableStateOf(false) }
-    var rtcSectionExpanded by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(connected) {
         if (connected) {
@@ -2602,6 +2615,8 @@ private fun PlcBleTesterLandscape(
                             ) {
                                 terminalOrder.forEach { section ->
                                     key(section) {
+                                        val expanded = section in expandedSections
+                                        val onToggle = { onToggleSection(section) }
                                         when (section) {
                                             TerminalSection.BLUETOOTH -> {
                                                 CollapsibleSettingsSection(
@@ -2610,10 +2625,8 @@ private fun PlcBleTesterLandscape(
                                                         if (scanning) "Scanning... ${scanRemainSec}s"
                                                         else if (connected) "Connected: ${selected?.name ?: "PLC"}"
                                                         else "Disconnected",
-                                                    expanded = connectionSectionExpanded,
-                                                    onToggle = {
-                                                        connectionSectionExpanded = !connectionSectionExpanded
-                                                    },
+                                                    expanded = expanded,
+                                                    onToggle = onToggle,
                                                 ) {
                                                     Row(
                                                         Modifier.fillMaxWidth(),
@@ -2789,8 +2802,8 @@ private fun PlcBleTesterLandscape(
                                                 CollapsibleSettingsSection(
                                                     title = "BINARY COMMANDS",
                                                     summary = "Commands sent to the PLC",
-                                                    expanded = binarySectionExpanded,
-                                                    onToggle = { binarySectionExpanded = !binarySectionExpanded },
+                                                    expanded = expanded,
+                                                    onToggle = onToggle,
                                                 ) {
                                                     Row(
                                                         modifier = Modifier.fillMaxWidth(),
@@ -2815,10 +2828,12 @@ private fun PlcBleTesterLandscape(
                                                 }
                                             }
                                             TerminalSection.READINGS -> {
-                                                ReadingResultsSection(readings)
+                                                ReadingResultsSection(readings, expanded, onToggle)
                                             }
                                             TerminalSection.DEVICE_STATUS -> {
                                                 DeviceStatusSection(
+                                                    expanded = expanded,
+                                                    onToggle = onToggle,
                                                     status = deviceStatus,
                                                     counters = deviceCounters,
                                                     receivedMs = deviceStatusReceived,
@@ -2842,8 +2857,8 @@ private fun PlcBleTesterLandscape(
                                                             label = maintenanceStatus,
                                                         )
                                                     },
-                                                    expanded = pinSectionExpanded,
-                                                    onToggle = { pinSectionExpanded = !pinSectionExpanded },
+                                                    expanded = expanded,
+                                                    onToggle = onToggle,
                                                 ) {
                                                     MaintenanceActionButton(
                                                         text = "Enter PIN / Authorise",
@@ -2869,19 +2884,17 @@ private fun PlcBleTesterLandscape(
                                                 }
                                             }
                                             TerminalSection.HID_RECEIVER -> {
-                                                HidReceiverSection(hidReceiver, connected, maintenanceAuthorised, onHidReceiverAction, hidOutput.supported)
+                                                HidReceiverSection(hidReceiver, connected, maintenanceAuthorised, onHidReceiverAction, hidOutput.supported, expanded, onToggle)
                                             }
                                             TerminalSection.HID_OUTPUT -> {
-                                                HidOutputSection(hidOutput, connected, hidReceiver.production, onHidOutputAction)
+                                                HidOutputSection(hidOutput, connected, hidReceiver.production, onHidOutputAction, expanded, onToggle)
                                             }
                                             TerminalSection.DEVICE_ID -> {
                                                 CollapsibleSettingsSection(
                                                     title = "DEVICE ID",
                                                     summary = equipmentId ?: "ID not queried",
-                                                    expanded = equipmentSectionExpanded,
-                                                    onToggle = {
-                                                        equipmentSectionExpanded = !equipmentSectionExpanded
-                                                    },
+                                                    expanded = expanded,
+                                                    onToggle = onToggle,
                                                 ) {
                                                     Text(
                                                         "ID used for the Bluetooth name and PLC data frames.",
@@ -2902,8 +2915,8 @@ private fun PlcBleTesterLandscape(
                                                     summary =
                                                         if (!altKnown) "Status not queried"
                                                         else if (altState == true) "Enabled" else "Disabled",
-                                                    expanded = heightSectionExpanded,
-                                                    onToggle = { heightSectionExpanded = !heightSectionExpanded },
+                                                    expanded = expanded,
+                                                    onToggle = onToggle,
                                                 ) {
                                                     Row(
                                                         modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
@@ -2933,8 +2946,8 @@ private fun PlcBleTesterLandscape(
                                                 CollapsibleSettingsSection(
                                                     title = "BARCODE ID",
                                                     summary = "Barcode prefixes",
-                                                    expanded = barcodeSectionExpanded,
-                                                    onToggle = { barcodeSectionExpanded = !barcodeSectionExpanded },
+                                                    expanded = expanded,
+                                                    onToggle = onToggle,
                                                 ) {
                                                     BarcodePrefixField("Pallet", pfxP, onPfxPChanged) {
                                                         showPrefixDialogFor = "PFXP"
@@ -2959,8 +2972,8 @@ private fun PlcBleTesterLandscape(
                                                 CollapsibleSettingsSection(
                                                     title = "RTC",
                                                     summary = "Date and time",
-                                                    expanded = rtcSectionExpanded,
-                                                    onToggle = { rtcSectionExpanded = !rtcSectionExpanded },
+                                                    expanded = expanded,
+                                                    onToggle = onToggle,
                                                 ) {
                                                     CompactOutlinedField(rtcIso, onRtcIsoChanged, Modifier.fillMaxWidth())
                                                     Row(
@@ -2978,6 +2991,8 @@ private fun PlcBleTesterLandscape(
                                             }
                                             TerminalSection.MANUAL_TERMINAL -> {
                                                 ManualTerminalSection(
+                                                    expanded = expanded,
+                                                    onToggle = onToggle,
                                                     lines = manualLines,
                                                     onEdit = onManualEdit,
                                                     onAdd = onManualAdd,

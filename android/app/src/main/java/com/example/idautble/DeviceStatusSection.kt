@@ -49,8 +49,9 @@ fun DeviceStatusSection(
     onRefreshAfterReadsChange: (Boolean) -> Unit,
     autoRefreshEnabled: Boolean,
     onAutoRefreshChange: (Boolean) -> Unit,
+    expanded: Boolean,
+    onToggle: () -> Unit,
 ) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     LaunchedEffect(receivedMs) {
@@ -72,7 +73,7 @@ fun DeviceStatusSection(
         title = "DEVICE STATUS",
         summary = summary,
         expanded = expanded,
-        onToggle = { expanded = !expanded },
+        onToggle = onToggle,
     ) {
         ProvideTextStyle(
             MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 13.sp)

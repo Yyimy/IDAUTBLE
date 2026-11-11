@@ -25,4 +25,21 @@ class TerminalSectionOrderTest {
         assertEquals(order, restored.take(order.size))
         assertEquals(TerminalSection.entries.toSet(), restored.toSet())
     }
+
+    @Test
+    fun firstLaunchAndExplicitCollapseAllAreDifferent() {
+        assertEquals(
+            setOf(TerminalSection.BLUETOOTH, TerminalSection.BINARY_COMMANDS, TerminalSection.READINGS),
+            TerminalSection.readExpanded(null),
+        )
+        assertEquals(emptySet<TerminalSection>(), TerminalSection.readExpanded(""))
+    }
+
+    @Test
+    fun savedExpansionUsesKnownSectionsOnly() {
+        assertEquals(
+            setOf(TerminalSection.RTC, TerminalSection.HID_OUTPUT),
+            TerminalSection.readExpanded("RTC,HID_OUTPUT,RTC,UNKNOWN"),
+        )
+    }
 }

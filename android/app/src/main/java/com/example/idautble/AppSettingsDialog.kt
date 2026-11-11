@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -81,6 +82,14 @@ internal enum class TerminalSection(val label: String) {
     MANUAL_TERMINAL("Manual terminal");
 
     companion object {
+        val defaultExpanded = setOf(BLUETOOTH, BINARY_COMMANDS, READINGS)
+
+        fun readExpanded(saved: String?): Set<TerminalSection> {
+            if (saved == null) return defaultExpanded
+            val ids = saved.split(',').toSet()
+            return entries.filter { it.name in ids }.toSet()
+        }
+
         fun readOrder(saved: String?): List<TerminalSection> {
             val savedIds = saved.orEmpty().split(',')
             val savedSections = savedIds.flatMap { id ->
@@ -99,6 +108,7 @@ private enum class SettingsPage(val title: String) {
     TERMINAL_TEXT_SIZE("Terminal text size"),
     LOG_VIEW("Log view"),
     TERMINAL_ORDER("Terminal section order"),
+    EXPANDED_SECTIONS("Expanded sections"),
 }
 
 @Composable
@@ -109,6 +119,8 @@ internal fun AppSettingsDialog(
     logView: TerminalLogView,
     keepScreenOn: Boolean,
     terminalOrder: List<TerminalSection>,
+    defaultExpanded: Set<TerminalSection>,
+    onDefaultExpandedChange: (Set<TerminalSection>) -> Unit,
     onTerminalOrderChange: (List<TerminalSection>) -> Unit,
     onTerminalTextSizeChange: (TerminalTextSize) -> Unit,
     onLogViewChange: (TerminalLogView) -> Unit,
@@ -150,6 +162,10 @@ internal fun AppSettingsDialog(
                     }
                     HorizontalDivider()
                     SettingsRow("Terminal section order", modifier = Modifier.clickable { page = SettingsPage.TERMINAL_ORDER }) {
+                        SettingsChevron()
+                    }
+                    HorizontalDivider()
+                    SettingsRow("Expanded sections", modifier = Modifier.clickable { page = SettingsPage.EXPANDED_SECTIONS }) {
                         SettingsChevron()
                     }
                     HorizontalDivider()
@@ -211,6 +227,33 @@ internal fun AppSettingsDialog(
                             IconButton(onClick = { moveTo(index + 1) }, enabled = index < terminalOrder.lastIndex) {
                                 Icon(Icons.Outlined.KeyboardArrowDown, "Move ${section.label} down")
                             }
+                        }
+                        if (index < terminalOrder.lastIndex) HorizontalDivider()
+                    }
+                }
+                SettingsPage.EXPANDED_SECTIONS -> Column(
+                    Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())
+                ) {
+                    val allExpanded = defaultExpanded.size == TerminalSection.entries.size
+                    SettingsRow(
+                        if (allExpanded) "Collapse all" else "Expand all",
+                        modifier = Modifier.clickable {
+                            onDefaultExpandedChange(if (allExpanded) emptySet() else TerminalSection.entries.toSet())
+                        },
+                        labelStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.primary),
+                    ) {}
+                    HorizontalDivider()
+                    terminalOrder.forEachIndexed { index, section ->
+                        val selected = section in defaultExpanded
+                        SettingsRow(
+                            label = section.label,
+                            modifier = Modifier.toggleable(selected, role = Role.Checkbox, onValueChange = { expand ->
+                                onDefaultExpandedChange(
+                                    if (expand) defaultExpanded + section else defaultExpanded - section
+                                )
+                            }),
+                        ) {
+                            Checkbox(checked = selected, onCheckedChange = null)
                         }
                         if (index < terminalOrder.lastIndex) HorizontalDivider()
                     }
