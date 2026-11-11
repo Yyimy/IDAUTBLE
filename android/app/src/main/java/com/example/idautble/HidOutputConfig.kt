@@ -2,7 +2,7 @@ package com.example.idautble
 
 internal const val HID_SEPARATOR_LIMIT = 32
 
-/** Key tokens are encoded as individual bytes in SEPHEX and PREHEX. */
+/** Key tokens are encoded as individual bytes in SEPHEX, PREHEX and ENDHEX. */
 internal val hidArrowTokens = mapOf(
     "{RIGHT}" to '\u0080',
     "{LEFT}" to '\u0081',
@@ -34,38 +34,12 @@ private val hidExtendedTokens = mapOf(
 private val hidBaseTokens = mapOf("{TAB}" to '\t', "{ENTER}" to '\n', "{SPACE}" to ' ')
 private val hidSeparatorTokens = hidBaseTokens + hidArrowTokens + hidExtendedTokens
 private val hidTokensByByte = hidSeparatorTokens.entries.associate { (token, byte) -> byte to token }
-private val hidEndingLabels = mapOf(
-    "ENTER" to "Enter",
-    "TAB" to "Tab",
-    "NONE" to "None",
-    "SPACE" to "Space",
-    "RIGHT" to "Right",
-    "LEFT" to "Left",
-    "DOWN" to "Down",
-    "UP" to "Up",
-    "ESC" to "Escape",
-    "BACKSPACE" to "Backspace",
-    "DELETE" to "Delete",
-    "INSERT" to "Insert",
-    "HOME" to "Home",
-    "END" to "End",
-    "PAGEUP" to "Page up",
-    "PAGEDOWN" to "Page down",
-    "F1" to "F1",
-    "F2" to "F2",
-    "F3" to "F3",
-    "F4" to "F4",
-    "F5" to "F5",
-    "F6" to "F6",
-    "F7" to "F7",
-    "F8" to "F8",
-    "F9" to "F9",
-    "F10" to "F10",
-    "F11" to "F11",
-    "F12" to "F12",
-)
-internal fun hidEndingOptions(extended: Boolean) =
-    if (extended) hidEndingLabels else hidEndingLabels.filterKeys { it in setOf("ENTER", "TAB", "NONE") }
+internal fun legacyHidEnding(bytes: String, extended: Boolean = true): String? {
+    if (bytes.isEmpty()) return "NONE"
+    val key = bytes.singleOrNull() ?: return null
+    if (!extended && key != '\n' && key != '\t') return null
+    return hidTokensByByte[key]?.removeSurrounding("{", "}")
+}
 
 internal fun hidSeparatorOptions(allowArrows: Boolean, extended: Boolean) =
     hidBaseTokens.keys + (if (allowArrows || extended) hidArrowTokens.keys else emptySet()) +
@@ -74,14 +48,20 @@ internal fun hidSeparatorOptions(allowArrows: Boolean, extended: Boolean) =
 data class HidOutputConfig(
     val fields: String = "PU",
     val separator: String = "\t",
-    val ending: String = "ENTER",
+    val ending: String = "\n",
     val layout: String = "US",
     val prefix: String = "",
     val hotkey: String = "NONE",
 ) {
-    fun wire(includePrefix: Boolean = prefix.isNotEmpty(), includeHotkey: Boolean = hotkey != "NONE"): String {
-        require(fields in setOf("P", "U", "PU") && ending in hidEndingLabels && layout in setOf("US", "ES"))
-        val base = "HIDCFG=1;FIELDS=$fields;SEPHEX=${encodeHidSequence(separator)};END=$ending;LAYOUT=$layout"
+    fun wire(
+        includePrefix: Boolean = prefix.isNotEmpty(),
+        includeHotkey: Boolean = hotkey != "NONE",
+        includeEndingSequence: Boolean = legacyHidEnding(ending) == null,
+    ): String {
+        require(fields in setOf("P", "U", "PU") && layout in setOf("US", "ES"))
+        val end = if (includeEndingSequence) "ENDHEX=${encodeHidSequence(ending)}"
+            else "END=${requireNotNull(legacyHidEnding(ending))}"
+        val base = "HIDCFG=1;FIELDS=$fields;SEPHEX=${encodeHidSequence(separator)};$end;LAYOUT=$layout"
         return buildString {
             append(base)
             if (includePrefix) append(";PREHEX=${encodeHidSequence(prefix)}")
@@ -96,7 +76,7 @@ data class HidOutputConfig(
         if (fields != "U") append("PALLET123")
         if (fields == "PU") append(separator)
         if (fields != "P") append("LOC01")
-        hidSeparatorTokens["{$ending}"]?.let { append(it) }
+        append(ending)
     }.let(::hidSeparatorPattern)
 }
 
@@ -110,6 +90,7 @@ data class HidOutputState(
     val extendedKeys: Boolean = false,
     val prefixKeys: Boolean = false,
     val readHotkey: Boolean = false,
+    val endingSequence: Boolean = false,
 )
 
 private val hidHotkeyPattern = Regex("(?:CTRL\\+(?:ALT\\+)?|ALT\\+)(?:SHIFT\\+)?(?:[A-Z0-9]|F(?:[1-9]|1[0-2]))")
@@ -160,16 +141,23 @@ fun decodeHidSeparator(pattern: String, allowArrows: Boolean = true, extended: B
 }
 
 fun parseHidOutputConfig(text: String): HidOutputConfig? {
-    if (text.length > 224 || !text.startsWith("HIDCFG=1;")) return null
+    if (text.length > 288 || !text.startsWith("HIDCFG=1;")) return null
     val values = linkedMapOf<String, String>()
     for (part in text.substring(9).split(';')) {
         val pair = part.split('=', limit = 2)
         if (pair.size != 2 || values.put(pair[0], pair[1]) != null) return null
     }
-    if (values.keys - setOf("PREHEX", "HOTKEY") != setOf("FIELDS", "SEPHEX", "END", "LAYOUT")) return null
+    val required = setOf("FIELDS", "SEPHEX", "LAYOUT")
+    val endingKeys = values.keys - required - setOf("PREHEX", "HOTKEY")
+    if (!values.keys.containsAll(required) || endingKeys != setOf("END") && endingKeys != setOf("ENDHEX")) return null
+    val ending = if ("ENDHEX" in values) decodeHidSequence(values.getValue("ENDHEX")) ?: return null
+        else when (val name = values.getValue("END")) {
+            "NONE" -> ""
+            else -> hidSeparatorTokens["{$name}"]?.toString() ?: return null
+        }
     val separator = decodeHidSequence(values.getValue("SEPHEX")) ?: return null
     val prefix = decodeHidSequence(values["PREHEX"] ?: "-") ?: return null
     val hotkey = values["HOTKEY"] ?: "NONE"
-    val result = HidOutputConfig(values.getValue("FIELDS"), separator, values.getValue("END"), values.getValue("LAYOUT"), prefix, hotkey)
+    val result = HidOutputConfig(values.getValue("FIELDS"), separator, ending, values.getValue("LAYOUT"), prefix, hotkey)
     return runCatching { result.wire(); result }.getOrNull()
 }

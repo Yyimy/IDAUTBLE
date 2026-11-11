@@ -17,7 +17,13 @@ int main(){
  CHECK(!formatReading(f,"PALLET123",nullptr,text));CHECK(text.empty());
  CHECK(!formatReading(f,"-","LOC01",text));CHECK(text.empty());
  f.fields=1;CHECK(formatReading(f,"ABC",nullptr,text));CHECK(text=="ABC\n");
- f.fields=2;f.ending=0;CHECK(formatReading(f,nullptr,"XYZ",text));CHECK(text=="XYZ");
+ f.fields=2;
+#ifdef PLC_PREFIX_KEYS
+ f.endingLength=0;
+#else
+ f.ending=0;
+#endif
+ CHECK(formatReading(f,nullptr,"XYZ",text));CHECK(text=="XYZ");
  const std::string cfg="HIDCFG=1;FIELDS=PU;SEPHEX=0A0A3B3D097C;END=TAB;LAYOUT=ES";
  CHECK(parseOutputFormat(cfg,f));CHECK(outputWire(f)==cfg);
  CHECK(formatReading(f,"A","B",text));CHECK(text=="A\n\n;=\t|B\t");
@@ -95,6 +101,33 @@ int main(){
  CHECK(parseOutputFormat(legacy,f,&prefixPresent,&hotkeyPresent)&&!hotkeyPresent&&f.hotkey=="NONE");
  for(const auto *key:{"L", "SHIFT+L", "CTRL+F13", "CTRL+CTRL+L", "ALT+", "ALT+CTRL+L"})
    CHECK(!parseOutputFormat(legacy+";HOTKEY="+key,f));
+ const std::string endingConfig="HIDCFG=1;FIELDS=PU;SEPHEX=09;ENDHEX=090A0A;LAYOUT=US";
+ bool endingSequencePresent=false;
+ CHECK(parseOutputFormat(endingConfig,f,nullptr,nullptr,&endingSequencePresent)&&endingSequencePresent);
+ CHECK(needsEndingSequence(f));CHECK(outputWire(f,false,false,true)==endingConfig);
+ CHECK(outputWire(f)=="HIDCFG=1;FIELDS=PU;SEPHEX=09;END=NONE;LAYOUT=US");
+ CHECK(formatReading(f,"A","B",text));CHECK(text=="A\tB\t\n\n");
+ f.fields=2;CHECK(formatReading(f,nullptr,"B",text));CHECK(text=="B\t\n\n");
+ CHECK(k.startText(hid,{},true,5000,s,text.c_str(),f.layout));
+ keys.clear();
+ for(unsigned now=5000;now<6000;now+=30)k.tick(now,s,[&](Token,const uint8_t(&r)[8]){
+   if(r[2])keys.push_back(r[2]);
+   return SendResult::Accepted;
+ });
+ CHECK(k.takeResult()==TypingResult::Done);CHECK(keys==std::vector<unsigned>({5,43,40,40}));
+ CHECK(!parseOutputFormat(endingConfig+";END=ENTER",f));
+ CHECK(!parseOutputFormat(legacy+";ENDHEX=-",f));
+ const std::string endBase="HIDCFG=1;FIELDS=PU;SEPHEX=-;LAYOUT=US;ENDHEX=";
+ for(const auto &hex:std::vector<std::string>{"", "00", "0D", "0a", "1", "98", maxSequence+"44"})
+   CHECK(!parseOutputFormat(endBase+hex,f));
+ CHECK(parseOutputFormat(endBase+"-",f)&&f.endingLength==0);
+ CHECK(formatReading(f,"A","B",text));CHECK(text=="AB");
+ const std::string allMax="HIDCFG=1;FIELDS=PU;SEPHEX="+maxSequence+";ENDHEX="+maxSequence+
+     ";LAYOUT=US;PREHEX="+maxSequence+";HOTKEY=CTRL+ALT+SHIFT+F12";
+ CHECK(parseOutputFormat(allMax,f));CHECK(outputWire(f,true,true,true)==allMax);
+ CHECK(parseOutputFormat(legacy,f,nullptr,nullptr,&endingSequencePresent)&&!endingSequencePresent);
+ CHECK(f.endingLength==1&&f.ending[0]=='\n');
+
 #endif
  printf("PASS: %u HID format/payload/report assertions\n",checks);
 }

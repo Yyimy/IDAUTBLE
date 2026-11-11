@@ -245,7 +245,8 @@ static void loadOutputFormat() {
   if (!probe::parseOutputFormat(stored.c_str(), outputFormat)) Serial.println("HID FORMAT invalid; defaults active");
 }
 static bool saveOutputFormat(const probe::OutputFormat &candidate) {
-  const std::string canonical = probe::outputWire(candidate, candidate.prefixLength != 0, candidate.hotkey != "NONE");
+  const std::string canonical = probe::outputWire(candidate, candidate.prefixLength != 0, candidate.hotkey != "NONE",
+      probe::needsEndingSequence(candidate));
   if (!receiverStorageReady || receiverPreferences.putString("format", canonical.c_str()) != canonical.size()) return false;
   outputFormat = candidate;
   return true;
@@ -1010,8 +1011,10 @@ static bool handle(const String &text, uint8_t source) {
     if (error) replyLine(false, error);
     return true;
   }
-  const bool getter = text == "HIDRECEIVER?" || text == "HIDRECEIVER2?" || text == "HIDCFG?" ||
-      text == "HIDCFG2?" || text == "HIDCFG3?";
+  const bool endingSequenceQuery = text == "HIDCFG4?";
+  const bool hotkeyQuery = endingSequenceQuery || text == "HIDCFG3?";
+  const bool formatQuery = hotkeyQuery || text == "HIDCFG2?" || text == "HIDCFG?";
+  const bool getter = text == "HIDRECEIVER?" || text == "HIDRECEIVER2?" || formatQuery;
   if (!getter && !text.startsWith("HIDCFG=") && text != "HIDPAIR=1" &&
       text != "HIDPAIR=ANDROID" && !text.startsWith("HIDPIN=") &&
       text != "HIDPAIR=0" && text != "HIDFORGET=1" && text != "HIDTYPE=TEST") return false;
@@ -1024,15 +1027,16 @@ static bool handle(const String &text, uint8_t source) {
   if (!state.uartReady(owner) || owner.generation != gReplyContext.session) return true;
   if (text == "HIDRECEIVER?" || text == "HIDRECEIVER2?")
     replyLine(true, receiverText(text == "HIDRECEIVER2?"));
-  else if (text == "HIDCFG?" || text == "HIDCFG2?" || text == "HIDCFG3?")
-    replyLine(true, probe::outputWire(outputFormat, text != "HIDCFG?", text == "HIDCFG3?").c_str());
+  else if (formatQuery)
+    replyLine(true, probe::outputWire(outputFormat, text != "HIDCFG?", hotkeyQuery, endingSequenceQuery).c_str());
   else if (blocked()) replyLine(false, "ERR=BUSY");
   else if (text.startsWith("HIDCFG=")) {
     probe::OutputFormat candidate;
     bool prefixPresent = false;
     bool hotkeyPresent = false;
+    bool endingSequencePresent = false;
     if (keyboard.busy() || pendingCount) replyLine(false, "ERR=HIDCFG_BUSY");
-    else if (!probe::parseOutputFormat(text.c_str(), candidate, &prefixPresent, &hotkeyPresent))
+    else if (!probe::parseOutputFormat(text.c_str(), candidate, &prefixPresent, &hotkeyPresent, &endingSequencePresent))
       replyLine(false, "ERR=HIDCFG_INVALID");
     else {
       // An older app can edit its fields without discarding an existing prefix.
@@ -1041,10 +1045,15 @@ static bool handle(const String &text, uint8_t source) {
         memcpy(candidate.prefix, outputFormat.prefix, candidate.prefixLength);
       }
       if (!hotkeyPresent) candidate.hotkey = outputFormat.hotkey;
+      // Legacy clients see NONE for sequences they cannot represent. Keep those sequences on save.
+      if (!endingSequencePresent && !candidate.endingLength && probe::needsEndingSequence(outputFormat)) {
+        candidate.endingLength = outputFormat.endingLength;
+        memcpy(candidate.ending, outputFormat.ending, candidate.endingLength);
+      }
       const bool hotkeyChanged = candidate.hotkey != outputFormat.hotkey;
       if (!saveOutputFormat(candidate)) replyLine(false, "ERR=HIDCFG_STORAGE");
       else {
-        replyLine(true, probe::outputWire(outputFormat, prefixPresent, hotkeyPresent).c_str());
+        replyLine(true, probe::outputWire(outputFormat, prefixPresent, hotkeyPresent, endingSequencePresent).c_str());
         if (hotkeyChanged) {
           const auto receiver = shortcutReceiver();
           if (receiver.generation) sendHotkey(receiver);

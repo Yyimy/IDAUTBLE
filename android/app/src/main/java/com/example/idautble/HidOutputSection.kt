@@ -1,7 +1,6 @@
 package com.example.idautble
 
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -11,7 +10,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -20,7 +18,7 @@ import androidx.compose.ui.unit.sp
 private val hidFields = mapOf("P" to "Pallet", "U" to "Location", "PU" to "Both")
 private val hidLayouts = mapOf("US" to "US", "ES" to "Spanish")
 private enum class HidSequence(val title: String) {
-    Prefix("Keys before the first code"), Separator("Separator between fields"),
+    Prefix("Keys before the first code"), Separator("Separator between fields"), Ending("Keys after the last code"),
 }
 private val shortcutModifiers = listOf("CTRL" to "Ctrl", "ALT" to "Alt", "SHIFT" to "Shift")
 private val shortcutKeys = mapOf(
@@ -38,10 +36,9 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
     var prefixPattern by remember { mutableStateOf("") }
     var shortcut by remember { mutableStateOf("NONE") }
     var pattern by remember { mutableStateOf("{TAB}") }
-    var ending by remember { mutableStateOf("ENTER") }
+    var endingPattern by remember { mutableStateOf("{ENTER}") }
     var layout by remember { mutableStateOf("US") }
     var editingSequence by remember { mutableStateOf<HidSequence?>(null) }
-    var editingEnding by remember { mutableStateOf(false) }
     var editingShortcut by remember { mutableStateOf(false) }
     LaunchedEffect(state.revision) {
         state.config?.let {
@@ -49,16 +46,17 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
             prefixPattern = hidSeparatorPattern(it.prefix)
             shortcut = it.hotkey
             pattern = hidSeparatorPattern(it.separator)
-            ending = it.ending
+            endingPattern = hidSeparatorPattern(it.ending)
             layout = it.layout
         }
     }
-    val endings = hidEndingOptions(state.extendedKeys)
     val allowArrows = state.arrowSeparators || state.extendedKeys
     val prefix = if (state.prefixKeys) decodeHidSeparator(prefixPattern, allowArrows, state.extendedKeys) else ""
     val separator = decodeHidSeparator(pattern, allowArrows, state.extendedKeys)
+    val ending = decodeHidSeparator(endingPattern, allowArrows, state.extendedKeys)
+    val endingValid = ending != null && (state.endingSequence || legacyHidEnding(ending, state.extendedKeys) != null)
     val hotkey = if (state.readHotkey) shortcut else "NONE"
-    val draft = if (prefix != null && separator != null && validHidHotkey(hotkey))
+    val draft = if (prefix != null && separator != null && ending != null && endingValid && validHidHotkey(hotkey))
         HidOutputConfig(fields, separator, ending, layout, prefix, hotkey) else null
     val enabled = connected && !state.busy
     CollapsibleSettingsSection(
@@ -80,8 +78,8 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
                 HidSettingRow("Separator") {
                     HidPickerButton(pattern.ifEmpty { "None" }, enabled && fields == "PU") { editingSequence = HidSequence.Separator }
                 }
-                HidSettingRow("Final key") {
-                    HidPickerButton(endings[ending] ?: ending, enabled) { editingEnding = true }
+                HidSettingRow("Final keys") {
+                    HidPickerButton(endingPattern.ifEmpty { "None" }, enabled) { editingSequence = HidSequence.Ending }
                 }
                 Text("Preview", style = MaterialTheme.typography.labelMedium)
                 Text(draft?.preview() ?: "Invalid key sequence", fontFamily = FontFamily.Monospace,
@@ -108,19 +106,24 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
     val sequence = editingSequence
     if (sequence != null && enabled) HidSequenceDialog(
         title = sequence.title,
-        initial = if (sequence == HidSequence.Prefix) prefixPattern else pattern,
+        initial = when (sequence) {
+            HidSequence.Prefix -> prefixPattern
+            HidSequence.Separator -> pattern
+            HidSequence.Ending -> endingPattern
+        },
         allowArrows = allowArrows,
         extended = state.extendedKeys,
+        legacyEnding = sequence == HidSequence.Ending && !state.endingSequence,
         onDismiss = { editingSequence = null },
         onApply = {
-            if (sequence == HidSequence.Prefix) prefixPattern = it else pattern = it
+            when (sequence) {
+                HidSequence.Prefix -> prefixPattern = it
+                HidSequence.Separator -> pattern = it
+                HidSequence.Ending -> endingPattern = it
+            }
             editingSequence = null
         },
     )
-    if (editingEnding && enabled) HidEndingDialog(endings, ending, { editingEnding = false }) {
-        ending = it
-        editingEnding = false
-    }
     if (editingShortcut && enabled && state.readHotkey) HidShortcutDialog(shortcut, { editingShortcut = false }) {
         shortcut = it
         editingShortcut = false
@@ -135,29 +138,6 @@ private fun HidSettingsGroup(title: String, content: @Composable ColumnScope.() 
             content()
         }
     }
-}
-
-@Composable
-private fun HidEndingDialog(options: Map<String, String>, initial: String, onDismiss: () -> Unit, onApply: (String) -> Unit) {
-    var selected by rememberSaveable { mutableStateOf(initial) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Final key") },
-        text = {
-            Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState()).selectableGroup()) {
-                options.forEach { (key, label) ->
-                    Row(Modifier.fillMaxWidth().heightIn(min = 44.dp)
-                        .selectable(selected == key, role = Role.RadioButton, onClick = { selected = key }),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected == key, onClick = null)
-                        Text(label, Modifier.padding(start = 12.dp))
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton({ onApply(selected) }, enabled = selected in options) { Text("Apply") } },
-        dismissButton = { TextButton(onDismiss) { Text("Cancel") } },
-    )
 }
 
 private fun shortcutLabel(value: String): String = if (value == "NONE") "Disabled" else
@@ -241,11 +221,15 @@ private fun HidValueMenu(options: Map<String, String>, value: String, enabled: B
 }
 
 @Composable
-private fun HidSequenceDialog(title: String, initial: String, allowArrows: Boolean, extended: Boolean, onDismiss: () -> Unit, onApply: (String) -> Unit) {
+private fun HidSequenceDialog(title: String, initial: String, allowArrows: Boolean, extended: Boolean, legacyEnding: Boolean, onDismiss: () -> Unit, onApply: (String) -> Unit) {
     var draft by remember { mutableStateOf(initial) }
     var open by remember { mutableStateOf(false) }
     val decoded = decodeHidSeparator(draft, allowArrows, extended)
-    val keys = hidSeparatorOptions(allowArrows, extended)
+    val valid = decoded != null && (!legacyEnding || legacyHidEnding(decoded, extended) != null)
+    val limit = if (legacyEnding) 1 else HID_SEPARATOR_LIMIT
+    val keys = hidSeparatorOptions(allowArrows, extended).filter {
+        !legacyEnding || legacyHidEnding(decodeHidSeparator(it, allowArrows, extended).orEmpty(), extended) != null
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -253,16 +237,19 @@ private fun HidSequenceDialog(title: String, initial: String, allowArrows: Boole
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = draft, onValueChange = { draft = it },
-                    modifier = Modifier.fillMaxWidth(), maxLines = 3, isError = decoded == null,
+                    modifier = Modifier.fillMaxWidth(), maxLines = 3, isError = !valid,
                     label = { Text("Sequence") },
                     supportingText = {
-                        Text(if (decoded == null) "Use valid keys or ASCII text, up to $HID_SEPARATOR_LIMIT items."
-                            else "${decoded.length} / $HID_SEPARATOR_LIMIT keys or characters")
+                        Text(when {
+                            legacyEnding -> "This firmware supports one final key."
+                            decoded == null -> "Use valid keys or ASCII text, up to $limit items."
+                            else -> "${decoded.length} / $limit keys or characters"
+                        })
                     },
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) {
-                        HidPickerButton("Add key", decoded != null && decoded.length < HID_SEPARATOR_LIMIT) { open = true }
+                        HidPickerButton("Add key", decoded != null && decoded.length < limit) { open = true }
                         DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.heightIn(max = 280.dp)) {
                             keys.forEach { key ->
                                 DropdownMenuItem(text = { Text(key) }, onClick = { draft += key; open = false })
@@ -271,10 +258,10 @@ private fun HidSequenceDialog(title: String, initial: String, allowArrows: Boole
                     }
                     TextButton(onClick = { draft = "" }) { Text("Clear") }
                 }
-                Text("Keys are sent in order. You can also type ASCII text. Use {{ for a literal {.", fontSize = 11.sp)
+                if (!legacyEnding) Text("Keys are sent in order. You can also type ASCII text. Use {{ for a literal {.", fontSize = 11.sp)
             }
         },
-        confirmButton = { TextButton(onClick = { onApply(draft) }, enabled = decoded != null) { Text("Apply") } },
+        confirmButton = { TextButton(onClick = { onApply(draft) }, enabled = valid) { Text("Apply") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
