@@ -24,8 +24,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
@@ -41,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -115,7 +114,6 @@ internal fun AppSettingsDialog(
     onDismiss: () -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf(SettingsPage.MAIN) }
-    val colors = ListItemDefaults.colors(containerColor = Color.Transparent)
     val themeLabel = if (darkMode) "Dark mode" else "Light"
 
     AlertDialog(
@@ -159,39 +157,37 @@ internal fun AppSettingsDialog(
                 SettingsPage.BACKGROUND -> Column(
                     Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()).selectableGroup()
                 ) {
-                    AppBackground.entries.forEach { option ->
-                        val selected = background == option
-                        ListItem(
-                            modifier = Modifier.selectable(selected, role = Role.RadioButton,
-                                onClick = { onBackgroundChange(option) }),
-                            headlineContent = { Text(option.label) },
-                            leadingContent = { BackgroundSwatch(option) },
-                            trailingContent = { RadioButton(selected, onClick = null) },
-                            colors = colors,
+                    AppBackground.entries.forEachIndexed { index, option ->
+                        SettingsChoiceRow(
+                            label = option.label,
+                            selected = background == option,
+                            onClick = { onBackgroundChange(option) },
+                            divider = index < AppBackground.entries.lastIndex,
+                            leading = { BackgroundSwatch(option, Modifier.size(18.dp)) },
                         )
                     }
                 }
                 SettingsPage.TERMINAL_TEXT_SIZE -> Column(Modifier.selectableGroup()) {
-                    TerminalTextSize.entries.forEach { option ->
-                        val selected = terminalTextSize == option
-                        ListItem(
-                            modifier = Modifier.selectable(selected, role = Role.RadioButton,
-                                onClick = { onTerminalTextSizeChange(option) }),
-                            headlineContent = { Text(option.label, fontSize = option.fontSizeSp.sp, lineHeight = option.lineHeightSp.sp) },
-                            trailingContent = { RadioButton(selected, onClick = null) },
-                            colors = colors,
+                    TerminalTextSize.entries.forEachIndexed { index, option ->
+                        SettingsChoiceRow(
+                            label = option.label,
+                            selected = terminalTextSize == option,
+                            onClick = { onTerminalTextSizeChange(option) },
+                            divider = index < TerminalTextSize.entries.lastIndex,
+                            labelStyle = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = option.fontSizeSp.sp,
+                                lineHeight = option.lineHeightSp.sp,
+                            ),
                         )
                     }
                 }
                 SettingsPage.LOG_VIEW -> Column(Modifier.selectableGroup()) {
-                    TerminalLogView.entries.forEach { option ->
-                        val selected = logView == option
-                        ListItem(
-                            modifier = Modifier.selectable(selected, role = Role.RadioButton,
-                                onClick = { onLogViewChange(option) }),
-                            headlineContent = { Text(option.label) },
-                            trailingContent = { RadioButton(selected, onClick = null) },
-                            colors = colors,
+                    TerminalLogView.entries.forEachIndexed { index, option ->
+                        SettingsChoiceRow(
+                            label = option.label,
+                            selected = logView == option,
+                            onClick = { onLogViewChange(option) },
+                            divider = index < TerminalLogView.entries.lastIndex,
                         )
                     }
                 }
@@ -204,33 +200,20 @@ internal fun AppSettingsDialog(
                             updated.add(destination, updated.removeAt(index))
                             onTerminalOrderChange(updated)
                         }
-                        ListItem(
-                            headlineContent = { Text(section.label) },
-                            trailingContent = {
-                                Row {
-                                    IconButton(onClick = { moveTo(index - 1) }, enabled = index > 0) {
-                                        Icon(Icons.Outlined.KeyboardArrowUp, "Move ${section.label} up")
-                                    }
-                                    IconButton(onClick = { moveTo(index + 1) }, enabled = index < terminalOrder.lastIndex) {
-                                        Icon(Icons.Outlined.KeyboardArrowDown, "Move ${section.label} down")
-                                    }
-                                }
-                            },
-                            colors = colors,
-                        )
+                        SettingsRow(section.label) {
+                            IconButton(onClick = { moveTo(index - 1) }, enabled = index > 0) {
+                                Icon(Icons.Outlined.KeyboardArrowUp, "Move ${section.label} up")
+                            }
+                            IconButton(onClick = { moveTo(index + 1) }, enabled = index < terminalOrder.lastIndex) {
+                                Icon(Icons.Outlined.KeyboardArrowDown, "Move ${section.label} down")
+                            }
+                        }
+                        if (index < terminalOrder.lastIndex) HorizontalDivider()
                     }
                 }
                 SettingsPage.THEME -> Column(Modifier.selectableGroup()) {
-                    listOf(false to "Light", true to "Dark mode").forEach { (enabled, label) ->
-                        val selected = darkMode == enabled
-                        ListItem(
-                            modifier = Modifier.selectable(selected, role = Role.RadioButton,
-                                onClick = { onDarkModeChange(enabled) }),
-                            headlineContent = { Text(label) },
-                            trailingContent = { RadioButton(selected, onClick = null) },
-                            colors = colors,
-                        )
-                    }
+                    SettingsChoiceRow("Light", !darkMode, { onDarkModeChange(false) }, divider = true)
+                    SettingsChoiceRow("Dark mode", darkMode, { onDarkModeChange(true) }, divider = false)
                 }
             }
         },
@@ -253,22 +236,45 @@ internal fun AppSettingsDialog(
 }
 
 @Composable
+private fun SettingsChoiceRow(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    divider: Boolean,
+    labelStyle: TextStyle = MaterialTheme.typography.bodyMedium,
+    leading: (@Composable () -> Unit)? = null,
+) {
+    SettingsRow(
+        label = label,
+        modifier = Modifier.selectable(selected, role = Role.RadioButton, onClick = onClick),
+        labelStyle = labelStyle,
+        leading = leading,
+    ) {
+        RadioButton(selected = selected, onClick = null)
+    }
+    if (divider) HorizontalDivider()
+}
+
+@Composable
 private fun SettingsRow(
     label: String,
     value: String? = null,
     modifier: Modifier = Modifier,
+    labelStyle: TextStyle = MaterialTheme.typography.bodyMedium,
+    leading: (@Composable () -> Unit)? = null,
     trailing: @Composable () -> Unit,
 ) {
     Row(
-        modifier = modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 4.dp, vertical = 4.dp),
+        modifier = modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        leading?.invoke()
+        Text(label, Modifier.weight(1f).padding(vertical = 4.dp), style = labelStyle)
         if (value != null) {
             Text(
                 value,
-                modifier = Modifier.widthIn(max = 88.dp),
+                modifier = Modifier.widthIn(max = 88.dp).padding(vertical = 4.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -278,7 +284,7 @@ private fun SettingsRow(
 }
 
 @Composable
-private fun BackgroundSwatch(background: AppBackground, modifier: Modifier = Modifier.size(26.dp)) {
+private fun BackgroundSwatch(background: AppBackground, modifier: Modifier) {
     Surface(
         modifier = modifier,
         shape = CircleShape,
