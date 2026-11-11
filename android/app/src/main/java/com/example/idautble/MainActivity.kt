@@ -387,6 +387,8 @@ class MainActivity : ComponentActivity() {
     private val uiHidReceiver = mutableStateOf(HidReceiverState())
     private var hidReceiverRequest = 0L
     private val uiHidOutput = mutableStateOf(HidOutputState())
+    private val uiReaderTimeout = mutableStateOf(ReaderTimeoutState())
+    private var readerTimeoutRequest = 0
     private var hidOutputRequest = 0L
     private var hidOutputExpected: HidOutputConfig? = null
     private val uiIdentityDraft = mutableStateOf("")
@@ -924,6 +926,52 @@ class MainActivity : ComponentActivity() {
         }, 8000)
     }
 
+    private fun saveReaderTimeout(ms: Int) {
+        val state = uiReaderTimeout.value
+        if (!bleChannelReady || state.currentMs == null || state.pendingMs != null || ms !in readerTimeoutOptions) return
+        if (!maintenanceSession.isAuthorized()) {
+            showIdentityAuthorizationMessage()
+            return
+        }
+        val request = ++readerTimeoutRequest
+        uiReaderTimeout.value = state.copy(pendingMs = ms, message = "Saving…")
+        sendText("READERTIMEOUT=$ms", addCrlf = true)
+        mainHandler.postDelayed({
+            if (request == readerTimeoutRequest && uiReaderTimeout.value.pendingMs != null) {
+                uiReaderTimeout.value = uiReaderTimeout.value.copy(
+                    pendingMs = null, message = "No confirmation. Reconnect to check the saved timeout.",
+                )
+            }
+        }, 8000)
+    }
+
+    private fun handleReaderTimeoutMessage(message: PlcMessage) {
+        val text = message.text
+        val state = uiReaderTimeout.value
+        val prefix = "READERTIMEOUT="
+        if (message.acknowledged && text.startsWith("FW=")) {
+            val setting = text.split(';').firstOrNull { it.startsWith(prefix) }
+            val current = setting?.removePrefix(prefix)?.let(::parseReaderTimeout)
+            uiReaderTimeout.value = state.copy(currentMs = current)
+        } else if (message.acknowledged && text.startsWith(prefix) && state.currentMs != null) {
+            val current = parseReaderTimeout(text.removePrefix(prefix)) ?: return
+            readerTimeoutRequest++
+            uiReaderTimeout.value = ReaderTimeoutState(
+                currentMs = current,
+                message = if (state.pendingMs == null || state.pendingMs == current) "Reader timeout saved."
+                    else "The PLC confirmed a different timeout.",
+            )
+        } else if (message.rejected && state.pendingMs != null && text.startsWith("ERR=READER_")) {
+            readerTimeoutRequest++
+            uiReaderTimeout.value = state.copy(pendingMs = null, message = when (text) {
+                "ERR=READER_AUTH" -> "Enter the PIN in PIN / ACCESS first."
+                "ERR=READER_BUSY" -> "Wait for the PLC to finish its current activity."
+                "ERR=READER_STORAGE" -> "The PLC could not save the timeout."
+                else -> "The PLC rejected the reader timeout."
+            })
+        }
+    }
+
     private fun requestHidOutput(config: HidOutputConfig?) {
         if (!bleChannelReady || !uiHidOutput.value.supported || uiHidOutput.value.busy) return
         if (config != null && !maintenanceSession.isAuthorized()) { showIdentityAuthorizationMessage(); return }
@@ -1058,6 +1106,8 @@ class MainActivity : ComponentActivity() {
         nextMaintenancePing = 0L
         hidOutputRequest++; hidOutputExpected = null
         uiHidOutput.value = HidOutputState()
+        readerTimeoutRequest++
+        uiReaderTimeout.value = ReaderTimeoutState()
         hidReceiverRequest++
         uiHidReceiver.value = HidReceiverState()
         txTimeout?.let { mainHandler.removeCallbacks(it) }
@@ -1468,6 +1518,7 @@ class MainActivity : ComponentActivity() {
         }
         handleHidReceiverMessage(message)
         handleHidOutputMessage(message)
+        handleReaderTimeoutMessage(message)
         statusRefresh.otaMessage(text)
         networkSession.setPaused(statusRefresh.otaActive)
         if (message.acknowledged && text.startsWith("COUNTERS=")) {
@@ -2350,6 +2401,8 @@ class MainActivity : ComponentActivity() {
 
                         mainHandler.postDelayed({ sendText("ALT?", addCrlf = true) }, 300)
                     },
+                    readerTimeout = uiReaderTimeout.value,
+                    onSaveReaderTimeout = ::saveReaderTimeout,
                     onCfgQuery = { sendText("CFG?", addCrlf = true) },
                     onSetCfg = {
                         sendText("CFG=PFXP=${uiPfxP.value};PFXU=${uiPfxU.value}", addCrlf = true)
@@ -2512,6 +2565,8 @@ private fun PlcBleTesterLandscape(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onCmd: (Char) -> Unit,
+    readerTimeout: ReaderTimeoutState,
+    onSaveReaderTimeout: (Int) -> Unit,
     onCfgQuery: () -> Unit,
     onSetCfg: () -> Unit,
     onSetRtc: () -> Unit,
@@ -2973,6 +3028,7 @@ private fun PlcBleTesterLandscape(
                                                             "Set", onSetCfg, MaintenanceActionTone.SUCCESS, Modifier.weight(1f),
                                                         )
                                                     }
+                                                    ReaderTimeoutSettings(readerTimeout, onSaveReaderTimeout)
                                                 }
                                             }
                                             TerminalSection.RTC -> {
