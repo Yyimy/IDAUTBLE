@@ -5,6 +5,31 @@ import org.junit.Test
 
 class NetParsingTest {
     @Test
+    fun monitorDecodesServerRepliesAndConnectionHistory() {
+        val status = parseNetStatusLine(
+            "NETSTAT=WIFI=1;LINK=UP;TCP=UP;TCPMON=1;TCPUP=12;" +
+                "TCPDOWN=PONG_TIMEOUT,15;TCPRX=1,504F4E47|2,41434B3D34323B2B+",
+        )!!
+        val monitor = status.tcpMonitor!!
+        assertEquals(12L, monitor.connectionAgeSeconds)
+        assertEquals(TcpDisconnection("PONG_TIMEOUT", 15), monitor.disconnection)
+        assertEquals(
+            listOf(TcpServerReply(1, "PONG", false), TcpServerReply(2, "ACK=42;+", true)),
+            monitor.replies,
+        )
+    }
+
+    @Test
+    fun legacyStatusAndMalformedMonitorKeepLiveStatusUsable() {
+        val line = "NETSTAT=WIFI=1;LINK=UP;TCP=DOWN"
+        assertNull(parseNetStatusLine(line)!!.tcpMonitor)
+        val status = parseNetStatusLine("$line;TCPMON=1;TCPUP=-1;TCPRX=0,1B|1,XX")!!
+        assertFalse(status.tcpUp)
+        assertNull(status.tcpMonitor!!.connectionAgeSeconds)
+        assertTrue(status.tcpMonitor.replies.isEmpty())
+    }
+
+    @Test
     fun maskedPasswordIsOmittedWhenSavingUnchangedConfiguration() {
         val config =
             parseNetConfigLine(

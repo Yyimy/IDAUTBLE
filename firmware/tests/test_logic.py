@@ -79,7 +79,8 @@ void powerCut(const char*){gCutRequested=true;}
 '''
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
 outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
-names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
+tcp_monitor=(sketch/'TcpMonitor.h').read_text().replace('#pragma once','')
+names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','appendTcpMonitor','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
 using std::min;
@@ -124,6 +125,7 @@ String gMaintenancePin,gOtaApPass,gOtaApSsid;bool gPinChangedOnBoot=false,gHeart
 const char* OTA_AP_PASS=nullptr;
 uint32_t gTcpPingSeconds=10,gTcpTimeoutSeconds=20,gLastTcpRxMs=0,gLastTcpPingMs=0;
 bool gTcpPongSeen=false,failUIntWrite=false;
+TcpMonitor gTcpMonitor;
 std::map<std::string,String> storedSettings;
 std::map<std::string,uint32_t> storedUIntSettings;
 struct Preferences {
@@ -174,7 +176,7 @@ void reading(const String &pallet, const String &location, uint32_t) { readings.
 '''
 # Types require integer definitions and String prototypes are declared by Arduino in firmware.
 includes=shim[:shim.index('using std::size_t;')]
-body=includes+types+'\n'+outbox_storage+'\n'+shim[shim.index('using std::size_t;'):]+'\n'
+body=includes+types+'\n'+outbox_storage+'\n'+tcp_monitor+'\n'+shim[shim.index('using std::size_t;'):]+'\n'
 body+='\n'.join(function(n).split('{',1)[0]+';' for n in names)+'\n'
 body+='\n'.join(function(n) for n in names)
 body+=r'''
@@ -246,6 +248,18 @@ int main(){
  CHECK(gTcpClient.sent==payload);
  gTcpClient.blockedCalls=100;sendFrame(msg,sizeof(msg));++nowMs;txTick();CHECK(gTcpClient.up);
  nowMs+=2101;txTick();CHECK(!gTcpClient.up&&!gTcpConnected);
+
+ // TCP monitor retains the last real outage and only the five newest server replies.
+ gTcpMonitor.connected(1000);gTcpMonitor.disconnected(2000,"PONG_TIMEOUT");
+ gTcpMonitor.disconnected(3000,"SOCKET_CLOSED");gTcpMonitor.connected(4000);
+ for(int i=0;i<5;++i)gTcpMonitor.receive(4000,"PONG",4);
+ gTcpMonitor.receive(5000,"ACK=42;ABCDEFGHIJKLMNOPQRSTUVWXYZ",33);
+ CHECK(gTcpMonitor.count==5&&gTcpMonitor.newest(0).truncated);
+ String tcpSnapshot;appendTcpMonitor(tcpSnapshot,6000);
+ const std::string snapshot=tcpSnapshot.c_str();
+ CHECK(snapshot.find(";TCPMON=1;TCPUP=2;TCPDOWN=PONG_TIMEOUT,4;TCPRX=1,41434B3D34323B") == 0);
+ CHECK(snapshot.find("+|2,504F4E47") != std::string::npos);
+ gTcpMonitor=TcpMonitor{};
 
  // TCP settings are validated, stored together and recovered without resetting live settings on write failure.
  CHECK(validTcpTiming(5,6));CHECK(validTcpTiming(120,300));

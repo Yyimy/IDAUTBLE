@@ -40,12 +40,18 @@ Los comandos pendientes de autorización se cancelan al cerrar el diálogo o des
 
 ## Red
 
-NETWORK muestra **PLC CONFIGURATION** a la izquierda (60 %) y **LIVE CONNECTION**
-a la derecha (40 %) en horizontal con al menos 700 dp de ancho. Las columnas se
+NETWORK muestra **PLC CONFIGURATION** a la izquierda (50 %) y **LIVE CONNECTION**
+a la derecha (50 %) en horizontal con al menos 700 dp de ancho. Las columnas se
 pueden desplazar por separado. En vertical o con menos anchura, la configuración
 aparece encima de la información de conexión. Los ajustes de Wi-Fi, IP, servidor TCP
 y red avanzada se abren en tarjetas plegables. Los ajustes avanzados aparecen en
-los PLC que los admiten y su tarjeta empieza plegada. Los refrescos automáticos actualizan el estado sin parpadeos de los botones:
+los PLC que los admiten y su tarjeta empieza plegada.
+
+Debajo de **LIVE CONNECTION**, **TCP MONITOR** muestra la última conexión,
+la última desconexión y su motivo, y las cinco últimas líneas de texto recibidas
+por TCP. Las líneas de más de 24 caracteres se muestran abreviadas. El PLC conserva
+el historial en memoria hasta reiniciar y lo devuelve solo por mantenimiento BLE
+como parte del refresco de red. Los refrescos automáticos actualizan el estado sin parpadeos de los botones:
 no los deshabilitan ni muestran “Refreshing…”. Las acciones manuales siguen indicando
 su progreso y pueden adelantarse a una consulta automática pendiente.
 

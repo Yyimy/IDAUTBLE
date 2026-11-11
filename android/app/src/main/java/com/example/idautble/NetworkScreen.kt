@@ -225,13 +225,11 @@ private fun NetworkInput(
 @Composable
 private fun NetworkPanel(
     modifier: Modifier = Modifier,
-    scrollable: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     MaintenanceCard(modifier = modifier) {
         Column(
             Modifier.fillMaxWidth()
-                .then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier)
                 .padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
             content = content,
@@ -278,16 +276,16 @@ fun NetworkScreen(session: NetworkSession) {
                     NetworkConfigurationPanel(
                         state,
                         session,
-                        Modifier.weight(0.6f).fillMaxHeight(),
+                        Modifier.weight(1f).fillMaxHeight(),
                         scrollable = true,
                     )
-                    LiveConnectionPanel(
-                        state,
-                        session,
-                        now,
-                        Modifier.weight(0.4f).fillMaxHeight(),
-                        scrollable = true,
-                    )
+                    Column(
+                        Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        LiveConnectionPanel(state, session, now, Modifier.fillMaxWidth())
+                        TcpMonitorPanel(state, now)
+                    }
                 }
             } else {
                 Column(
@@ -296,6 +294,7 @@ fun NetworkScreen(session: NetworkSession) {
                 ) {
                     NetworkConfigurationPanel(state, session, Modifier.fillMaxWidth())
                     LiveConnectionPanel(state, session, now, Modifier.fillMaxWidth())
+                    TcpMonitorPanel(state, now)
                 }
             }
         }
@@ -308,7 +307,6 @@ private fun LiveConnectionPanel(
     session: NetworkSession,
     now: Long,
     modifier: Modifier = Modifier,
-    scrollable: Boolean = false,
 ) {
     val status = state.status
     val good = Color(0xFF2E7D32)
@@ -316,7 +314,7 @@ private fun LiveConnectionPanel(
     val age = state.statusReceivedAt?.let { ((now - it).coerceAtLeast(0) / 1000) }
     val stale = !state.available || age == null || age > 15
     val controls = state.available && !state.controlsBusy
-    NetworkPanel(modifier, scrollable) {
+    NetworkPanel(modifier) {
         NetworkHeading("LIVE CONNECTION")
         if (!stale && state.tcpAdvanced != null && status != null) {
             if (state.tcpAdvanced.heartbeat) {
@@ -418,6 +416,62 @@ private fun LiveConnectionPanel(
             }
         }
     }
+}
+
+@Composable
+private fun TcpMonitorPanel(state: NetworkUiState, now: Long) {
+    val snapshot = state.status?.tcpMonitor
+    val receivedAt = state.statusReceivedAt
+    val snapshotAge = receivedAt?.let { (now - it).coerceAtLeast(0) / 1000 } ?: 0
+    var expanded by rememberSaveable { mutableStateOf(true) }
+    CollapsibleSettingsSection(
+        "TCP MONITOR", "Server replies and connection history",
+        expanded, { expanded = !expanded },
+    ) {
+        if (snapshot == null) {
+            Text(
+                if (state.status == null) "Waiting for network status."
+                else "TCP monitoring requires compatible PLC firmware.",
+            )
+            return@CollapsibleSettingsSection
+        }
+        if (!state.available || snapshotAge > 15) Text("Last available snapshot")
+        NetworkValue(
+            "Last connection",
+            snapshot.connectionAgeSeconds?.let { tcpMonitorAge(it + snapshotAge) } ?: "—",
+        )
+        NetworkValue(
+            "Last disconnection",
+            snapshot.disconnection?.let {
+                "${tcpDisconnectLabel(it.reason)} · ${tcpMonitorAge(it.ageSeconds + snapshotAge)}"
+            } ?: "—",
+        )
+        HorizontalDivider()
+        NetworkHeading("SERVER REPLIES")
+        if (snapshot.replies.isEmpty()) Text("No replies received.")
+        for (reply in snapshot.replies) {
+            NetworkValue(tcpMonitorAge(reply.ageSeconds + snapshotAge), reply.text + if (reply.truncated) "…" else "")
+        }
+    }
+}
+
+private fun tcpDisconnectLabel(reason: String) = when (reason) {
+    "PONG_TIMEOUT" -> "PONG timeout"
+    "WIFI_LOST" -> "Wi-Fi link lost"
+    "WIFI_DISABLED" -> "Wi-Fi disabled"
+    "SOCKET_CLOSED" -> "Socket closed"
+    "CONFIG_CHANGED" -> "Network restarted"
+    "OTA" -> "Firmware update"
+    "WRITE_FAILED" -> "Write failed"
+    "WRITE_TIMEOUT" -> "Write timeout"
+    else -> "Unknown reason"
+}
+
+private fun tcpMonitorAge(seconds: Long) = when {
+    seconds < 60 -> "$seconds s ago"
+    seconds < 3600 -> "${seconds / 60} min ago"
+    seconds < 86400 -> "${seconds / 3600} h ago"
+    else -> "${seconds / 86400} d ago"
 }
 
 @Composable

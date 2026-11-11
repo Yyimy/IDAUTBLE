@@ -31,7 +31,18 @@ data class NetStatus(
     val rssi: Int?,
     val pongAgeSeconds: Long? = null,
     val pendingEvents: Int? = null,
+    val tcpMonitor: TcpMonitorSnapshot? = null,
 )
+
+data class TcpServerReply(val ageSeconds: Long, val text: String, val truncated: Boolean)
+
+data class TcpMonitorSnapshot(
+    val connectionAgeSeconds: Long?,
+    val disconnection: TcpDisconnection?,
+    val replies: List<TcpServerReply>,
+)
+
+data class TcpDisconnection(val reason: String, val ageSeconds: Long)
 
 /** Independent revisions prevent Compose from losing NET when NETSTAT arrives in the same burst. */
 data class NetworkSnapshot(
