@@ -2906,53 +2906,25 @@ private fun PlcBleTesterLandscape(
                                                     onToggle = { heightSectionExpanded = !heightSectionExpanded },
                                                 ) {
                                                     Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement =
-                                                            Arrangement.spacedBy(
-                                                                8.dp,
-                                                                Alignment.CenterHorizontally,
-                                                            ),
-                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                                                     ) {
-
-                                                        // GET STATUS
-                                                        Button(
-                                                            shape = RoundedCornerShape(6.dp),
+                                                        MaintenanceActionButton(
+                                                            text = "Get Status",
                                                             onClick = onAltQuery,
-                                                            contentPadding = PaddingValues(10.dp, 6.dp),
-                                                            colors =
-                                                                ButtonDefaults.buttonColors(
-                                                                    containerColor = Color(0xFF1976D2),
-                                                                    contentColor = Color.White,
-                                                                ),
-                                                        ) {
-                                                            Text("Get Status", fontSize = 11.sp)
-                                                        }
-
+                                                            tone = MaintenanceActionTone.INFO,
+                                                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                                                        )
                                                         if (altKnown) {
-
                                                             val isEnabled = altState == true
-
-                                                            Button(
-                                                                shape = RoundedCornerShape(6.dp),
-                                                                onClick = {
-                                                                    if (isEnabled) onAltDisable() else onAltEnable()
-                                                                },
-                                                                contentPadding = PaddingValues(10.dp, 6.dp),
-                                                                colors =
-                                                                    ButtonDefaults.buttonColors(
-                                                                        containerColor =
-                                                                            if (isEnabled) Color(0xFFC62828)
-                                                                            else Color(0xFF2E7D32),
-                                                                        contentColor = Color.White,
-                                                                    ),
-                                                            ) {
-                                                                Text(
-                                                                    if (isEnabled) "Disable Height Measurement"
+                                                            MaintenanceActionButton(
+                                                                text = if (isEnabled) "Disable Height Measurement"
                                                                     else "Enable Height Measurement",
-                                                                    fontSize = 11.sp,
-                                                                )
-                                                            }
+                                                                onClick = { if (isEnabled) onAltDisable() else onAltEnable() },
+                                                                tone = if (isEnabled) MaintenanceActionTone.DANGER
+                                                                    else MaintenanceActionTone.SUCCESS,
+                                                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                                                            )
                                                         }
                                                     }
                                                 }
@@ -2970,9 +2942,16 @@ private fun PlcBleTesterLandscape(
                                                     BarcodePrefixField("Spot", pfxU, onPfxUChanged) {
                                                         showPrefixDialogFor = "PFXU"
                                                     }
-                                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                        MaintenanceActionButton("Get ID", onCfgQuery, MaintenanceActionTone.INFO)
-                                                        MaintenanceActionButton("Set", onSetCfg, MaintenanceActionTone.SUCCESS)
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                    ) {
+                                                        MaintenanceActionButton(
+                                                            "Get ID", onCfgQuery, MaintenanceActionTone.INFO, Modifier.weight(1f),
+                                                        )
+                                                        MaintenanceActionButton(
+                                                            "Set", onSetCfg, MaintenanceActionTone.SUCCESS, Modifier.weight(1f),
+                                                        )
                                                     }
                                                 }
                                             }
@@ -2984,9 +2963,16 @@ private fun PlcBleTesterLandscape(
                                                     onToggle = { rtcSectionExpanded = !rtcSectionExpanded },
                                                 ) {
                                                     CompactOutlinedField(rtcIso, onRtcIsoChanged, Modifier.fillMaxWidth())
-                                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                        MaintenanceActionButton("Refresh", onRefreshRtc, MaintenanceActionTone.INFO)
-                                                        MaintenanceActionButton("Set", onSetRtc, MaintenanceActionTone.SUCCESS)
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                    ) {
+                                                        MaintenanceActionButton(
+                                                            "Refresh", onRefreshRtc, MaintenanceActionTone.INFO, Modifier.weight(1f),
+                                                        )
+                                                        MaintenanceActionButton(
+                                                            "Set", onSetRtc, MaintenanceActionTone.SUCCESS, Modifier.weight(1f),
+                                                        )
                                                     }
                                                 }
                                             }
