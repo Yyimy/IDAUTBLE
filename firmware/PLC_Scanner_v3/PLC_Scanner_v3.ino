@@ -427,8 +427,7 @@ int estadoSensorAnterior = LOW;
 
 static int lecturaAnteriorRaw = HIGH;  // SOLO para debounce (lectura cruda)
 
-const unsigned long FOTO_INACTIVIDAD_MS =
-    120UL * 60UL * 1000UL;  // 2h de inactividad hasta apagado
+static uint32_t gIdleMinutes = 120;
 bool armadoInactividad = false;
 unsigned long lastFotoActivaMs = 0;
 bool powerCutEjecutado = false;
@@ -536,6 +535,7 @@ static std::atomic<bool> gCutRequested{false};
 static bool gCutConfirmed = false;
 static uint32_t gCutRequestedMs = 0, gLastCutAttemptMs = 0;
 static char gCutReason[96] = "";
+static String gLastCutReason;
 static PersistentOutbox gOutbox = {};
 // Static storage avoids putting another 3.9 kB on the loop task stack.
 static uint8_t gOutboxEncoded[plcOutboxStorage::maxBytes] = {};
@@ -1963,7 +1963,20 @@ void powerCut(const char *reason) {
   gCutRequested = true;
   gCutRequestedMs = millis();
   gLastCutAttemptMs = 0;
-  // Legacy OFF preserved; detailed reason is available in DIAG and serial.
+  Preferences preferences;
+  if (preferences.begin("runtime3", false)) {
+    if (preferences.putString("last_cut", gCutReason) != strlen(gCutReason))
+      logLine("POWER CUT: no se pudo guardar el motivo");
+    preferences.end();
+  } else {
+    logLine("POWER CUT: no se pudo abrir el almacenamiento");
+  }
+  const String notice = "OFFREASON=" + String(gCutReason) + "\r\n";
+  const String bleNotice = String((char)0x06) + notice;
+  sendBleReply((const uint8_t *)bleNotice.c_str(), bleNotice.length());
+  if (gTcpConnected)
+    queueTargetFrame((const uint8_t *)notice.c_str(), notice.length(), nullptr, TX_TCP_ONLY, gTcpSession);
+  // Preserve the legacy OFF frame for existing receivers.
   bleSendOff();
 }
 
@@ -2196,7 +2209,7 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
              rxTrim.startsWith("ACKMODE=") || rxTrim.startsWith("TCPADV=") ||
              rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" ||
              rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
-             rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
+             rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("IDLEMIN=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
     cmd.type = BLECMD_TEXT;
     strlcpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload));
   } else {
@@ -3234,6 +3247,9 @@ static void runtimeLoad() {
   OTA_AP_PASS = PLC_OTA_WIFI_PASSWORD;
   gAckMode = p.getBool("ack", false);
   gHeartbeatEnabled = p.getBool("heartbeat", false);
+  const uint32_t idle = p.getUInt("idle_min", 120);
+  gIdleMinutes = idle >= 1 && idle <= 1440 ? idle : 120;
+  gLastCutReason = p.getString("last_cut", "");
   const uint32_t tcpAdvanced = p.getUInt("tcp_adv", 0);
   const uint32_t pingSeconds = (tcpAdvanced >> 2) & 0x7F;
   const uint32_t timeoutSeconds = tcpAdvanced >> 9;
@@ -3409,9 +3425,45 @@ static bool saveTcpAdvanced(bool heartbeat, bool ack, uint32_t interval, uint32_
   return true;
 }
 
+static void setIdleMinutes(const String &value, uint8_t source) {
+  if (source != 0 || !maintenanceAuthorized()) {
+    replyLine(false, "ERR=IDLE_AUTH");
+    return;
+  }
+  if (gCutRequested || gOtaTaskHandle || gOtaState != OTA_IDLE) {
+    replyLine(false, "ERR=IDLE_BUSY");
+    return;
+  }
+  uint32_t minutes;
+  if (!parseU32(value, minutes) || minutes < 1 || minutes > 1440) {
+    replyLine(false, "ERR=IDLE_INVALID");
+    return;
+  }
+  if (minutes != gIdleMinutes) {
+    Preferences preferences;
+    if (!preferences.begin("runtime3", false)) {
+      replyLine(false, "ERR=IDLE_STORAGE");
+      return;
+    }
+    const bool saved = preferences.putUInt("idle_min", minutes) == sizeof(minutes);
+    preferences.end();
+    if (!saved) {
+      replyLine(false, "ERR=IDLE_STORAGE");
+      return;
+    }
+    gIdleMinutes = minutes;
+    lastFotoActivaMs = millis();
+  }
+  replyLine(true, "IDLEMIN=" + String(gIdleMinutes));
+}
+
 static void handleTextCommand(const BleCmd &cmd) {
   String s(cmd.payload);
   if (plcHid::handle(s, cmd.source)) return;
+  if (s.startsWith("IDLEMIN=")) {
+    setIdleMinutes(s.substring(sizeof("IDLEMIN=") - 1), cmd.source);
+    return;
+  }
   if (s.startsWith("READERTIMEOUT=")) {
     setReaderTimeout(s.substring(sizeof("READERTIMEOUT=") - 1), cmd.source);
     return;
@@ -3434,7 +3486,8 @@ static void handleTextCommand(const BleCmd &cmd) {
     replyLine(true, "FW=" FIRMWARE_VERSION ";PROTO=V2;ACKMODE=" +
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
-                        (cmd.source == 0 ? String(";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1;READERTIMEOUT=") + String(gReaderTimeoutMs) : String()));
+                        (cmd.source == 0 ? String(";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1;READERTIMEOUT=") + String(gReaderTimeoutMs) +
+                         ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason : String()));
     return;
   }
   if (s == "STATUS?") {
@@ -3972,8 +4025,11 @@ static void photoTick() {
       enqueueScan(BLECMD_L, true);
   }
   if (!gOtaTaskHandle && armadoInactividad && !PaletCargado &&
-      now - lastFotoActivaMs >= FOTO_INACTIVIDAD_MS)
-    powerCut("INACTIVITY_120_MIN");
+      now - lastFotoActivaMs >= gIdleMinutes * 60000UL) {
+    char reason[32];
+    snprintf(reason, sizeof(reason), "INACTIVITY_%lu_MIN", (unsigned long)gIdleMinutes);
+    powerCut(reason);
+  }
 }
 // ---------------------------- Battery supervision ---------------------------
 static void batteryTick() {

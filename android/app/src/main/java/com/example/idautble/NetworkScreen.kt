@@ -240,7 +240,7 @@ private fun NetworkPanel(
 }
 
 @Composable
-internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, logColors: LogColors) {
+internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, logColors: LogColors, shutdownNotice: String?) {
     val state = session.state
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     DisposableEffect(session) {
@@ -282,7 +282,7 @@ internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, 
                         LiveConnectionPanel(state, session, now, Modifier.fillMaxWidth())
                         NetworkConfigurationPanel(state, session, Modifier.fillMaxWidth())
                     }
-                    TcpMonitorPanel(state, now, textSize, logColors, Modifier.weight(1f).fillMaxHeight())
+                    TcpMonitorPanel(state, now, textSize, logColors, shutdownNotice, Modifier.weight(1f).fillMaxHeight())
                 }
             } else {
                 Column(
@@ -291,7 +291,7 @@ internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, 
                 ) {
                     LiveConnectionPanel(state, session, now, Modifier.fillMaxWidth())
                     NetworkConfigurationPanel(state, session, Modifier.fillMaxWidth())
-                    TcpMonitorPanel(state, now, textSize, logColors, Modifier.fillMaxWidth().height(320.dp))
+                    TcpMonitorPanel(state, now, textSize, logColors, shutdownNotice, Modifier.fillMaxWidth().height(320.dp))
                 }
             }
         }
@@ -423,6 +423,7 @@ private fun TcpMonitorPanel(
     now: Long,
     textSize: TerminalTextSize,
     colors: LogColors,
+    shutdownNotice: String?,
     modifier: Modifier,
 ) {
     val snapshot = state.status?.tcpMonitor
@@ -450,6 +451,7 @@ private fun TcpMonitorPanel(
                 else -> "Server replies and connection events"
             }
             Text(status, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            shutdownNotice?.let { Text(it, fontSize = textSize.fontSizeSp.sp, color = colors.errRed) }
             HorizontalDivider()
             if (snapshot != null && entries.isEmpty()) Text("No TCP activity recorded.")
             LazyColumn(

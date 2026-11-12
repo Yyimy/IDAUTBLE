@@ -72,15 +72,16 @@ std::vector<String> emitted;void outboxPush(const String&s){emitted.push_back(s)
 #define LOW 0
 #define PIN_SENSOR_PALET 4
 bool gFotoLista=false,PaletCargado=false,armadoInactividad=false;int rawFoto=LOW,gFotoUltLect=LOW,estadoSensorFiltrado=LOW,lecturaAnteriorRaw=LOW;
-uint32_t gFotoUltCambioMs=0,ultimoRebote=0,lastFotoActivaMs=0;const uint32_t FOTO_STABLE_MS=1500,retardoRebote=250,FOTO_INACTIVIDAD_MS=120*60*1000UL;
+uint32_t gFotoUltCambioMs=0,ultimoRebote=0,lastFotoActivaMs=0;const uint32_t FOTO_STABLE_MS=1500,retardoRebote=250;uint32_t gIdleMinutes=120;
 char gFotoEstado='0';bool gOtaAbort=false,gOtaTaskHandle=false;int loaded=0,unloaded=0;
 int digitalRead(int){return rawFoto;}void countersIncPalCargado(){++loaded;}void countersIncPalDescargado(){++unloaded;}
-void powerCut(const char*){gCutRequested=true;}
+String cutReason;
+void powerCut(const char* reason){gCutRequested=true;cutReason=reason;}
 '''
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
 outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
 tcp_monitor=(sketch/'TcpMonitor.h').read_text().replace('#pragma once','')
-names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','appendTcpMonitor','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
+names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','setIdleMinutes','appendTcpMonitor','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
 using std::min;
@@ -121,7 +122,7 @@ shim += r'''
 #define FIRMWARE_VERSION "3.0.1-rc1"
 #define REQUIRE_MAINT_AUTH 1
 std::atomic<bool> gMaintenanceAuthorized{false};uint32_t gAuthBlockedUntil=0;uint8_t gAuthFails=0;
-String gMaintenancePin,gOtaApPass,gOtaApSsid;bool gPinChangedOnBoot=false,gHeartbeatEnabled=false;
+String gMaintenancePin,gOtaApPass,gOtaApSsid,gLastCutReason;bool gPinChangedOnBoot=false,gHeartbeatEnabled=false;
 const char* OTA_AP_PASS=nullptr;
 uint32_t gTcpPingSeconds=10,gTcpTimeoutSeconds=20,gLastTcpRxMs=0,gLastTcpPingMs=0;
 bool gTcpPongSeen=false,failUIntWrite=false;
@@ -225,7 +226,7 @@ int main(){
  // Hold a pallet longer than inactivity period; unloading must start a fresh timer.
  nowMs=8000000;photoTick();CHECK(!gCutRequested);
  rawFoto=LOW;nowMs=8000100;photoTick();nowMs=8000351;photoTick();CHECK(!PaletCargado&&!gCutRequested&&unloaded==1);
- nowMs=8000351+FOTO_INACTIVIDAD_MS-1;photoTick();CHECK(!gCutRequested);nowMs++;photoTick();CHECK(gCutRequested);
+ gIdleMinutes=1;nowMs=8000351+60000-1;photoTick();CHECK(!gCutRequested);nowMs++;photoTick();CHECK(gCutRequested&&cutReason=="INACTIVITY_1_MIN");
 
  gCutRequested=false;lastBatSafetyCheck=0;vCollapseSinceMs=0;vWarnSinceMs=0;gBatV1=13.4f;gBatV2=19;gBatValid[0]=gBatValid[1]=true;
  nowMs=1000;batteryTick();CHECK(!gCutRequested);nowMs=3999;batteryTick();CHECK(!gCutRequested);nowMs=5000;batteryTick();CHECK(gCutRequested);
@@ -271,6 +272,11 @@ int main(){
  gTcpPingSeconds=10;gTcpTimeoutSeconds=20;gHeartbeatEnabled=false;gAckMode=false;runtimeLoad();
  CHECK(gHeartbeatEnabled&&gAckMode&&gTcpPingSeconds==15&&gTcpTimeoutSeconds==45);
  storedUIntSettings.erase("tcp_adv");runtimeLoad();
+ CHECK(gIdleMinutes==120);
+ storedUIntSettings["idle_min"]=15;storedSettings["last_cut"]="COMMAND";runtimeLoad();
+ CHECK(gIdleMinutes==15&&gLastCutReason=="COMMAND");
+ storedUIntSettings["idle_min"]=1441;runtimeLoad();CHECK(gIdleMinutes==120);
+ storedUIntSettings.erase("idle_min");storedSettings.erase("last_cut");
 
  // The compiled PIN wins over any prior NVS value and invalidates old bonds.
  storedSettings["pin"]="987654";storedSettings["apkey"]="ABCDEF0123456789";
