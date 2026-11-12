@@ -3,9 +3,10 @@
 #include <stdint.h>
 #include <string.h>
 
-struct DiagnosticHistory {
-  static constexpr uint32_t format = 1;
-  static constexpr uint8_t capacity = 8;
+template <uint8_t Capacity, uint32_t Format>
+struct BasicDiagnosticHistory {
+  static constexpr uint32_t format = Format;
+  static constexpr uint8_t capacity = Capacity;
   struct Event {
     uint32_t boot;
     uint32_t seconds;
@@ -45,3 +46,6 @@ struct DiagnosticHistory {
     return events[(next + capacity - 1 - index) % capacity];
   }
 };
+
+using DiagnosticHistory = BasicDiagnosticHistory<128, 2>;
+using LegacyDiagnosticHistory = BasicDiagnosticHistory<8, 1>;
