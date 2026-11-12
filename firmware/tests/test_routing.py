@@ -120,6 +120,18 @@ int main(){
  fresh();run(cmd(BLECMD_TEXT,1,"HISTORY?"));drain();
  CHECK(tcpTextCommandType("HISTORY?")==BLECMD_NONE);
  CHECK(gTcpClient.sent.empty()&&bleBytes().empty());
+ // Diagnostic pages and TCP snapshots are bounded and stay with maintenance.
+ fresh();gDiagnosticHistory=DiagnosticHistory{};
+ for(int i=0;i<12;++i)recordDiagnostic("TCP_CONNECTED");
+ run(cmd(BLECMD_TEXT,0,"HISTORY?=0"));drain();
+ CHECK(bleBytes().find("HISTORYPAGE=5|12,")!=std::string::npos);
+ fresh();recordDiagnostic("PONG_TIMEOUT");run(cmd(BLECMD_TEXT,0,"HISTORY?=5"));drain();
+ CHECK(bleBytes().find("HISTORYPAGE=0|4,")!=std::string::npos);
+ fresh();gTcpClient.rx="ACK=42\r\n";tcpPollRx();commands.clear();plcHid::clientGeneration=31;
+ run(cmd(BLECMD_TEXT,0,"TCPTRACE?"));drain();
+ CHECK(bleBytes().find("TCPTRACE=")!=std::string::npos&&bleBytes().find(",R,ACK=42")!=std::string::npos);
+ CHECK(clientBytes().empty()&&gTcpClient.sent.empty());
+ CHECK(tcpTextCommandType("TCPTRACE?")==BLECMD_NONE);
  // Automatic NETSTAT remains useful to BLE but does not add traffic to the server.
  fresh();netSendStatus(true);drain();CHECK(gTcpClient.sent.empty());CHECK(bleBytes().find("NETSTAT=")!=std::string::npos);
  // Counter snapshots are read-only, bounded and unsigned, including a full outbox.

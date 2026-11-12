@@ -1,6 +1,12 @@
 package com.example.idautble
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,6 +54,8 @@ internal fun DiagnosticHistorySection(
     expanded: Boolean,
     onToggle: () -> Unit,
     onRefresh: () -> Unit,
+    loading: Boolean,
+    onExport: () -> Unit,
 ) {
     CollapsibleSettingsSection(
         "PLC HISTORY", events?.let { "${it.size} recent events" } ?: "Critical events from the PLC",
@@ -57,14 +65,25 @@ internal fun DiagnosticHistorySection(
         if (!supported) Text("Connect to a PLC with compatible firmware to retrieve its history.")
         else if (events == null) Text("Waiting for PLC history.")
         else if (events.isEmpty()) Text("No events recorded.")
-        events.orEmpty().forEach { event ->
-            HorizontalDivider()
-            Text("#${event.sequence} · Boot ${event.boot} · +${event.seconds} s", fontFamily = FontFamily.Monospace)
-            Text(diagnosticLabel(event.reason))
+        if (!events.isNullOrEmpty()) {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
+                items(events, key = { it.sequence }) { event ->
+                    HorizontalDivider()
+                    Text("#${event.sequence} · Boot ${event.boot} · +${event.seconds} s", fontFamily = FontFamily.Monospace)
+                    Text(diagnosticLabel(event.reason))
+                }
+            }
         }
-        MaintenanceActionButton(
-            "Refresh history", onRefresh, MaintenanceActionTone.INFO, Modifier.fillMaxWidth(),
-            enabled = supported,
-        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            MaintenanceActionButton(
+                if (loading) "Loading history…" else "Refresh history",
+                onRefresh, MaintenanceActionTone.INFO, Modifier.weight(1f),
+                enabled = supported && !loading,
+            )
+            MaintenanceActionButton(
+                "Export diagnostics", onExport, MaintenanceActionTone.SUCCESS, Modifier.weight(1f),
+                enabled = events != null && !loading,
+            )
+        }
     }
 }

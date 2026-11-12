@@ -394,6 +394,34 @@ class MainActivity : ComponentActivity() {
     private val uiShutdownNotice = mutableStateOf<String?>(null)
     private val uiDiagnosticHistory = mutableStateOf<List<DiagnosticEvent>?>(null)
     private var diagnosticHistorySupported by mutableStateOf(false)
+    private var historyPaged = false
+    private var historyLoading by mutableStateOf(false)
+    private var historyCursor = 0L
+    private var historyRequest = 0
+    private var tcpTraceSupported = false
+    private var firmwareForExport = ""
+    private val uiTcpTrace = mutableStateOf<List<TcpTraceEntry>?>(null)
+    private var pendingDiagnosticsExport: String? = null
+
+    private val diagnosticsExportLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+            val content = pendingDiagnosticsExport
+            pendingDiagnosticsExport = null
+            if (uri == null || content == null) return@registerForActivityResult
+            lifecycleScope.launch {
+                val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        val stream = contentResolver.openOutputStream(uri)
+                            ?: error("Cannot open the diagnostics file.")
+                        stream.bufferedWriter(Charsets.UTF_8).use { it.write(content) }
+                    }
+                }
+                log(
+                    if (result.isSuccess) LogLevel.INFO else LogLevel.ERR,
+                    if (result.isSuccess) "Diagnostics exported." else "Could not export diagnostics.",
+                )
+            }
+        }
     private var hidOutputRequest = 0L
     private var hidOutputExpected: HidOutputConfig? = null
     private val uiIdentityDraft = mutableStateOf("")
@@ -1167,6 +1195,11 @@ class MainActivity : ComponentActivity() {
         uiIdleShutdown.value = IdleShutdownState()
         uiDiagnosticHistory.value = null
         diagnosticHistorySupported = false
+        historyLoading = false
+        historyRequest++
+        tcpTraceSupported = false
+        uiTcpTrace.value = null
+        firmwareForExport = ""
         hidReceiverRequest++
         uiHidReceiver.value = HidReceiverState()
         txTimeout?.let { mainHandler.removeCallbacks(it) }
@@ -1562,14 +1595,87 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun refreshDiagnosticHistory() {
+        if (!diagnosticHistorySupported || historyLoading) return
+        if (!historyPaged) {
+            sendText("HISTORY?", addCrlf = true)
+            return
+        }
+        historyLoading = true
+        historyCursor = 0
+        requestHistoryPage()
+    }
+
+    private fun requestHistoryPage() {
+        val request = ++historyRequest
+        sendText("HISTORY?=$historyCursor", addCrlf = true)
+        mainHandler.postDelayed({
+            if (historyRequest == request && historyLoading) {
+                historyLoading = false
+                log(LogLevel.WARN, "PLC history refresh timed out.")
+            }
+        }, 6000)
+    }
+
+    private fun receiveHistoryPage(text: String) {
+        if (!historyLoading) return
+        val payload = text.substringAfter('=')
+        val next = payload.substringBefore('|').toLongOrNull()?.takeIf { it in 0..0xFFFFFFFFL } ?: return
+        val rows = parseDiagnosticHistory("HISTORY=" + payload.substringAfter('|', "")) ?: return
+        if (historyCursor != 0L && (rows.any { it.sequence >= historyCursor } || next >= historyCursor)) {
+            historyLoading = false
+            return
+        }
+        historyRequest++
+        val previous = if (historyCursor == 0L) emptyList() else uiDiagnosticHistory.value.orEmpty()
+        uiDiagnosticHistory.value = (previous + rows).distinctBy { it.sequence }.take(128)
+        historyCursor = next
+        if (next == 0L || rows.isEmpty() || uiDiagnosticHistory.value.orEmpty().size >= 128) {
+            historyLoading = false
+        } else requestHistoryPage()
+    }
+
+    private fun exportDiagnostics() {
+        val status = networkSession.state.status
+        pendingDiagnosticsExport = buildString {
+            appendLine("PLC diagnostics · ${java.time.Instant.now()}")
+            appendLine("App ${packageManager.getPackageInfo(packageName, 0).versionName}")
+            appendLine("Firmware ${firmwareForExport.ifEmpty { "unknown" }}")
+            status?.let { appendLine("Network snapshot: Wi-Fi=${it.wifiEnabled}, link=${it.linkUp}, TCP=${it.tcpUp}, pending=${it.pendingEvents}") }
+            appendLine()
+            appendLine("PLC history (newest first)")
+            uiDiagnosticHistory.value.orEmpty().forEach {
+                appendLine("#${it.sequence}  boot=${it.boot}  +${it.seconds}s  ${it.reason}")
+            }
+            appendLine()
+            appendLine("TCP trace (newest first, socket writes are not application acknowledgements)")
+            uiTcpTrace.value.orEmpty().forEach {
+                val direction = when (it.direction) {
+                    "T" -> "TX"
+                    "R" -> "RX"
+                    "U" -> "TCP UP"
+                    else -> "TCP DOWN"
+                }
+                appendLine("#${it.sequence}  ${it.dateTime.ifEmpty { "Time unavailable" }}  $direction  ${it.detail}")
+            }
+        }
+        diagnosticsExportLauncher.launch("plc-diagnostics.txt")
+    }
+
     private fun handleProtocolControl(message: PlcMessage) {
         val text = message.text
         if (message.acknowledged && text.startsWith("FW=")) {
             val capabilities = text.split(';')
+            firmwareForExport = capabilities.first().substringAfter('=')
+            historyPaged = "HISTORYPAGE=1" in capabilities
+            if (!tcpTraceSupported && "TCPTRACE=1" in capabilities) {
+                tcpTraceSupported = true
+                sendText("TCPTRACE?", addCrlf = true)
+            }
             val supportsHistory = "HISTORY=1" in capabilities
             if (supportsHistory && !diagnosticHistorySupported) {
                 diagnosticHistorySupported = true
-                sendText("HISTORY?", addCrlf = true)
+                refreshDiagnosticHistory()
             }
             maintenanceLeaseSupported = "MAINTLEASE=1" in capabilities
             maintenanceReleaseSupported = "MAINTRELEASE=1" in capabilities
@@ -1586,6 +1692,16 @@ class MainActivity : ComponentActivity() {
         handlePowerMessage(message)
         if (message.acknowledged && text.startsWith("HISTORY=")) {
             parseDiagnosticHistory(text)?.let { uiDiagnosticHistory.value = it }
+        }
+        if (message.acknowledged && text.startsWith("HISTORYPAGE=")) receiveHistoryPage(text)
+        if (message.acknowledged && text.startsWith("TCPTRACE=")) {
+            parseTcpTrace(text)?.let { incoming ->
+                uiTcpTrace.value = (incoming + uiTcpTrace.value.orEmpty()).distinctBy { it.sequence }
+                    .sortedByDescending { it.sequence }.take(128)
+            }
+        }
+        if (message.acknowledged && text.startsWith("NETSTAT=") && tcpTraceSupported && !statusRefresh.otaActive) {
+            sendText("TCPTRACE?", addCrlf = true)
         }
         statusRefresh.otaMessage(text)
         networkSession.setPaused(statusRefresh.otaActive)
@@ -2476,7 +2592,10 @@ class MainActivity : ComponentActivity() {
                     shutdownNotice = uiShutdownNotice.value,
                     diagnosticHistory = uiDiagnosticHistory.value,
                     diagnosticHistorySupported = diagnosticHistorySupported,
-                    onRefreshDiagnosticHistory = { sendText("HISTORY?", addCrlf = true) },
+                    onRefreshDiagnosticHistory = ::refreshDiagnosticHistory,
+                    historyLoading = historyLoading,
+                    tcpTrace = uiTcpTrace.value,
+                    onExportDiagnostics = ::exportDiagnostics,
                     onCfgQuery = { sendText("CFG?", addCrlf = true) },
                     onSetCfg = {
                         sendText("CFG=PFXP=${uiPfxP.value};PFXU=${uiPfxU.value}", addCrlf = true)
@@ -2647,6 +2766,9 @@ private fun PlcBleTesterLandscape(
     diagnosticHistory: List<DiagnosticEvent>?,
     diagnosticHistorySupported: Boolean,
     onRefreshDiagnosticHistory: () -> Unit,
+    historyLoading: Boolean,
+    tcpTrace: List<TcpTraceEntry>?,
+    onExportDiagnostics: () -> Unit,
     onCfgQuery: () -> Unit,
     onSetCfg: () -> Unit,
     onSetRtc: () -> Unit,
@@ -3121,7 +3243,8 @@ private fun PlcBleTesterLandscape(
                                             TerminalSection.PLC_HISTORY -> {
                                                 DiagnosticHistorySection(
                                                     diagnosticHistory, diagnosticHistorySupported, expanded,
-                                                    onToggle, onRefreshDiagnosticHistory,
+                                                    onToggle, onRefreshDiagnosticHistory, historyLoading,
+                                                    onExportDiagnostics,
                                                 )
                                             }
                                             TerminalSection.RTC -> {
@@ -3291,7 +3414,7 @@ private fun PlcBleTesterLandscape(
                 }
             } else if (selectedTab == 1) {
 
-                key("NETWORK") { NetworkScreen(networkSession, terminalTextSize, logColors, shutdownNotice) }
+                key("NETWORK") { NetworkScreen(networkSession, terminalTextSize, logColors, shutdownNotice, tcpTrace) }
             } else {
                 OtaScreen(
                     onSendOta = onSendOta,
