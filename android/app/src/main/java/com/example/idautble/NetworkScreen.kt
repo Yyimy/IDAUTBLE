@@ -521,10 +521,9 @@ private fun NetworkConfigurationPanel(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
-            itemVerticalAlignment = Alignment.CenterVertically,
         ) {
-            NetworkHeading("PLC CONFIGURATION")
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(Modifier.align(Alignment.CenterVertically)) { NetworkHeading("PLC CONFIGURATION") }
+            Row(Modifier.align(Alignment.CenterVertically), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 OutlinedButton(
                     onClick = session::readConfiguration,
                     enabled = controls,
