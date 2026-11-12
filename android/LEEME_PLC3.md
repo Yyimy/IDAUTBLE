@@ -41,12 +41,11 @@ Los comandos pendientes de autorización se cancelan al cerrar el diálogo o des
 ## Red
 
 En horizontal y con al menos 700 dp de ancho, NETWORK se divide al 50 %. La
-columna izquierda contiene **LIVE CONNECTION** y **PLC CONFIGURATION**, y la
-derecha se dedica a **TCP MONITOR**. Las dos columnas se desplazan por separado.
-En pantallas estrechas se apilan. Wi-Fi, IP, servidor TCP y red avanzada se abren
-en tarjetas plegables dentro de **PLC CONFIGURATION**. Wi-Fi, IP y servidor TCP
-empiezan abiertos. Los ajustes avanzados requieren firmware compatible y su tarjeta
-empieza plegada. **Read configuration** y **Save configuration** están en la cabecera.
+columna izquierda contiene **LIVE CONNECTION**, la fila con **Read configuration** y
+**Save configuration**, y las tarjetas de ajustes. La derecha se dedica a **TCP MONITOR**.
+Las dos columnas se desplazan por separado. En pantallas estrechas se apilan. Wi-Fi,
+IP, servidor TCP y red avanzada se abren en tarjetas independientes y plegadas por
+defecto. Los ajustes avanzados requieren firmware compatible.
 
 Con el tamaño de letra de Terminal, **TCP MONITOR** muestra la última conexión,
 la última desconexión y su motivo, y las cinco últimas líneas de texto recibidas
