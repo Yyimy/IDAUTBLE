@@ -86,7 +86,7 @@ private const val ESC: Byte = 0x1B
 private const val CR: Byte = 0x0D
 private const val LF: Byte = 0x0A
 
-private class LogColors(dark: Boolean, val neutralText: Color) {
+internal class LogColors(dark: Boolean, val neutralText: Color) {
     val txBlue = if (dark) Color(0xFF90CAF9) else Color(0xFF1E88E5)
     val rxGreen = if (dark) Color(0xFFA5D6A7) else Color(0xFF2E7D32)
     val asciiPurple = if (dark) Color(0xFFCE93D8) else Color(0xFF7B1FA2)
@@ -3198,7 +3198,7 @@ private fun PlcBleTesterLandscape(
                 }
             } else if (selectedTab == 1) {
 
-                key("NETWORK") { NetworkScreen(session = networkSession) }
+                key("NETWORK") { NetworkScreen(networkSession, terminalTextSize, logColors) }
             } else {
                 OtaScreen(
                     onSendOta = onSendOta,
