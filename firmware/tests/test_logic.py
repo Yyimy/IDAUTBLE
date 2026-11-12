@@ -81,7 +81,8 @@ void powerCut(const char* reason){gCutRequested=true;cutReason=reason;}
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
 outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
 tcp_monitor=(sketch/'TcpMonitor.h').read_text().replace('#pragma once','')
-names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','setIdleMinutes','appendTcpMonitor','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
+history_header=(sketch/'DiagnosticHistory.h').read_text().replace('#pragma once','')
+names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','recordDiagnostic','saveDiagnosticHistory','recordTcpDown','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','setIdleMinutes','appendTcpMonitor','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
 using std::min;
@@ -127,6 +128,10 @@ const char* OTA_AP_PASS=nullptr;
 uint32_t gTcpPingSeconds=10,gTcpTimeoutSeconds=20,gLastTcpRxMs=0,gLastTcpPingMs=0;
 bool gTcpPongSeen=false,failUIntWrite=false;
 TcpMonitor gTcpMonitor;
+DiagnosticHistory gDiagnosticHistory;
+bool gHistoryDirty=false,gHistoryWriteAttempted=false;
+uint32_t gHistoryLastWriteMs=0,gBootCount=0;
+std::map<std::string,std::vector<uint8_t>> storedBlobs;
 std::map<std::string,String> storedSettings;
 std::map<std::string,uint32_t> storedUIntSettings;
 struct Preferences {
@@ -135,8 +140,9 @@ struct Preferences {
  uint32_t getUInt(const char*k,uint32_t def){auto it=storedUIntSettings.find(k);return it==storedUIntSettings.end()?def:it->second;}
  size_t putUInt(const char*k,uint32_t value){if(failUIntWrite)return 0;storedUIntSettings[k]=value;return sizeof(value);}
  size_t putString(const char*k,const String&v){storedSettings[k]=v;return v.length();}
- bool getBool(const char*,bool def){return def;}size_t getBytesLength(const char*){return 0;}
- size_t getBytes(const char*,void*,size_t){return 0;}
+ bool getBool(const char*,bool def){return def;}size_t getBytesLength(const char*k){return storedBlobs.count(k)?storedBlobs[k].size():0;}
+ size_t getBytes(const char*k,void*out,size_t cap){auto n=getBytesLength(k);if(!n||n>cap)return 0;memcpy(out,storedBlobs[k].data(),n);return n;}
+ size_t putBytes(const char*k,const void*data,size_t size){const auto*p=(const uint8_t*)data;storedBlobs[k]={p,p+size};return size;}
 };
 struct SerialMock {void printf(const char*,...){}} Serial;
 uint32_t esp_random(){return 123456789;}
@@ -177,7 +183,7 @@ void reading(const String &pallet, const String &location, uint32_t) { readings.
 '''
 # Types require integer definitions and String prototypes are declared by Arduino in firmware.
 includes=shim[:shim.index('using std::size_t;')]
-body=includes+types+'\n'+outbox_storage+'\n'+tcp_monitor+'\n'+shim[shim.index('using std::size_t;'):]+'\n'
+body=includes+types+'\n'+outbox_storage+'\n'+tcp_monitor+'\n'+history_header+'\n'+shim[shim.index('using std::size_t;'):]+'\n'
 body+='\n'.join(function(n).split('{',1)[0]+';' for n in names)+'\n'
 body+='\n'.join(function(n) for n in names)
 body+=r'''
@@ -261,6 +267,18 @@ int main(){
  CHECK(snapshot.find(";TCPMON=1;TCPUP=2;TCPDOWN=PONG_TIMEOUT,4;TCPRX=1,41434B3D34323B") == 0);
  CHECK(snapshot.find("+|2,504F4E47") != std::string::npos);
  gTcpMonitor=TcpMonitor{};
+
+ // Critical diagnostics survive boot, stay bounded and batch routine writes.
+ nowMs=1000;gBootCount=7;
+ for(int i=0;i<10;++i)recordDiagnostic("TCP_CONNECTED");
+ CHECK(gDiagnosticHistory.count==8&&gDiagnosticHistory.sequence==10&&gDiagnosticHistory.valid());
+ saveDiagnosticHistory(false);CHECK(!gHistoryDirty);
+ nowMs=3000;recordDiagnostic("PONG_TIMEOUT");saveDiagnosticHistory(false);CHECK(gHistoryDirty);
+ recordDiagnostic("INACTIVITY_1_MIN");saveDiagnosticHistory(true);CHECK(!gHistoryDirty);
+ gDiagnosticHistory=DiagnosticHistory{};runtimeLoad();
+ CHECK(gDiagnosticHistory.sequence==12&&gDiagnosticHistory.newest(0).boot==7);
+ CHECK(std::string(gDiagnosticHistory.newest(1).reason)=="PONG_TIMEOUT");
+ storedBlobs.erase("diag_history");gDiagnosticHistory=DiagnosticHistory{};
 
  // TCP settings are validated, stored together and recovered without resetting live settings on write failure.
  CHECK(validTcpTiming(5,6));CHECK(validTcpTiming(120,300));

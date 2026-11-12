@@ -392,6 +392,8 @@ class MainActivity : ComponentActivity() {
     private val uiIdleShutdown = mutableStateOf(IdleShutdownState())
     private var idleShutdownRequest = 0
     private val uiShutdownNotice = mutableStateOf<String?>(null)
+    private val uiDiagnosticHistory = mutableStateOf<List<DiagnosticEvent>?>(null)
+    private var diagnosticHistorySupported by mutableStateOf(false)
     private var hidOutputRequest = 0L
     private var hidOutputExpected: HidOutputConfig? = null
     private val uiIdentityDraft = mutableStateOf("")
@@ -1163,6 +1165,8 @@ class MainActivity : ComponentActivity() {
         uiReaderTimeout.value = ReaderTimeoutState()
         idleShutdownRequest++
         uiIdleShutdown.value = IdleShutdownState()
+        uiDiagnosticHistory.value = null
+        diagnosticHistorySupported = false
         hidReceiverRequest++
         uiHidReceiver.value = HidReceiverState()
         txTimeout?.let { mainHandler.removeCallbacks(it) }
@@ -1562,6 +1566,11 @@ class MainActivity : ComponentActivity() {
         val text = message.text
         if (message.acknowledged && text.startsWith("FW=")) {
             val capabilities = text.split(';')
+            val supportsHistory = "HISTORY=1" in capabilities
+            if (supportsHistory && !diagnosticHistorySupported) {
+                diagnosticHistorySupported = true
+                sendText("HISTORY?", addCrlf = true)
+            }
             maintenanceLeaseSupported = "MAINTLEASE=1" in capabilities
             maintenanceReleaseSupported = "MAINTRELEASE=1" in capabilities
         }
@@ -1575,6 +1584,9 @@ class MainActivity : ComponentActivity() {
         handleHidOutputMessage(message)
         handleReaderTimeoutMessage(message)
         handlePowerMessage(message)
+        if (message.acknowledged && text.startsWith("HISTORY=")) {
+            parseDiagnosticHistory(text)?.let { uiDiagnosticHistory.value = it }
+        }
         statusRefresh.otaMessage(text)
         networkSession.setPaused(statusRefresh.otaActive)
         if (message.acknowledged && text.startsWith("COUNTERS=")) {
@@ -2462,6 +2474,9 @@ class MainActivity : ComponentActivity() {
                     idleShutdown = uiIdleShutdown.value,
                     onSaveIdleShutdown = ::saveIdleShutdown,
                     shutdownNotice = uiShutdownNotice.value,
+                    diagnosticHistory = uiDiagnosticHistory.value,
+                    diagnosticHistorySupported = diagnosticHistorySupported,
+                    onRefreshDiagnosticHistory = { sendText("HISTORY?", addCrlf = true) },
                     onCfgQuery = { sendText("CFG?", addCrlf = true) },
                     onSetCfg = {
                         sendText("CFG=PFXP=${uiPfxP.value};PFXU=${uiPfxU.value}", addCrlf = true)
@@ -2629,6 +2644,9 @@ private fun PlcBleTesterLandscape(
     idleShutdown: IdleShutdownState,
     onSaveIdleShutdown: (Int) -> Unit,
     shutdownNotice: String?,
+    diagnosticHistory: List<DiagnosticEvent>?,
+    diagnosticHistorySupported: Boolean,
+    onRefreshDiagnosticHistory: () -> Unit,
     onCfgQuery: () -> Unit,
     onSetCfg: () -> Unit,
     onSetRtc: () -> Unit,
@@ -3098,6 +3116,12 @@ private fun PlcBleTesterLandscape(
                                                     idleShutdown, shutdownNotice,
                                                     expanded, onToggle,
                                                     onSaveIdleShutdown,
+                                                )
+                                            }
+                                            TerminalSection.PLC_HISTORY -> {
+                                                DiagnosticHistorySection(
+                                                    diagnosticHistory, diagnosticHistorySupported, expanded,
+                                                    onToggle, onRefreshDiagnosticHistory,
                                                 )
                                             }
                                             TerminalSection.RTC -> {
