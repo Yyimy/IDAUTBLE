@@ -500,6 +500,7 @@ private fun tcpMonitorAge(seconds: Long) = when {
     else -> "${seconds / 86400} d ago"
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun NetworkConfigurationPanel(
     state: NetworkUiState,
@@ -509,31 +510,70 @@ private fun NetworkConfigurationPanel(
     val draft = state.draft
     val errors = remember(draft) { networkDraftErrors(draft) }
     val focus = LocalFocusManager.current
-    val good = Color(0xFF2E7D32)
     val warning = Color(0xFFB66A00)
     val controls = state.available && !state.controlsBusy
     val editable = state.canEdit && state.config != null
     var wifiExpanded by rememberSaveable { mutableStateOf(true) }
-    var ipExpanded by rememberSaveable { mutableStateOf(false) }
-    var serverExpanded by rememberSaveable { mutableStateOf(false) }
-    Column(
-        modifier,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        NetworkPanel(Modifier.fillMaxWidth()) {
+    var ipExpanded by rememberSaveable { mutableStateOf(true) }
+    var serverExpanded by rememberSaveable { mutableStateOf(true) }
+    NetworkPanel(modifier) {
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
+        ) {
             NetworkHeading("PLC CONFIGURATION")
-            Text(
-                when {
-                    state.config == null ->
-                        "Reading saved settings over Bluetooth works with WiFi disabled."
-                    state.dirty -> "Unsaved edits · connection indicators still show the PLC state."
-                    state.saved -> "Saved and confirmed by PLC."
-                    else -> "Saved settings loaded from PLC."
-                },
-                fontSize = 11.sp,
-                color = if (state.dirty) warning else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedButton(
+                    onClick = session::readConfiguration,
+                    enabled = controls,
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        if (state.pending?.operation == NetworkOperation.READ_CONFIG) "Reading…"
+                        else "Read configuration",
+                        fontSize = 11.sp,
+                    )
+                }
+                Button(
+                    onClick = {
+                        focus.clearFocus()
+                        session.save()
+                    },
+                    enabled = controls && state.dirty && errors.isEmpty(),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                ) {
+                    Text(
+                        if (state.pending?.operation == NetworkOperation.SAVE) "Saving…"
+                        else "Save configuration",
+                        fontSize = 11.sp,
+                    )
+                }
+            }
         }
+        Text(
+            when {
+                state.config == null -> "Reading saved settings over Bluetooth works with WiFi disabled."
+                state.dirty -> "Unsaved edits · connection indicators still show the PLC state."
+                state.saved -> "Saved and confirmed by PLC."
+                else -> "Saved settings loaded from PLC."
+            },
+            fontSize = 11.sp,
+            color = if (state.dirty) warning else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(state.notice, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        state.error?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
+        if (state.dirty) {
+            errors.forEach { Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.error) }
+            TextButton(onClick = session::discardEdits, enabled = controls) {
+                Text("Discard edits", fontSize = 11.sp)
+            }
+        }
+        HorizontalDivider(Modifier.padding(vertical = 2.dp))
         CollapsibleSettingsSection(
             "WI-FI", draft.ssid.ifBlank { "Network name and password" },
             wifiExpanded, { wifiExpanded = !wifiExpanded },
@@ -634,62 +674,6 @@ private fun NetworkConfigurationPanel(
                     session.edit { it.copy(port = value) }
                 }
             }
-        }
-        NetworkPanel(Modifier.fillMaxWidth()) {
-            if (state.dirty)
-                errors.forEach { Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.error) }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-            ) {
-                Button(
-                    onClick = session::readConfiguration,
-                    enabled = controls,
-                    shape = RoundedCornerShape(6.dp),
-                    contentPadding = PaddingValues(10.dp, 4.dp),
-                    colors =
-                        ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFFFC107),
-                            contentColor = Color(0xFF212121),
-                        ),
-                ) {
-                    Text(
-                        if (state.pending?.operation == NetworkOperation.READ_CONFIG) "Reading…"
-                        else "Read configuration",
-                        fontSize = 11.sp,
-                    )
-                }
-                if (state.dirty)
-                    OutlinedButton(
-                        onClick = session::discardEdits,
-                        enabled = controls,
-                        shape = RoundedCornerShape(6.dp),
-                        contentPadding = PaddingValues(10.dp, 4.dp),
-                    ) {
-                        Text("Discard edits", fontSize = 11.sp)
-                    }
-            }
-            Button(
-                onClick = {
-                    focus.clearFocus()
-                    session.save()
-                },
-                enabled = controls && state.dirty && errors.isEmpty(),
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(6.dp),
-                colors =
-                    ButtonDefaults.buttonColors(
-                        containerColor = if (state.dirty) Color(0xFFF57C00) else good
-                    ),
-            ) {
-                Text(
-                    if (state.pending?.operation == NetworkOperation.SAVE) "Waiting for confirmation…"
-                    else "Save configuration",
-                    fontSize = 12.sp,
-                )
-            }
-            Text(state.notice, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            state.error?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
         }
         state.tcpAdvanced?.let {
             TcpAdvancedSettings(it, controls, session::saveTcpAdvanced)
