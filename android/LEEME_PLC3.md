@@ -40,14 +40,14 @@ Los comandos pendientes de autorización se cancelan al cerrar el diálogo o des
 
 ## Red
 
-NETWORK muestra **PLC CONFIGURATION** a la izquierda (50 %) y **LIVE CONNECTION**
-a la derecha (50 %) en horizontal con al menos 700 dp de ancho. Las columnas se
-pueden desplazar por separado. En vertical o con menos anchura, la configuración
-aparece encima de la información de conexión. Los ajustes de Wi-Fi, IP, servidor TCP
-y red avanzada se abren en tarjetas plegables. Los ajustes avanzados aparecen en
-los PLC que los admiten y su tarjeta empieza plegada.
+En horizontal y con al menos 700 dp de ancho, NETWORK se divide al 50 %. La
+columna izquierda contiene **LIVE CONNECTION** y **PLC CONFIGURATION**, y la
+derecha se dedica a **TCP MONITOR**. Las dos columnas se desplazan por separado.
+En pantallas estrechas se apilan. Wi-Fi, IP, servidor TCP y red avanzada se abren
+en tarjetas plegables. Los ajustes avanzados requieren firmware compatible y su
+tarjeta empieza plegada.
 
-Debajo de **LIVE CONNECTION**, **TCP MONITOR** muestra la última conexión,
+Con el tamaño de letra de Terminal, **TCP MONITOR** muestra la última conexión,
 la última desconexión y su motivo, y las cinco últimas líneas de texto recibidas
 por TCP. Las líneas de más de 24 caracteres se muestran abreviadas. El PLC conserva
 el historial en memoria hasta reiniciar y lo devuelve solo por mantenimiento BLE

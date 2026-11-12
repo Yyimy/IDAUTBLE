@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -238,7 +240,7 @@ private fun NetworkPanel(
 }
 
 @Composable
-fun NetworkScreen(session: NetworkSession) {
+internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, logColors: LogColors) {
     val state = session.state
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     DisposableEffect(session) {
@@ -273,28 +275,23 @@ fun NetworkScreen(session: NetworkSession) {
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             if (landscape && maxWidth >= 700.dp) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    NetworkConfigurationPanel(
-                        state,
-                        session,
-                        Modifier.weight(1f).fillMaxHeight(),
-                        scrollable = true,
-                    )
                     Column(
                         Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         LiveConnectionPanel(state, session, now, Modifier.fillMaxWidth())
-                        TcpMonitorPanel(state, now)
+                        NetworkConfigurationPanel(state, session, Modifier.fillMaxWidth())
                     }
+                    TcpMonitorPanel(state, now, textSize, logColors, Modifier.weight(1f).fillMaxHeight())
                 }
             } else {
                 Column(
                     Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    NetworkConfigurationPanel(state, session, Modifier.fillMaxWidth())
                     LiveConnectionPanel(state, session, now, Modifier.fillMaxWidth())
-                    TcpMonitorPanel(state, now)
+                    NetworkConfigurationPanel(state, session, Modifier.fillMaxWidth())
+                    TcpMonitorPanel(state, now, textSize, logColors, Modifier.fillMaxWidth().height(320.dp))
                 }
             }
         }
@@ -418,39 +415,68 @@ private fun LiveConnectionPanel(
     }
 }
 
+private data class TcpMonitorEntry(val ageSeconds: Long, val label: String, val message: String, val color: Color)
+
 @Composable
-private fun TcpMonitorPanel(state: NetworkUiState, now: Long) {
+private fun TcpMonitorPanel(
+    state: NetworkUiState,
+    now: Long,
+    textSize: TerminalTextSize,
+    colors: LogColors,
+    modifier: Modifier,
+) {
     val snapshot = state.status?.tcpMonitor
-    val receivedAt = state.statusReceivedAt
-    val snapshotAge = receivedAt?.let { (now - it).coerceAtLeast(0) / 1000 } ?: 0
-    var expanded by rememberSaveable { mutableStateOf(true) }
-    CollapsibleSettingsSection(
-        "TCP MONITOR", "Server replies and connection history",
-        expanded, { expanded = !expanded },
-    ) {
-        if (snapshot == null) {
-            Text(
-                if (state.status == null) "Waiting for network status."
-                else "TCP monitoring requires compatible PLC firmware.",
-            )
-            return@CollapsibleSettingsSection
-        }
-        if (!state.available || snapshotAge > 15) Text("Last available snapshot")
-        NetworkValue(
-            "Last connection",
-            snapshot.connectionAgeSeconds?.let { tcpMonitorAge(it + snapshotAge) } ?: "—",
-        )
-        NetworkValue(
-            "Last disconnection",
-            snapshot.disconnection?.let {
-                "${tcpDisconnectLabel(it.reason)} · ${tcpMonitorAge(it.ageSeconds + snapshotAge)}"
-            } ?: "—",
-        )
-        HorizontalDivider()
-        NetworkHeading("SERVER REPLIES")
-        if (snapshot.replies.isEmpty()) Text("No replies received.")
-        for (reply in snapshot.replies) {
-            NetworkValue(tcpMonitorAge(reply.ageSeconds + snapshotAge), reply.text + if (reply.truncated) "…" else "")
+    val snapshotAge = state.statusReceivedAt?.let { (now - it).coerceAtLeast(0) / 1000 } ?: 0
+    val entries = remember(snapshot, colors) {
+        buildList {
+            snapshot?.replies?.forEach { reply ->
+                add(TcpMonitorEntry(reply.ageSeconds, "↓ RX", reply.text + if (reply.truncated) "…" else "", colors.rxGreen))
+            }
+            snapshot?.connectionAgeSeconds?.let {
+                add(TcpMonitorEntry(it, "TCP UP", "Connected to server", colors.txBlue))
+            }
+            snapshot?.disconnection?.let {
+                add(TcpMonitorEntry(it.ageSeconds, "TCP DOWN", tcpDisconnectLabel(it.reason), colors.errRed))
+            }
+        }.sortedBy { it.ageSeconds }
+    }
+    MaintenanceCard(modifier) {
+        Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            NetworkHeading("TCP MONITOR")
+            val status = when {
+                state.status == null -> "Waiting for network status."
+                snapshot == null -> "TCP monitoring requires compatible PLC firmware."
+                !state.available || snapshotAge > 15 -> "Last available snapshot"
+                else -> "Server replies and connection events"
+            }
+            Text(status, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            HorizontalDivider()
+            if (snapshot != null && entries.isEmpty()) Text("No TCP activity recorded.")
+            LazyColumn(
+                Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(entries) { entry ->
+                    MaintenanceCard(Modifier.fillMaxWidth(), containerColor = entry.color.copy(alpha = 0.06f)) {
+                        Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                            Text(
+                                "${tcpMonitorAge(entry.ageSeconds + snapshotAge)}  ${entry.label}",
+                                color = entry.color,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = textSize.fontSizeSp.sp,
+                                lineHeight = textSize.lineHeightSp.sp,
+                            )
+                            Text(
+                                entry.message,
+                                color = colors.neutralText,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = textSize.fontSizeSp.sp,
+                                lineHeight = textSize.lineHeightSp.sp,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -479,7 +505,6 @@ private fun NetworkConfigurationPanel(
     state: NetworkUiState,
     session: NetworkSession,
     modifier: Modifier = Modifier,
-    scrollable: Boolean = false,
 ) {
     val draft = state.draft
     val errors = remember(draft) { networkDraftErrors(draft) }
@@ -492,7 +517,7 @@ private fun NetworkConfigurationPanel(
     var ipExpanded by rememberSaveable { mutableStateOf(false) }
     var serverExpanded by rememberSaveable { mutableStateOf(false) }
     Column(
-        modifier.then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier),
+        modifier,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         NetworkPanel(Modifier.fillMaxWidth()) {
