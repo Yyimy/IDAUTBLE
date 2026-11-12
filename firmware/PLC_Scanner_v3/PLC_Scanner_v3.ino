@@ -145,7 +145,7 @@ const uint8_t CMD_O[4] = {0x1B, 0x4F, 0x0D, 0x0A};  // Apagar relé motor
 // ============================================================================
 void sendFrame(const uint8_t *data, size_t len);
 static bool queueTargetFrame(const uint8_t *data, size_t len, const HeightTiming *timing,
-                             TxTarget target, uint32_t session);
+                             TxTarget target, uint32_t session, bool heartbeat = false);
 static void sendCommandReply(const uint8_t *data, size_t len);
 static void sendBleReply(const uint8_t *data, size_t len);
 static ReplyContext gReplyContext{TX_BOTH, 0};
@@ -273,6 +273,7 @@ WiFiClient gTcpClient;
 static unsigned long gLastTcpAttempt = 0;
 static unsigned long gLastTcpActivity = 0;
 static uint32_t gTcpPingSeconds = 10, gTcpTimeoutSeconds = 20;
+static HeartbeatMessages gHeartbeatMessages{"PING", "PONG"};
 static const unsigned long TCP_RETRY_MS = 3000;
 
 // -------------------------------
@@ -1183,9 +1184,15 @@ static void recordTcpTrace(char direction, const char *detail, bool heartbeat) {
   else gTcpTraffic.add(entry);
 }
 
+static bool heartbeatReplyMatches(const char *line) {
+  const char *expected = gHeartbeatMessages.response;
+  return !strcmp(line, expected) ||
+         (!strcmp(expected, "PONG") && !strncmp(line, "PONG;", 5));
+}
+
 static void recordTcpReceived(const char *line, size_t size) {
-  if (!strcmp(line, "PONG") || !strncmp(line, "PONG;", 5)) {
-    recordTcpTrace('R', "PONG", true);
+  if (heartbeatReplyMatches(line)) {
+    recordTcpTrace('R', !strcmp(gHeartbeatMessages.response, "PONG") ? "PONG" : "HEARTBEAT RX", true);
     return;
   }
   uint32_t id;
@@ -1200,9 +1207,9 @@ static void recordTcpReceived(const char *line, size_t size) {
   recordTcpTrace('R', detail);
 }
 
-static void recordTcpSent(const uint8_t *data, size_t size, uint32_t eventId) {
-  if (size == 6 && !memcmp(data, "PING\r\n", 6)) {
-    recordTcpTrace('T', "PING", true);
+static void recordTcpSent(const uint8_t *data, size_t size, uint32_t eventId, bool heartbeat) {
+  if (heartbeat) {
+    recordTcpTrace('T', size == 6 && !memcmp(data, "PING\r\n", 6) ? "PING" : "HEARTBEAT TX", true);
     return;
   }
   if (size >= 10 && !memcmp(data, "CONNECTED;", 10)) {
@@ -1274,7 +1281,7 @@ static void tcpPollRx() {
         line[used] = 0;
         gTcpMonitor.receive(millis(), line, used);
         recordTcpReceived(line, used);
-        if (!strcmp(line, "PONG") || !strncmp(line, "PONG;", 5)) {
+        if (heartbeatReplyMatches(line)) {
           gLastTcpRxMs = millis();
           gTcpPongSeen = true;
         } else {
@@ -1314,8 +1321,9 @@ static void tcpWatchdog() {
   if (!gHeartbeatEnabled) return;
   if (millis() - gLastTcpPingMs >= gTcpPingSeconds * 1000U) {
     gLastTcpPingMs = millis();
-    const uint8_t ping[] = {'P', 'I', 'N', 'G', 13, 10};
-    queueTargetFrame(ping, sizeof(ping), nullptr, TX_TCP_ONLY, gTcpSession.load());
+    char request[sizeof(gHeartbeatMessages.request) + 2];
+    const int len = snprintf(request, sizeof(request), "%s\r\n", gHeartbeatMessages.request);
+    queueTargetFrame((const uint8_t *)request, size_t(len), nullptr, TX_TCP_ONLY, gTcpSession.load(), true);
   }
   if (millis() - gLastTcpRxMs > gTcpTimeoutSeconds * 1000U) {
     recordTcpDown("PONG_TIMEOUT");
@@ -1638,11 +1646,12 @@ static void logHeightRejected(const BleCmd &cmd, const char *reason) {
 
 static bool queueTargetFrame(const uint8_t *data, size_t len,
                              const HeightTiming *heightTiming, TxTarget target,
-                             uint32_t session) {
+                             uint32_t session, bool heartbeat) {
   if (!gTxQueue || !data || !len || len > MAX_FRAME_BYTES) return false;
   TxPacket p = {};
   p.len = len;
   p.target = target;
+  p.heartbeat = heartbeat;
   p.session = target == TX_BLE_ONLY ? session : gBleSession.load();
   p.tcpSession = target == TX_TCP_ONLY ? session : gTcpSession.load();
   memcpy(p.data, data, len);
@@ -1780,6 +1789,19 @@ static void cfgSendCurrent() {
 // RESPUESTAS NET
 // ============================================================================
 
+static String heartbeatValues() {
+  String value;
+  static constexpr char hex[] = "0123456789ABCDEF";
+  for (const char *message : {gHeartbeatMessages.request, gHeartbeatMessages.response}) {
+    if (value.length()) value += ',';
+    for (const char *c = message; *c; ++c) {
+      value += hex[uint8_t(*c) >> 4];
+      value += hex[uint8_t(*c) & 15];
+    }
+  }
+  return value;
+}
+
 static void netSendCurrent() {
   String s;
   s.reserve(160);
@@ -1794,7 +1816,8 @@ static void netSendCurrent() {
   s += ";MASK=" + gNetMask;
   s += ";HOST=" + gNetHost;
   s += ";PORT=" + String(gNetPort);
-  if (gReplyContext.target == TX_BLE_ONLY) s += ";TCPADV=" + tcpAdvancedValues();
+  if (gReplyContext.target == TX_BLE_ONLY)
+    s += ";TCPADV=" + tcpAdvancedValues() + ";HBMSG=" + heartbeatValues();
   s += "\r\n";
 
   sendCommandReply((const uint8_t *)s.c_str(), s.length());
@@ -3324,6 +3347,34 @@ static BleCmdType tcpTextCommandType(const String &s) {
   return BLECMD_NONE;
 }
 
+static bool validHeartbeatMessages(const HeartbeatMessages &messages) {
+  for (const char *message : {messages.request, messages.response}) {
+    const char *end = static_cast<const char *>(memchr(message, 0, sizeof(messages.request)));
+    if (!end || end == message) return false;
+    for (const char *c = message; c < end; ++c)
+      if (*c < 32 || *c > 126) return false;
+  }
+  return tcpTextCommandType(String(messages.response)) == BLECMD_NONE;
+}
+
+static bool decodeHeartbeatMessage(const String &hex, char (&out)[17]) {
+  if (!hex.length() || hex.length() > 32 || hex.length() % 2) return false;
+  auto nibble = [](char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  for (size_t i = 0; i < hex.length(); i += 2) {
+    const int high = nibble(hex[i]), low = nibble(hex[i + 1]);
+    if (high < 0 || low < 0) return false;
+    const int value = high * 16 + low;
+    if (value < 32 || value > 126) return false;
+    out[i / 2] = char(value);
+  }
+  out[hex.length() / 2] = 0;
+  return true;
+}
+
 static bool maintenanceAuthorized() {
 #if REQUIRE_MAINT_AUTH
   return plcHid::authorized(gReplyContext.session);
@@ -3376,7 +3427,15 @@ static void runtimeLoad() {
     LegacyDiagnosticHistory legacy;
     if (!migrate(untimed)) migrate(legacy);
   }
-  const uint32_t tcpAdvanced = p.getUInt("tcp_adv", 0);
+  uint32_t tcpAdvanced = p.getUInt("tcp_adv", 0);
+  gHeartbeatMessages = HeartbeatMessages{"PING", "PONG"};
+  StoredTcpAdvanced storedTcp{};
+  if (p.getBytes("tcp_adv2", &storedTcp, sizeof(storedTcp)) == sizeof(storedTcp) &&
+      validTcpTiming((storedTcp.packed >> 2) & 0x7F, storedTcp.packed >> 9) &&
+      validHeartbeatMessages(storedTcp.messages)) {
+    tcpAdvanced = storedTcp.packed;
+    gHeartbeatMessages = storedTcp.messages;
+  }
   const uint32_t pingSeconds = (tcpAdvanced >> 2) & 0x7F;
   const uint32_t timeoutSeconds = tcpAdvanced >> 9;
   if (validTcpTiming(pingSeconds, timeoutSeconds)) {
@@ -3529,17 +3588,21 @@ static void setReaderTimeout(const String &value, uint8_t source) {
   replyLine(true, "READERTIMEOUT=" + String(gReaderTimeoutMs));
 }
 
-static bool saveTcpAdvanced(bool heartbeat, bool ack, uint32_t interval, uint32_t timeout) {
+static bool saveTcpAdvanced(bool heartbeat, bool ack, uint32_t interval, uint32_t timeout,
+                            const HeartbeatMessages &messages) {
+  const bool messagesChanged = strcmp(messages.request, gHeartbeatMessages.request) ||
+                               strcmp(messages.response, gHeartbeatMessages.response);
   if (heartbeat == gHeartbeatEnabled && ack == gAckMode &&
-      interval == gTcpPingSeconds && timeout == gTcpTimeoutSeconds) return true;
+      interval == gTcpPingSeconds && timeout == gTcpTimeoutSeconds && !messagesChanged) return true;
   const uint32_t packed = (timeout << 9) | (interval << 2) |
                           (ack ? 2U : 0U) | (heartbeat ? 1U : 0U);
   Preferences p;
   if (!p.begin("runtime3", false)) return false;
-  const bool saved = p.putUInt("tcp_adv", packed) == sizeof(packed);
+  const StoredTcpAdvanced stored{packed, messages};
+  const bool saved = p.putBytes("tcp_adv2", &stored, sizeof(stored)) == sizeof(stored);
   p.end();
   if (!saved) return false;
-  if (heartbeat != gHeartbeatEnabled || interval != gTcpPingSeconds || timeout != gTcpTimeoutSeconds) {
+  if (heartbeat != gHeartbeatEnabled || interval != gTcpPingSeconds || timeout != gTcpTimeoutSeconds || messagesChanged) {
     gTcpPongSeen = false;
     gLastTcpRxMs = millis();
     gLastTcpPingMs = gLastTcpRxMs;
@@ -3548,6 +3611,7 @@ static bool saveTcpAdvanced(bool heartbeat, bool ack, uint32_t interval, uint32_
   gAckMode = ack;
   gTcpPingSeconds = interval;
   gTcpTimeoutSeconds = timeout;
+  gHeartbeatMessages = messages;
   return true;
 }
 
@@ -3697,19 +3761,27 @@ static void handleTextCommand(const BleCmd &cmd) {
   }
   if (s.startsWith("TCPADV=")) {
     const int comma = s.indexOf(',', 11);
+    const int messagesAt = comma < 0 ? -1 : s.indexOf(',', comma + 1);
+    const int responseAt = messagesAt < 0 ? -1 : s.indexOf(',', messagesAt + 1);
+    HeartbeatMessages messages = gHeartbeatMessages;
     uint32_t interval, timeout;
     if (s.length() < 13 || s[8] != ',' || s[10] != ',' ||
         (s[7] != '0' && s[7] != '1') || (s[9] != '0' && s[9] != '1') ||
         comma < 0 || !parseU32(s.substring(11, comma), interval) ||
-        !parseU32(s.substring(comma + 1), timeout) || !validTcpTiming(interval, timeout)) {
+        !parseU32(s.substring(comma + 1, messagesAt < 0 ? s.length() : size_t(messagesAt)), timeout) ||
+        !validTcpTiming(interval, timeout) ||
+        (messagesAt >= 0 && (responseAt < 0 ||
+          !decodeHeartbeatMessage(s.substring(messagesAt + 1, responseAt), messages.request) ||
+          !decodeHeartbeatMessage(s.substring(responseAt + 1), messages.response) ||
+          !validHeartbeatMessages(messages)))) {
       replyLine(false, "ERR=TCPADV_INVALID");
       return;
     }
-    if (!saveTcpAdvanced(s[7] == '1', s[9] == '1', interval, timeout)) {
+    if (!saveTcpAdvanced(s[7] == '1', s[9] == '1', interval, timeout, messages)) {
       replyLine(false, "ERR=TCPADV_STORAGE");
       return;
     }
-    replyLine(true, "TCPADV=" + tcpAdvancedValues());
+    replyLine(true, "TCPADV=" + tcpAdvancedValues() + (messagesAt >= 0 ? "," + heartbeatValues() : String()));
     return;
   }
   bool ack = s.startsWith("ACKMODE="), heartbeat = s.startsWith("HEARTBEAT=");
@@ -3723,7 +3795,7 @@ static void handleTextCommand(const BleCmd &cmd) {
     return;
   }
   if (!saveTcpAdvanced(heartbeat ? value == "1" : gHeartbeatEnabled,
-                       ack ? value == "1" : gAckMode, gTcpPingSeconds, gTcpTimeoutSeconds)) {
+                       ack ? value == "1" : gAckMode, gTcpPingSeconds, gTcpTimeoutSeconds, gHeartbeatMessages)) {
     replyLine(false, "ERR=TCPADV_STORAGE");
     return;
   }
@@ -3884,7 +3956,7 @@ static void txTick() {
         if (tcpOffset == p.len) {
           tcpDone = true;
           accepted = true;
-          recordTcpSent(p.data, p.len, p.eventId);
+          recordTcpSent(p.data, p.len, p.eventId, p.heartbeat);
         }
       } else if (n == -1) {
         recordTcpDown("WRITE_FAILED");
