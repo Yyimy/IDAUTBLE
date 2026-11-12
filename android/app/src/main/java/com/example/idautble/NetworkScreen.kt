@@ -539,17 +539,40 @@ private fun NetworkConfigurationPanel(
                 enabled = controls && state.dirty && errors.isEmpty(),
             )
         }
-        Text(
-            if (state.dirty && state.pending == null && state.error == null) "Unsaved edits."
-            else state.notice,
-            fontSize = 11.sp,
-        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (state.dirty && state.pending == null && state.error == null) "Unsaved edits."
+                else state.notice,
+                modifier = Modifier.weight(1f),
+                fontSize = 11.sp,
+            )
+            if (state.dirty) {
+                Button(
+                    onClick = {
+                        focus.clearFocus()
+                        session.discardEdits()
+                    },
+                    enabled = controls,
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF505761),
+                        contentColor = Color.White,
+                        disabledContainerColor = Color(0xFF42464D),
+                        disabledContentColor = Color(0xFFC5C9CF),
+                    ),
+                ) {
+                    Text("Discard", fontSize = 11.sp)
+                }
+            }
+        }
         state.error?.let { Text(it, fontSize = 12.sp) }
         if (state.dirty) {
             errors.filterNot { it == state.error }.forEach { Text(it, fontSize = 11.sp) }
-            OutlinedButton(onClick = session::discardEdits, enabled = controls) {
-                Text("Discard edits", fontSize = 11.sp)
-            }
         }
         CollapsibleSettingsSection(
             "WI-FI", draft.ssid.ifBlank { "Network name and password" },
