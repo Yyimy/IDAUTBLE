@@ -113,6 +113,7 @@ private enum class SettingsPage(val title: String) {
     LOG_VIEW("Log view"),
     TERMINAL_ORDER("Terminal section order"),
     EXPANDED_SECTIONS("Expanded sections"),
+    COMMAND_REFERENCE("Command reference"),
 }
 
 @Composable
@@ -177,7 +178,14 @@ internal fun AppSettingsDialog(
                         "Keep screen on",
                         modifier = Modifier.toggleable(keepScreenOn, role = Role.Switch, onValueChange = onKeepScreenOnChange),
                     ) { Switch(checked = keepScreenOn, onCheckedChange = null) }
+                    HorizontalDivider()
+                    SettingsRow(
+                        "Command reference",
+                        "Channels, syntax and permissions",
+                        Modifier.clickable { page = SettingsPage.COMMAND_REFERENCE },
+                    ) { SettingsChevron() }
                 }
+                SettingsPage.COMMAND_REFERENCE -> CommandReferencePage()
                 SettingsPage.BACKGROUND -> Column(
                     Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()).selectableGroup()
                 ) {
