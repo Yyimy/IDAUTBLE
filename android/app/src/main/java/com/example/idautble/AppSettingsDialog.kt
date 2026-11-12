@@ -80,6 +80,7 @@ internal enum class TerminalSection(val label: String) {
     DEVICE_ID("Device ID"),
     HEIGHT_MEASUREMENT("Height measurement"),
     BARCODE_ID("Barcode ID"),
+    POWER("Power"),
     RTC("RTC"),
     MANUAL_TERMINAL("Manual terminal");
 
