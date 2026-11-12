@@ -3,16 +3,23 @@
 #include <stdint.h>
 #include <string.h>
 
-template <uint8_t Capacity, uint32_t Format>
+struct DiagnosticEventV1 {
+  uint32_t boot;
+  uint32_t seconds;
+  char reason[24];
+};
+
+struct TimedDiagnosticEvent {
+  uint32_t boot;
+  uint32_t seconds;
+  char reason[24];
+  char time[20];
+};
+
+template <uint8_t Capacity, uint32_t Format, typename Event = DiagnosticEventV1>
 struct BasicDiagnosticHistory {
   static constexpr uint32_t format = Format;
   static constexpr uint8_t capacity = Capacity;
-  struct Event {
-    uint32_t boot;
-    uint32_t seconds;
-    char reason[24];
-  };
-
   uint32_t version = format;
   uint32_t sequence = 0;
   uint8_t count = 0;
@@ -31,7 +38,7 @@ struct BasicDiagnosticHistory {
     return true;
   }
 
-  void add(uint32_t boot, uint32_t seconds, const char *reason) {
+  Event &add(uint32_t boot, uint32_t seconds, const char *reason) {
     Event &event = events[next];
     event = {};
     event.boot = boot;
@@ -40,6 +47,7 @@ struct BasicDiagnosticHistory {
     next = (next + 1) % capacity;
     if (count < capacity) ++count;
     ++sequence;
+    return event;
   }
 
   const Event &newest(uint8_t index) const {
@@ -47,5 +55,6 @@ struct BasicDiagnosticHistory {
   }
 };
 
-using DiagnosticHistory = BasicDiagnosticHistory<128, 2>;
+using DiagnosticHistory = BasicDiagnosticHistory<128, 3, TimedDiagnosticEvent>;
+using UntimedDiagnosticHistory = BasicDiagnosticHistory<128, 2>;
 using LegacyDiagnosticHistory = BasicDiagnosticHistory<8, 1>;

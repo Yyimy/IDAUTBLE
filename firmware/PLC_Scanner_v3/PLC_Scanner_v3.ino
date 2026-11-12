@@ -245,10 +245,7 @@ static DiagnosticHistory gDiagnosticHistory;
 static bool gHistoryDirty = false, gHistoryWriteAttempted = false;
 static uint32_t gHistoryLastWriteMs = 0;
 
-static void recordDiagnostic(const char *reason) {
-  gDiagnosticHistory.add(gBootCount, millis() / 1000U, reason);
-  gHistoryDirty = true;
-}
+static void recordDiagnostic(const char *reason);
 
 static void saveDiagnosticHistory(bool force) {
   if (!gHistoryDirty) return;
@@ -283,6 +280,7 @@ static const unsigned long TCP_RETRY_MS = 3000;
 // -------------------------------
 
 static TcpConnState gTcpState = TCP_IDLE;
+static bool gTcpConnectFailureReported = false;
 
 // Timeout corto para connect (evita congelar el loop)
 // Ajusta si quieres: 120–250ms suele ir bien en LAN
@@ -504,6 +502,13 @@ portMUX_TYPE countersMux = portMUX_INITIALIZER_UNLOCKED;
 
 static bool gRtcOk = false;
 static String gRtcIso = "0000-00-00T00:00:00";
+
+static void recordDiagnostic(const char *reason) {
+  auto &event = gDiagnosticHistory.add(gBootCount, millis() / 1000U, reason);
+  if (gRtcIso.length() == 19 && !gRtcIso.startsWith("0000-"))
+    strlcpy(event.time, gRtcIso.c_str(), sizeof(event.time));
+  gHistoryDirty = true;
+}
 static unsigned long gRtcLastReadMs = 0;
 
 // ============================================================================
@@ -1033,6 +1038,7 @@ static void netSave() {
 }
 
 static void wifiStartFromConfig() {
+  gTcpConnectFailureReported = false;
   recordTcpDown("CONFIG_CHANGED");
   gTcpClient.stop();
   gTcpConnected = false;
@@ -1134,6 +1140,7 @@ static void tcpConnectTick() {
           gTcpState = TCP_WAIT_RETRY;
           logLine("TCP greeting queue full; reconnecting before sending data");
         } else {
+          gTcpConnectFailureReported = false;
           gTcpMonitor.connected(millis());
           recordDiagnostic("TCP_CONNECTED");
           recordTcpTrace('U', "TCP_CONNECTED");
@@ -1142,6 +1149,10 @@ static void tcpConnectTick() {
       } else {
         gTcpConnected = false;
         gTcpState = TCP_WAIT_RETRY;
+        if (!gTcpConnectFailureReported) {
+          recordTcpTrace('F', "CONNECT_FAILED");
+          gTcpConnectFailureReported = true;
+        }
         logLine("TCP conexión fallida.");
       }
 
@@ -2294,7 +2305,7 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
     cmd.type = BLECMD_OTA_ABORT;
   } else if (rxTrim.startsWith("AUTH=") || rxTrim.startsWith("ACK=") ||
              rxTrim.startsWith("ACKMODE=") || rxTrim.startsWith("TCPADV=") ||
-             rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" || rxTrim == "HISTORY?" || rxTrim.startsWith("HISTORY?=") || rxTrim == "TCPTRACE?" ||
+             rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" || rxTrim == "HISTORY?" || rxTrim.startsWith("HISTORY?=") || rxTrim.startsWith("HISTORYTIME?=") || rxTrim == "TCPTRACE?" ||
              rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
              rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("IDLEMIN=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
     cmd.type = BLECMD_TEXT;
@@ -2519,6 +2530,7 @@ static void bleProcessPendingOnce() {
         // Limpiamos flags en orden correcto
         gTcpConnected = false;
         gTcpConnectedPrev = false;
+        gTcpConnectFailureReported = false;
         gTcpState = TCP_IDLE;
         gWifiConnected = false;
 
@@ -3242,6 +3254,7 @@ void loop() {
         tcpPollRx();
         tcpWatchdog();
       } else {
+        gTcpConnectFailureReported = false;
         recordTcpDown("WIFI_LOST");
         if (gTcpClient.connected()) gTcpClient.stop();
         gTcpConnected = false;
@@ -3345,17 +3358,23 @@ static void runtimeLoad() {
       history.valid()) {
     gDiagnosticHistory = history;
   } else {
-    LegacyDiagnosticHistory old;
-    if (p.getBytesLength("diag_history") == sizeof(old) &&
-        p.getBytes("diag_history", &old, sizeof(old)) == sizeof(old) && old.valid()) {
-      gDiagnosticHistory = DiagnosticHistory{};
+    const auto migrate = [&](auto &old) {
+      if (p.getBytesLength("diag_history") != sizeof(old) ||
+          p.getBytes("diag_history", &old, sizeof(old)) != sizeof(old) || !old.valid())
+        return false;
+      gDiagnosticHistory.count = 0;
+      gDiagnosticHistory.next = 0;
       for (uint8_t i = old.count; i > 0; --i) {
         const auto &event = old.newest(i - 1);
         gDiagnosticHistory.add(event.boot, event.seconds, event.reason);
       }
       gDiagnosticHistory.sequence = old.sequence;
       gHistoryDirty = true;
-    }
+      return true;
+    };
+    static UntimedDiagnosticHistory untimed;
+    LegacyDiagnosticHistory legacy;
+    if (!migrate(untimed)) migrate(legacy);
   }
   const uint32_t tcpAdvanced = p.getUInt("tcp_adv", 0);
   const uint32_t pingSeconds = (tcpAdvanced >> 2) & 0x7F;
@@ -3601,11 +3620,12 @@ static void handleTextCommand(const BleCmd &cmd) {
     replyLine(true, line);
     return;
   }
-  if (s == "HISTORY?" || s.startsWith("HISTORY?=")) {
+  if (s == "HISTORY?" || s.startsWith("HISTORY?=") || s.startsWith("HISTORYTIME?=")) {
     if (cmd.source != 0) return;
     const bool paged = s != "HISTORY?";
+    const bool timed = s.startsWith("HISTORYTIME?=");
     uint32_t before = 0;
-    if (paged && !parseU32(s.substring(sizeof("HISTORY?=") - 1), before)) {
+    if (paged && !parseU32(s.substring(timed ? sizeof("HISTORYTIME?=") - 1 : sizeof("HISTORY?=") - 1), before)) {
       replyLine(false, "ERR=HISTORY_CURSOR");
       return;
     }
@@ -3616,7 +3636,7 @@ static void handleTextCommand(const BleCmd &cmd) {
           gDiagnosticHistory.sequence - before < gDiagnosticHistory.count)
         offset = size_t(gDiagnosticHistory.sequence - before) + 1;
     }
-    const size_t end = min(offset + 8, size_t(gDiagnosticHistory.count));
+    const size_t end = min(offset + (timed ? 6 : 8), size_t(gDiagnosticHistory.count));
     const uint32_t next = end < gDiagnosticHistory.count ? gDiagnosticHistory.sequence - (end - 1) : 0;
     String line = paged ? "HISTORYPAGE=" + String(next) + "|" : String("HISTORY=");
     for (size_t i = offset; i < end; ++i) {
@@ -3624,6 +3644,10 @@ static void handleTextCommand(const BleCmd &cmd) {
       const auto &event = gDiagnosticHistory.newest(i);
       line += String(gDiagnosticHistory.sequence - uint32_t(i)) + "," + String(event.boot) +
               "," + String(event.seconds) + "," + event.reason;
+      if (timed) {
+        line += ',';
+        if (event.time[0] && memchr(event.time, 0, sizeof(event.time))) line += event.time;
+      }
     }
     replyLine(true, line);
     return;
@@ -3633,7 +3657,7 @@ static void handleTextCommand(const BleCmd &cmd) {
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
                         (cmd.source == 0 ? String(";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1;READERTIMEOUT=") + String(gReaderTimeoutMs) +
-                         ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1;HISTORYPAGE=1;TCPTRACE=1" : String()));
+                         ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1;HISTORYPAGE=1;HISTORYTIME=1;TCPTRACE=1" : String()));
     return;
   }
   if (s == "STATUS?") {
