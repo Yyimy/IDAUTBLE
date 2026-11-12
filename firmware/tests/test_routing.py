@@ -10,6 +10,10 @@ base = runpy.run_path(str(here/'test_logic.py'))
 source = base['source']
 body = base['body'].split('int main(){', 1)[0]
 body = body.replace('bool gOtaAbort=false,gOtaTaskHandle=false;', 'bool gOtaAbort=false;void *gOtaTaskHandle=nullptr;')
+body = body.replace(
+    'void powerCut(const char* reason){gCutRequested=true;cutReason=reason;}',
+    'void powerCut(const char*);',
+)
 version = re.search(r'#define FIRMWARE_VERSION "[^"\n]+"', source).group()
 body = re.sub(r'#define FIRMWARE_VERSION "[^"\n]+"', version, body)
 body = body.replace('String authReply;bool authReplyOk=false;void replyLine(bool ok,const String&text){authReplyOk=ok;authReply=text;}', 'String authReply;bool authReplyOk=false;static void replyLine(bool,const String&);')
@@ -36,7 +40,8 @@ struct IpMock{String toString(){return "192.0.2.22";}};
 struct WifiMock{bool linked=true;int status(){return linked?WL_CONNECTED:0;}IpMock localIP(){return{};}int RSSI(){return -45;}void disconnect(bool) {linked=false;}}WiFi;
 std::atomic<uint8_t> gOtaPct{0};bool gOtaParamsReady=false;
 bool gCutConfirmed=false;uint32_t gEventLastAttempt=0,gEventOverflow=0;
-char gCutReason[40]="";
+char gCutReason[96]="";
+uint32_t gCutRequestedMs=0,gLastCutAttemptMs=0;
 uint32_t gBootCount=12,gPonTotal=1540,gPalCargado=320,gPalDescargado=319,gLecturasFallidas=8;
 int countersMux=0,locks=0;void portENTER_CRITICAL(int*){++locks;}void portEXIT_CRITICAL(int*){--locks;}
 void rtcUpdateCacheIfNeeded(){}
@@ -54,7 +59,7 @@ void sendHotkey(ShortcutPeer){replyLine(true,"HIDHOTKEY=CTRL+ALT+L");}
 void sendDeviceStatus(){replyLine(true,"STATUS=1;FW=TEST;ID=TRUCK-1");}
 void handleIdentityCommand(const String&,uint8_t){replyLine(true,"ID=TRUCK-1;HWID=AABBCCDDEEFF;NAME=TRUCK-1");}
 '''
-names = ['sendCounters','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','tcpTextCommandType','cfgSendOk','cfgSendErr','cfgSendCurrent','tcpAdvancedValues','setReaderTimeout','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','tcpWatchdog','eventTick']
+names = ['sendCounters','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','tcpTextCommandType','cfgSendOk','cfgSendErr','cfgSendCurrent','tcpAdvancedValues','setReaderTimeout','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendOff','powerCut','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','tcpWatchdog','eventTick']
 body += extra+'\n'+'\n'.join(base['function'](n).split('{',1)[0]+';' for n in names)+'\n'
 body += '\n'.join(base['function'](n) for n in names)
 body += r'''
@@ -93,6 +98,20 @@ int main(){
  fresh();run(cmd(BLECMD_TEXT,0,"AUTH=123456"));drain();CHECK(gTcpClient.sent.empty());CHECK(bleBytes().find("AUTH=OK")!=std::string::npos);
  fresh();gMaintenanceAuthorized=true;run(cmd(BLECMD_CFG_SET,0,"CFG=PFXP=PAL;PFXU=LOC"));drain();CHECK(gTcpClient.sent.empty());CHECK(bleBytes().find("OK")!=std::string::npos);
  fresh();run(cmd(BLECMD_NET_SET,1,"NET=PORT=9000"));drain();CHECK(bleBytes().empty());CHECK(gTcpClient.sent.find("ERR=AUTH_REQUIRED")!=std::string::npos);
+ // Settings are maintenance-only. A power-cut request reports its reason before legacy OFF.
+ fresh();gMaintenanceAuthorized=false;run(cmd(BLECMD_TEXT,0,"IDLEMIN=3"));drain();
+ CHECK(bleBytes().find("ERR=IDLE_AUTH")!=std::string::npos);
+ fresh();gMaintenanceAuthorized=true;run(cmd(BLECMD_TEXT,0,"IDLEMIN=0"));drain();
+ CHECK(bleBytes().find("ERR=IDLE_INVALID")!=std::string::npos);
+ fresh();gMaintenanceAuthorized=true;run(cmd(BLECMD_TEXT,0,"IDLEMIN=3"));drain();
+ CHECK(bleBytes().find("IDLEMIN=3")!=std::string::npos);
+ CHECK(storedUIntSettings["idle_min"]==3&&gIdleMinutes==3&&lastFotoActivaMs>0);
+ fresh();powerCut("INACTIVITY_3_MIN");drain();
+ CHECK(bleBytes().find("OFFREASON=INACTIVITY_3_MIN")<bleBytes().find("OFF\r\n"));
+ CHECK(gTcpClient.sent.find("OFFREASON=INACTIVITY_3_MIN")<gTcpClient.sent.find("OFF\r\n"));
+ CHECK(storedSettings["last_cut"]=="INACTIVITY_3_MIN");
+ gCutRequested=false;runtimeLoad();CHECK(gLastCutReason=="INACTIVITY_3_MIN");
+ storedUIntSettings.erase("idle_min");storedSettings.erase("last_cut");runtimeLoad();
  // Automatic NETSTAT remains useful to BLE but does not add traffic to the server.
  fresh();netSendStatus(true);drain();CHECK(gTcpClient.sent.empty());CHECK(bleBytes().find("NETSTAT=")!=std::string::npos);
  // Counter snapshots are read-only, bounded and unsigned, including a full outbox.

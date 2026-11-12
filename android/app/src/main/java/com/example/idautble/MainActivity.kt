@@ -389,6 +389,9 @@ class MainActivity : ComponentActivity() {
     private val uiHidOutput = mutableStateOf(HidOutputState())
     private val uiReaderTimeout = mutableStateOf(ReaderTimeoutState())
     private var readerTimeoutRequest = 0
+    private val uiIdleShutdown = mutableStateOf(IdleShutdownState())
+    private var idleShutdownRequest = 0
+    private val uiShutdownNotice = mutableStateOf<String?>(null)
     private var hidOutputRequest = 0L
     private var hidOutputExpected: HidOutputConfig? = null
     private val uiIdentityDraft = mutableStateOf("")
@@ -972,6 +975,56 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun saveIdleShutdown(minutes: Int) {
+        val state = uiIdleShutdown.value
+        if (!bleChannelReady || state.minutes == null || state.saving || minutes !in 1..1440) return
+        if (!maintenanceSession.isAuthorized()) {
+            showIdentityAuthorizationMessage()
+            return
+        }
+        val request = ++idleShutdownRequest
+        uiIdleShutdown.value = state.copy(saving = true, message = "Saving…")
+        sendText("IDLEMIN=$minutes", addCrlf = true)
+        mainHandler.postDelayed({
+            if (request == idleShutdownRequest && uiIdleShutdown.value.saving) {
+                uiIdleShutdown.value = uiIdleShutdown.value.copy(
+                    saving = false, message = "No confirmation. Reconnect to check the saved value.",
+                )
+            }
+        }, 8000)
+    }
+
+    private fun handlePowerMessage(message: PlcMessage) {
+        val text = message.text
+        if (message.acknowledged && text.startsWith("FW=")) {
+            val fields = text.split(';')
+            val minutes = fields.firstOrNull { it.startsWith("IDLEMIN=") }
+                ?.substringAfter('=')?.toIntOrNull()?.takeIf { it in 1..1440 }
+            uiIdleShutdown.value = uiIdleShutdown.value.copy(minutes = minutes)
+            val reason = fields.firstOrNull { it.startsWith("LASTOFF=") }?.substringAfter('=')
+                ?.takeIf { it.isNotEmpty() }
+            val notice = reason?.let { "Last recorded shutdown · ${shutdownReasonLabel(it)}" }
+            if (notice != null && notice != uiShutdownNotice.value) log(LogLevel.WARN, notice)
+            uiShutdownNotice.value = notice
+        } else if (message.acknowledged && text.startsWith("OFFREASON=")) {
+            val notice = "Shutdown requested · ${shutdownReasonLabel(text.substringAfter('='))}"
+            uiShutdownNotice.value = notice
+            log(LogLevel.WARN, notice)
+        } else if (message.acknowledged && text.startsWith("IDLEMIN=")) {
+            val minutes = text.substringAfter('=').toIntOrNull()?.takeIf { it in 1..1440 } ?: return
+            idleShutdownRequest++
+            uiIdleShutdown.value = IdleShutdownState(minutes, message = "Inactivity timeout saved.")
+        } else if (message.rejected && uiIdleShutdown.value.saving && text.startsWith("ERR=IDLE_")) {
+            idleShutdownRequest++
+            uiIdleShutdown.value = uiIdleShutdown.value.copy(saving = false, message = when (text) {
+                "ERR=IDLE_AUTH" -> "Enter the PIN in PIN / ACCESS first."
+                "ERR=IDLE_BUSY" -> "The PLC is busy or shutting down."
+                "ERR=IDLE_STORAGE" -> "The PLC could not save the timeout."
+                else -> "The PLC rejected the timeout."
+            })
+        }
+    }
+
     private fun requestHidOutput(config: HidOutputConfig?) {
         if (!bleChannelReady || !uiHidOutput.value.supported || uiHidOutput.value.busy) return
         if (config != null && !maintenanceSession.isAuthorized()) { showIdentityAuthorizationMessage(); return }
@@ -1108,6 +1161,8 @@ class MainActivity : ComponentActivity() {
         uiHidOutput.value = HidOutputState()
         readerTimeoutRequest++
         uiReaderTimeout.value = ReaderTimeoutState()
+        idleShutdownRequest++
+        uiIdleShutdown.value = IdleShutdownState()
         hidReceiverRequest++
         uiHidReceiver.value = HidReceiverState()
         txTimeout?.let { mainHandler.removeCallbacks(it) }
@@ -1519,6 +1574,7 @@ class MainActivity : ComponentActivity() {
         handleHidReceiverMessage(message)
         handleHidOutputMessage(message)
         handleReaderTimeoutMessage(message)
+        handlePowerMessage(message)
         statusRefresh.otaMessage(text)
         networkSession.setPaused(statusRefresh.otaActive)
         if (message.acknowledged && text.startsWith("COUNTERS=")) {
@@ -2403,6 +2459,9 @@ class MainActivity : ComponentActivity() {
                     },
                     readerTimeout = uiReaderTimeout.value,
                     onSaveReaderTimeout = ::saveReaderTimeout,
+                    idleShutdown = uiIdleShutdown.value,
+                    onSaveIdleShutdown = ::saveIdleShutdown,
+                    shutdownNotice = uiShutdownNotice.value,
                     onCfgQuery = { sendText("CFG?", addCrlf = true) },
                     onSetCfg = {
                         sendText("CFG=PFXP=${uiPfxP.value};PFXU=${uiPfxU.value}", addCrlf = true)
@@ -2567,6 +2626,9 @@ private fun PlcBleTesterLandscape(
     onCmd: (Char) -> Unit,
     readerTimeout: ReaderTimeoutState,
     onSaveReaderTimeout: (Int) -> Unit,
+    idleShutdown: IdleShutdownState,
+    onSaveIdleShutdown: (Int) -> Unit,
+    shutdownNotice: String?,
     onCfgQuery: () -> Unit,
     onSetCfg: () -> Unit,
     onSetRtc: () -> Unit,
@@ -3031,6 +3093,13 @@ private fun PlcBleTesterLandscape(
                                                     ReaderTimeoutSettings(readerTimeout, onSaveReaderTimeout)
                                                 }
                                             }
+                                            TerminalSection.POWER -> {
+                                                IdleShutdownSection(
+                                                    idleShutdown, shutdownNotice,
+                                                    expanded, onToggle,
+                                                    onSaveIdleShutdown,
+                                                )
+                                            }
                                             TerminalSection.RTC -> {
                                                 CollapsibleSettingsSection(
                                                     title = "RTC",
@@ -3198,7 +3267,7 @@ private fun PlcBleTesterLandscape(
                 }
             } else if (selectedTab == 1) {
 
-                key("NETWORK") { NetworkScreen(networkSession, terminalTextSize, logColors) }
+                key("NETWORK") { NetworkScreen(networkSession, terminalTextSize, logColors, shutdownNotice) }
             } else {
                 OtaScreen(
                     onSendOta = onSendOta,
