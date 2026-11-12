@@ -11,3 +11,4 @@
 - Firmware: ejecutar `python3 firmware/tests/test_logic.py`, `python3 firmware/tests/test_pin_constant.py` y la compilación Arduino CLI documentada en README.
 - No afirmar validación en placa o teléfono real cuando solo se hayan ejecutado compilaciones o pruebas en host.
 - Preparar cambios posteriores en una rama y describir en la pull request el comportamiento y las verificaciones. Evitar mezclar cambios de protocolo, hardware e interfaz sin necesidad.
+- Si se añade, modifica o retira un comando del PLC, actualizar en la misma PR la referencia de App settings en `android/app/src/main/java/com/example/idautble/CommandReference.kt`. Documentar la sintaxis, la función, los canales y roles admitidos y los permisos o condiciones de uso.
