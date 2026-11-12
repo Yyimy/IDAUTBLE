@@ -32,6 +32,7 @@
 #include "Types.h"
 #include "OutboxStorage.h"
 #include "TcpMonitor.h"
+#include "DiagnosticHistory.h"
 
 // ================= CONFIGURACION DEL PIN POR EL INSTALADOR ==================
 // Cambia este valor ANTES de compilar. Exactamente 6 cifras, entre comillas.
@@ -235,6 +236,31 @@ static bool gWifiEnabled = false;
 static bool gWifiConnected = false;
 static bool gTcpConnected = false;
 static TcpMonitor gTcpMonitor;
+static DiagnosticHistory gDiagnosticHistory;
+static bool gHistoryDirty = false, gHistoryWriteAttempted = false;
+static uint32_t gHistoryLastWriteMs = 0;
+
+static void recordDiagnostic(const char *reason) {
+  gDiagnosticHistory.add(gBootCount, millis() / 1000U, reason);
+  gHistoryDirty = true;
+}
+
+static void saveDiagnosticHistory(bool force) {
+  if (!gHistoryDirty) return;
+  const uint32_t now = millis();
+  if (!force && gHistoryWriteAttempted && now - gHistoryLastWriteMs < 30000U) return;
+  gHistoryLastWriteMs = now;
+  gHistoryWriteAttempted = true;
+  Preferences prefs;
+  if (!prefs.begin("runtime3", false)) return;
+  const size_t written = prefs.putBytes("diag_history", &gDiagnosticHistory, sizeof(gDiagnosticHistory));
+  prefs.end();
+  if (written == sizeof(gDiagnosticHistory)) gHistoryDirty = false;
+}
+
+static void recordTcpDown(const char *reason) {
+  if (gTcpMonitor.disconnected(millis(), reason)) recordDiagnostic(reason);
+}
 
 static bool gTcpConnectedPrev = false;
 
@@ -999,7 +1025,7 @@ static void netSave() {
 }
 
 static void wifiStartFromConfig() {
-  gTcpMonitor.disconnected(millis(), "CONFIG_CHANGED");
+  recordTcpDown("CONFIG_CHANGED");
   gTcpClient.stop();
   gTcpConnected = false;
   gTcpState = TCP_IDLE;
@@ -1032,7 +1058,7 @@ static void wifiStartFromConfig() {
 static void tcpConnectTick() {
   // Si WiFi no está realmente conectado, no hay nada que hacer
   if (!gWifiConnected) {
-    gTcpMonitor.disconnected(millis(), "WIFI_LOST");
+    recordTcpDown("WIFI_LOST");
     if (gTcpClient.connected()) gTcpClient.stop();
     gTcpConnected = false;
     gTcpState = TCP_IDLE;
@@ -1048,7 +1074,7 @@ static void tcpConnectTick() {
 
   // Si creíamos que estaba conectado pero ya no, limpiamos
   if (gTcpConnected) {
-    gTcpMonitor.disconnected(millis(), "SOCKET_CLOSED");
+    recordTcpDown("SOCKET_CLOSED");
     gTcpConnected = false;
     gTcpState = TCP_WAIT_RETRY;
   }
@@ -1101,6 +1127,7 @@ static void tcpConnectTick() {
           logLine("TCP greeting queue full; reconnecting before sending data");
         } else {
           gTcpMonitor.connected(millis());
+          recordDiagnostic("TCP_CONNECTED");
           logLine("TCP CONNECTED greeting queued");
         }
       } else {
@@ -1210,7 +1237,7 @@ static void tcpPollRx() {
 static void tcpWatchdog() {
   if (!gTcpConnected) return;
   if (!gTcpClient.connected()) {
-    gTcpMonitor.disconnected(millis(), "SOCKET_CLOSED");
+    recordTcpDown("SOCKET_CLOSED");
     gTcpConnected = false;
     return;
   }
@@ -1222,7 +1249,7 @@ static void tcpWatchdog() {
     queueTargetFrame(ping, sizeof(ping), nullptr, TX_TCP_ONLY, gTcpSession.load());
   }
   if (millis() - gLastTcpRxMs > gTcpTimeoutSeconds * 1000U) {
-    gTcpMonitor.disconnected(millis(), "PONG_TIMEOUT");
+    recordTcpDown("PONG_TIMEOUT");
     gTcpClient.stop();
     gTcpConnected = false;
     logLine("TCP: timeout PONG");
@@ -1963,6 +1990,8 @@ void powerCut(const char *reason) {
   gCutRequested = true;
   gCutRequestedMs = millis();
   gLastCutAttemptMs = 0;
+  recordDiagnostic(reason);
+  saveDiagnosticHistory(true);
   Preferences preferences;
   if (preferences.begin("runtime3", false)) {
     if (preferences.putString("last_cut", gCutReason) != strlen(gCutReason))
@@ -2207,7 +2236,7 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
     cmd.type = BLECMD_OTA_ABORT;
   } else if (rxTrim.startsWith("AUTH=") || rxTrim.startsWith("ACK=") ||
              rxTrim.startsWith("ACKMODE=") || rxTrim.startsWith("TCPADV=") ||
-             rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" ||
+             rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" || rxTrim == "HISTORY?" ||
              rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
              rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("IDLEMIN=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
     cmd.type = BLECMD_TEXT;
@@ -2427,7 +2456,7 @@ static void bleProcessPendingOnce() {
           gTcpClient.stop();
         }
 
-        gTcpMonitor.disconnected(millis(), "WIFI_DISABLED");
+        recordTcpDown("WIFI_DISABLED");
         // Limpiamos flags en orden correcto
         gTcpConnected = false;
         gTcpConnectedPrev = false;
@@ -2562,7 +2591,7 @@ static void bleProcessPendingOnce() {
           break;
         }
 
-        gTcpMonitor.disconnected(millis(), "OTA");
+        recordTcpDown("OTA");
         uint8_t okFrame[] = {0x06, 'O', 'K', 0x0D, 0x0A};
         sendCommandReply(okFrame, sizeof(okFrame));
         break;
@@ -3154,7 +3183,7 @@ void loop() {
         tcpPollRx();
         tcpWatchdog();
       } else {
-        gTcpMonitor.disconnected(millis(), "WIFI_LOST");
+        recordTcpDown("WIFI_LOST");
         if (gTcpClient.connected()) gTcpClient.stop();
         gTcpConnected = false;
         gTcpState = TCP_IDLE;
@@ -3174,6 +3203,7 @@ void loop() {
   updateLedMode();
   ledEstadoBlinkTick();
   outboxSaveIfNeeded();
+  if (!otaActive) saveDiagnosticHistory(false);
   eventTick();
   txTick();
   plcHid::tick();
@@ -3250,6 +3280,10 @@ static void runtimeLoad() {
   const uint32_t idle = p.getUInt("idle_min", 120);
   gIdleMinutes = idle >= 1 && idle <= 1440 ? idle : 120;
   gLastCutReason = p.getString("last_cut", "");
+  DiagnosticHistory history;
+  if (p.getBytesLength("diag_history") == sizeof(history) &&
+      p.getBytes("diag_history", &history, sizeof(history)) == sizeof(history) &&
+      history.valid()) gDiagnosticHistory = history;
   const uint32_t tcpAdvanced = p.getUInt("tcp_adv", 0);
   const uint32_t pingSeconds = (tcpAdvanced >> 2) & 0x7F;
   const uint32_t timeoutSeconds = tcpAdvanced >> 9;
@@ -3482,12 +3516,24 @@ static void handleTextCommand(const BleCmd &cmd) {
     if (gOutbox.count && gOutbox.items[0].id == id) outboxPop();
     return;
   }
+  if (s == "HISTORY?") {
+    if (cmd.source != 0) return;
+    String line = "HISTORY=";
+    for (uint8_t i = 0; i < gDiagnosticHistory.count; ++i) {
+      if (i) line += '|';
+      const auto &event = gDiagnosticHistory.newest(i);
+      line += String(gDiagnosticHistory.sequence - i) + "," + String(event.boot) +
+              "," + String(event.seconds) + "," + event.reason;
+    }
+    replyLine(true, line);
+    return;
+  }
   if (s == "INFO?") {
     replyLine(true, "FW=" FIRMWARE_VERSION ";PROTO=V2;ACKMODE=" +
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
                         (cmd.source == 0 ? String(";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1;READERTIMEOUT=") + String(gReaderTimeoutMs) +
-                         ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason : String()));
+                         ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1" : String()));
     return;
   }
   if (s == "STATUS?") {
@@ -3624,6 +3670,9 @@ static void outboxPush(const String &frame) {
     ++gEventOverflow;
     replyLine(false, "ERR=EVENT_QUEUE_FULL");
     logLine("ERROR TRAZABILIDAD: cola eventos llena");
+    if (!gDiagnosticHistory.count ||
+        strcmp(gDiagnosticHistory.newest(0).reason, "EVENT_QUEUE_FULL") != 0)
+      recordDiagnostic("EVENT_QUEUE_FULL");
     return;
   }
   if (gOutbox.nextId == UINT32_MAX) {
@@ -3713,7 +3762,7 @@ static void txTick() {
           accepted = true;
         }
       } else if (n == -1) {
-        gTcpMonitor.disconnected(millis(), "WRITE_FAILED");
+        recordTcpDown("WRITE_FAILED");
         gTcpClient.stop();
         gTcpConnected = false;
         tcpDone = true;
@@ -3721,7 +3770,7 @@ static void txTick() {
       // Backpressure never blocks IO. Drop this connection after 2 s without
       // completing.
       if (!tcpDone && millis() - started > 2000) {
-        gTcpMonitor.disconnected(millis(), "WRITE_TIMEOUT");
+        recordTcpDown("WRITE_TIMEOUT");
         gTcpClient.stop();
         gTcpConnected = false;
         tcpDone = true;
