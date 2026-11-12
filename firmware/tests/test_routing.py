@@ -31,6 +31,7 @@ int xQueueReceive(int,BleCmd*c,int){if(commands.empty())return 0;*c=commands.fro
 int xQueueSend(int,const BleCmd*c,int){if(commands.size()>=8)return 0;commands.push_back(*c);return 1;}
 bool gWifiEnabled=true,gWifiConnected=true,gTcpConnectedPrev=false;
 TcpConnState gTcpState=TCP_IDLE;
+bool gTcpConnectFailureReported=false;
 uint32_t gLastTcpAttempt=0,gLastTcpActivity=0;
 constexpr uint32_t TCP_RETRY_MS=3000;constexpr uint16_t TCP_CONNECT_TIMEOUT_MS=200;
 constexpr int WL_CONNECTED=3;const char*NVS_NS_NET="net3";
@@ -132,6 +133,11 @@ int main(){
  CHECK(bleBytes().find("TCPTRACE=")!=std::string::npos&&bleBytes().find(",R,ACK=42")!=std::string::npos);
  CHECK(clientBytes().empty()&&gTcpClient.sent.empty());
  CHECK(tcpTextCommandType("TCPTRACE?")==BLECMD_NONE);
+ fresh();gDiagnosticHistory=DiagnosticHistory{};gRtcIso="2026-11-12T14:41:23";
+ for(int i=0;i<7;++i)recordDiagnostic("TCP_CONNECTED");
+ run(cmd(BLECMD_TEXT,0,"HISTORYTIME?=0"));drain();
+ CHECK(bleBytes().find("HISTORYPAGE=2|7,")!=std::string::npos);
+ CHECK(bleBytes().find(",TCP_CONNECTED,2026-11-12T14:41:23")!=std::string::npos);
  // Automatic NETSTAT remains useful to BLE but does not add traffic to the server.
  fresh();netSendStatus(true);drain();CHECK(gTcpClient.sent.empty());CHECK(bleBytes().find("NETSTAT=")!=std::string::npos);
  // Counter snapshots are read-only, bounded and unsigned, including a full outbox.
@@ -228,6 +234,14 @@ int main(){
  fresh();gTcpClient.rx="STA";tcpPollRx();++gTcpSession;gTcpClient.rx="TUS?\n";tcpPollRx();CHECK(commands.empty());
  gTcpClient.rx="INFO?\n";tcpPollRx();CHECK(commands.size()==1);commands.clear();
  gTcpClient.rx=std::string("\x1b\x42",2);tcpPollRx();++gTcpSession;gTcpClient.rx="\r\n";tcpPollRx();CHECK(commands.empty());
+ // Initial socket failures appear in the trace without flooding it on retries.
+ fresh();gTcpClient.up=gTcpConnected=false;gTcpState=TCP_IDLE;gTcpClient.connectOk=false;
+ gTcpConnectFailureReported=false;nowMs+=4000;tcpConnectTick();
+ CHECK(std::string(gTcpTraffic.newest(0).detail)=="CONNECT_FAILED");
+ auto failedSeq=gTcpTraceSequence;nowMs+=4000;tcpConnectTick();tcpConnectTick();
+ CHECK(gTcpTraceSequence==failedSeq);
+ gTcpClient.connectOk=true;nowMs+=4000;tcpConnectTick();tcpConnectTick();drain();
+ CHECK(!gTcpConnectFailureReported&&gTcpConnected);
  // Queue pressure cannot silently establish a connection without its greeting.
  fresh();gTcpClient.up=gTcpConnected=false;gTcpState=TCP_IDLE;gLastTcpAttempt=0;
  for(int i=0;i<24;++i){TxPacket p={};txQueue.push_back(p);}tcpConnectTick();CHECK(!gTcpConnected&&!gTcpClient.up);txQueue.clear();

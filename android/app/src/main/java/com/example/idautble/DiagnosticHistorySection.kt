@@ -13,7 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 
-internal data class DiagnosticEvent(val sequence: Long, val boot: Long, val seconds: Long, val reason: String)
+internal data class DiagnosticEvent(val sequence: Long, val boot: Long, val seconds: Long, val reason: String, val dateTime: String = "")
 
 private val diagnosticReason = Regex("[A-Z0-9_]{1,23}")
 
@@ -24,12 +24,14 @@ internal fun parseDiagnosticHistory(text: String): List<DiagnosticEvent>? {
     val rows = payload.split('|', limit = 9)
     if (rows.size > 8) return null
     return rows.map { row ->
-        val fields = row.split(',', limit = 4)
-        if (fields.size != 4 || !diagnosticReason.matches(fields[3])) return null
+        val fields = row.split(',', limit = 5)
+        if (fields.size !in 4..5 || !diagnosticReason.matches(fields[3])) return null
         val sequence = fields[0].toLongOrNull()?.takeIf { it in 0..0xFFFFFFFFL } ?: return null
         val boot = fields[1].toLongOrNull()?.takeIf { it in 0..0xFFFFFFFFL } ?: return null
         val seconds = fields[2].toLongOrNull()?.takeIf { it in 0..4_294_967L } ?: return null
-        DiagnosticEvent(sequence, boot, seconds, fields[3])
+        val dateTime = fields.getOrElse(4) { "" }
+        if (dateTime.isNotEmpty() && !plcTimestampPattern.matches(dateTime)) return null
+        DiagnosticEvent(sequence, boot, seconds, fields[3], dateTime)
     }
 }
 
@@ -61,7 +63,7 @@ internal fun DiagnosticHistorySection(
         "PLC HISTORY", events?.let { "${it.size} recent events" } ?: "Critical events from the PLC",
         expanded, onToggle,
     ) {
-        Text("Newest first. Time is measured from the start of each boot.")
+        Text("Newest first · PLC local time")
         if (!supported) Text("Connect to a PLC with compatible firmware to retrieve its history.")
         else if (events == null) Text("Waiting for PLC history.")
         else if (events.isEmpty()) Text("No events recorded.")
@@ -69,7 +71,8 @@ internal fun DiagnosticHistorySection(
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
                 items(events, key = { it.sequence }) { event ->
                     HorizontalDivider()
-                    Text("#${event.sequence} · Boot ${event.boot} · +${event.seconds} s", fontFamily = FontFamily.Monospace)
+                    val time = event.dateTime.replace('T', ' ').ifEmpty { "Time unavailable" }
+                    Text("#${event.sequence} · $time", fontFamily = FontFamily.Monospace)
                     Text(diagnosticLabel(event.reason))
                 }
             }

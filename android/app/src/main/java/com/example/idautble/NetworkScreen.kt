@@ -240,7 +240,7 @@ private fun NetworkPanel(
 }
 
 @Composable
-internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, logColors: LogColors, shutdownNotice: String?, trace: List<TcpTraceEntry>?) {
+internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, logColors: LogColors, trace: List<TcpTraceEntry>?) {
     val state = session.state
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     DisposableEffect(session) {
@@ -282,7 +282,7 @@ internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, 
                         LiveConnectionPanel(state, session, now, Modifier.fillMaxWidth())
                         NetworkConfigurationPanel(state, session, Modifier.fillMaxWidth())
                     }
-                    TcpMonitorPanel(state, now, textSize, logColors, shutdownNotice, trace, Modifier.weight(1f).fillMaxHeight())
+                    TcpMonitorPanel(state, now, textSize, logColors, trace, Modifier.weight(1f).fillMaxHeight())
                 }
             } else {
                 Column(
@@ -291,7 +291,7 @@ internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, 
                 ) {
                     LiveConnectionPanel(state, session, now, Modifier.fillMaxWidth())
                     NetworkConfigurationPanel(state, session, Modifier.fillMaxWidth())
-                    TcpMonitorPanel(state, now, textSize, logColors, shutdownNotice, trace, Modifier.fillMaxWidth().height(320.dp))
+                    TcpMonitorPanel(state, now, textSize, logColors, trace, Modifier.fillMaxWidth().height(320.dp))
                 }
             }
         }
@@ -423,7 +423,6 @@ private fun TcpMonitorPanel(
     now: Long,
     textSize: TerminalTextSize,
     colors: LogColors,
-    shutdownNotice: String?,
     trace: List<TcpTraceEntry>?,
     modifier: Modifier,
 ) {
@@ -446,6 +445,7 @@ private fun TcpMonitorPanel(
                 "T" -> TcpMonitorEntry(entry.time, "↑ TX", entry.detail, colors.txBlue)
                 "R" -> TcpMonitorEntry(entry.time, "↓ RX", entry.detail, colors.rxGreen)
                 "U" -> TcpMonitorEntry(entry.time, "TCP UP", "Connected to server", colors.txBlue)
+                "F" -> TcpMonitorEntry(entry.time, "TCP CONNECT FAILED", "The connection attempt failed.", colors.errRed)
                 else -> TcpMonitorEntry(entry.time, "TCP DOWN", tcpDisconnectLabel(entry.detail), colors.errRed)
             }
         }
@@ -498,7 +498,6 @@ private fun TcpMonitorPanel(
                 else -> "TCP traffic and connection events"
             }
             Text(status, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            shutdownNotice?.let { Text(it, fontSize = textSize.fontSizeSp.sp, color = colors.errRed) }
             HorizontalDivider()
             if ((trace != null || snapshot != null) && entries.isEmpty()) Text("No TCP activity matches the filters.")
             LazyColumn(

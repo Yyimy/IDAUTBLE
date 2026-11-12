@@ -395,6 +395,7 @@ class MainActivity : ComponentActivity() {
     private val uiDiagnosticHistory = mutableStateOf<List<DiagnosticEvent>?>(null)
     private var diagnosticHistorySupported by mutableStateOf(false)
     private var historyPaged = false
+    private var historyTimed = false
     private var historyLoading by mutableStateOf(false)
     private var historyCursor = 0L
     private var historyRequest = 0
@@ -1608,7 +1609,8 @@ class MainActivity : ComponentActivity() {
 
     private fun requestHistoryPage() {
         val request = ++historyRequest
-        sendText("HISTORY?=$historyCursor", addCrlf = true)
+        val command = if (historyTimed) "HISTORYTIME?" else "HISTORY?"
+        sendText("$command=$historyCursor", addCrlf = true)
         mainHandler.postDelayed({
             if (historyRequest == request && historyLoading) {
                 historyLoading = false
@@ -1645,7 +1647,7 @@ class MainActivity : ComponentActivity() {
             appendLine()
             appendLine("PLC history (newest first)")
             uiDiagnosticHistory.value.orEmpty().forEach {
-                appendLine("#${it.sequence}  boot=${it.boot}  +${it.seconds}s  ${it.reason}")
+                appendLine("#${it.sequence}  boot=${it.boot}  ${it.dateTime.ifEmpty { "Time unavailable" }}  ${it.reason}")
             }
             appendLine()
             appendLine("TCP trace (newest first, socket writes are not application acknowledgements)")
@@ -1654,6 +1656,7 @@ class MainActivity : ComponentActivity() {
                     "T" -> "TX"
                     "R" -> "RX"
                     "U" -> "TCP UP"
+                    "F" -> "TCP CONNECT FAILED"
                     else -> "TCP DOWN"
                 }
                 appendLine("#${it.sequence}  ${it.dateTime.ifEmpty { "Time unavailable" }}  $direction  ${it.detail}")
@@ -1668,6 +1671,7 @@ class MainActivity : ComponentActivity() {
             val capabilities = text.split(';')
             firmwareForExport = capabilities.first().substringAfter('=')
             historyPaged = "HISTORYPAGE=1" in capabilities
+            historyTimed = "HISTORYTIME=1" in capabilities
             if (!tcpTraceSupported && "TCPTRACE=1" in capabilities) {
                 tcpTraceSupported = true
                 sendText("TCPTRACE?", addCrlf = true)
@@ -3414,7 +3418,7 @@ private fun PlcBleTesterLandscape(
                 }
             } else if (selectedTab == 1) {
 
-                key("NETWORK") { NetworkScreen(networkSession, terminalTextSize, logColors, shutdownNotice, tcpTrace) }
+                key("NETWORK") { NetworkScreen(networkSession, terminalTextSize, logColors, tcpTrace) }
             } else {
                 OtaScreen(
                     onSendOta = onSendOta,

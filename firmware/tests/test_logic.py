@@ -273,7 +273,7 @@ int main(){
  gTcpMonitor=TcpMonitor{};
 
  // Critical diagnostics survive boot, stay bounded and batch routine writes.
- nowMs=1000;gBootCount=7;
+ nowMs=1000;gBootCount=7;gRtcIso="2026-11-12T14:30:06";
  for(int i=0;i<130;++i)recordDiagnostic("TCP_CONNECTED");
  CHECK(gDiagnosticHistory.count==128&&gDiagnosticHistory.sequence==130&&gDiagnosticHistory.valid());
  saveDiagnosticHistory(false);CHECK(!gHistoryDirty);
@@ -282,8 +282,13 @@ int main(){
  gDiagnosticHistory=DiagnosticHistory{};runtimeLoad();
  CHECK(gDiagnosticHistory.sequence==132&&gDiagnosticHistory.newest(0).boot==7);
  CHECK(std::string(gDiagnosticHistory.newest(1).reason)=="PONG_TIMEOUT");
+ CHECK(std::string(gDiagnosticHistory.newest(1).time)=="2026-11-12T14:30:06");
  storedBlobs.erase("diag_history");gDiagnosticHistory=DiagnosticHistory{};
 
+ UntimedDiagnosticHistory untimed;
+ untimed.add(7,50,"PONG_TIMEOUT");untimed.sequence=55;
+ Preferences oldHistoryPrefs;oldHistoryPrefs.putBytes("diag_history",&untimed,sizeof(untimed));
+ runtimeLoad();CHECK(gDiagnosticHistory.sequence==55&&gDiagnosticHistory.newest(0).time[0]==0);
  LegacyDiagnosticHistory legacy;
  legacy.add(6,15,"TCP_CONNECTED");legacy.add(6,30,"PONG_TIMEOUT");legacy.sequence=41;
  Preferences historyPrefs;historyPrefs.putBytes("diag_history",&legacy,sizeof(legacy));runtimeLoad();
