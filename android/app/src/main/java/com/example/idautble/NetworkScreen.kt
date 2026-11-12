@@ -240,7 +240,7 @@ private fun NetworkPanel(
 }
 
 @Composable
-internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, logColors: LogColors, shutdownNotice: String?) {
+internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, logColors: LogColors, shutdownNotice: String?, trace: List<TcpTraceEntry>?) {
     val state = session.state
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     DisposableEffect(session) {
@@ -282,7 +282,7 @@ internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, 
                         LiveConnectionPanel(state, session, now, Modifier.fillMaxWidth())
                         NetworkConfigurationPanel(state, session, Modifier.fillMaxWidth())
                     }
-                    TcpMonitorPanel(state, now, textSize, logColors, shutdownNotice, Modifier.weight(1f).fillMaxHeight())
+                    TcpMonitorPanel(state, now, textSize, logColors, shutdownNotice, trace, Modifier.weight(1f).fillMaxHeight())
                 }
             } else {
                 Column(
@@ -291,7 +291,7 @@ internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, 
                 ) {
                     LiveConnectionPanel(state, session, now, Modifier.fillMaxWidth())
                     NetworkConfigurationPanel(state, session, Modifier.fillMaxWidth())
-                    TcpMonitorPanel(state, now, textSize, logColors, shutdownNotice, Modifier.fillMaxWidth().height(320.dp))
+                    TcpMonitorPanel(state, now, textSize, logColors, shutdownNotice, trace, Modifier.fillMaxWidth().height(320.dp))
                 }
             }
         }
@@ -415,7 +415,7 @@ private fun LiveConnectionPanel(
     }
 }
 
-private data class TcpMonitorEntry(val ageSeconds: Long, val label: String, val message: String, val color: Color)
+private data class TcpMonitorEntry(val time: String, val label: String, val message: String, val color: Color)
 
 @Composable
 private fun TcpMonitorPanel(
@@ -424,36 +424,83 @@ private fun TcpMonitorPanel(
     textSize: TerminalTextSize,
     colors: LogColors,
     shutdownNotice: String?,
+    trace: List<TcpTraceEntry>?,
     modifier: Modifier,
 ) {
     val snapshot = state.status?.tcpMonitor
     val snapshotAge = state.statusReceivedAt?.let { (now - it).coerceAtLeast(0) / 1000 } ?: 0
-    val entries = remember(snapshot, colors) {
+    var showTx by rememberSaveable { mutableStateOf(true) }
+    var showRx by rememberSaveable { mutableStateOf(true) }
+    var showHeartbeat by rememberSaveable { mutableStateOf(false) }
+    var showConnections by rememberSaveable { mutableStateOf(true) }
+    var filterOpen by remember { mutableStateOf(false) }
+    val entries = if (trace != null) {
+        trace.filter { entry ->
+            (!entry.heartbeat || showHeartbeat) && when (entry.direction) {
+                "T" -> showTx
+                "R" -> showRx
+                else -> showConnections
+            }
+        }.map { entry ->
+            when (entry.direction) {
+                "T" -> TcpMonitorEntry(entry.time, "↑ TX", entry.detail, colors.txBlue)
+                "R" -> TcpMonitorEntry(entry.time, "↓ RX", entry.detail, colors.rxGreen)
+                "U" -> TcpMonitorEntry(entry.time, "TCP UP", "Connected to server", colors.txBlue)
+                else -> TcpMonitorEntry(entry.time, "TCP DOWN", tcpDisconnectLabel(entry.detail), colors.errRed)
+            }
+        }
+    } else {
         buildList {
-            snapshot?.replies?.forEach { reply ->
-                add(TcpMonitorEntry(reply.ageSeconds, "↓ RX", reply.text + if (reply.truncated) "…" else "", colors.rxGreen))
+            if (showRx) snapshot?.replies?.forEach { reply ->
+                val heartbeat = reply.text == "PONG" || reply.text.startsWith("PONG;")
+                if (!heartbeat || showHeartbeat) {
+                    add(TcpMonitorEntry("Time unavailable", "↓ RX", reply.text + if (reply.truncated) "…" else "", colors.rxGreen))
+                }
             }
-            snapshot?.connectionAgeSeconds?.let {
-                add(TcpMonitorEntry(it, "TCP UP", "Connected to server", colors.txBlue))
+            if (showConnections && snapshot?.connectionAgeSeconds != null)
+                add(TcpMonitorEntry("Time unavailable", "TCP UP", "Connected to server", colors.txBlue))
+            if (showConnections) snapshot?.disconnection?.let {
+                add(TcpMonitorEntry("Time unavailable", "TCP DOWN", tcpDisconnectLabel(it.reason), colors.errRed))
             }
-            snapshot?.disconnection?.let {
-                add(TcpMonitorEntry(it.ageSeconds, "TCP DOWN", tcpDisconnectLabel(it.reason), colors.errRed))
-            }
-        }.sortedBy { it.ageSeconds }
+        }
     }
     MaintenanceCard(modifier) {
         Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            NetworkHeading("TCP MONITOR")
+            Row(
+                Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                NetworkHeading("TCP MONITOR")
+                Box {
+                    val filtered = !showTx || !showRx || !showHeartbeat || !showConnections
+                    TextButton(onClick = { filterOpen = true }) { Text(if (filtered) "Filter •" else "Filter") }
+                    DropdownMenu(expanded = filterOpen, onDismissRequest = { filterOpen = false }) {
+                        listOf(
+                            Triple("Show TX", showTx, { showTx = !showTx }),
+                            Triple("Show RX", showRx, { showRx = !showRx }),
+                            Triple("Show PING / PONG", showHeartbeat, { showHeartbeat = !showHeartbeat }),
+                            Triple("Show connection events", showConnections, { showConnections = !showConnections }),
+                        ).forEach { (label, checked, toggle) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = toggle,
+                                leadingIcon = { Checkbox(checked = checked, onCheckedChange = null) },
+                            )
+                        }
+                    }
+                }
+            }
             val status = when {
                 state.status == null -> "Waiting for network status."
                 snapshot == null -> "TCP monitoring requires compatible PLC firmware."
                 !state.available || snapshotAge > 15 -> "Last available snapshot"
-                else -> "Server replies and connection events"
+                trace == null -> "Server replies and connection events"
+                else -> "TCP traffic and connection events"
             }
             Text(status, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             shutdownNotice?.let { Text(it, fontSize = textSize.fontSizeSp.sp, color = colors.errRed) }
             HorizontalDivider()
-            if (snapshot != null && entries.isEmpty()) Text("No TCP activity recorded.")
+            if ((trace != null || snapshot != null) && entries.isEmpty()) Text("No TCP activity matches the filters.")
             LazyColumn(
                 Modifier.fillMaxWidth().weight(1f),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -462,7 +509,7 @@ private fun TcpMonitorPanel(
                     MaintenanceCard(Modifier.fillMaxWidth(), containerColor = entry.color.copy(alpha = 0.06f)) {
                         Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
                             Text(
-                                "${tcpMonitorAge(entry.ageSeconds + snapshotAge)}  ${entry.label}",
+                                "${entry.time}  ${entry.label}",
                                 color = entry.color,
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = textSize.fontSizeSp.sp,
@@ -493,13 +540,6 @@ private fun tcpDisconnectLabel(reason: String) = when (reason) {
     "WRITE_FAILED" -> "Write failed"
     "WRITE_TIMEOUT" -> "Write timeout"
     else -> "Unknown reason"
-}
-
-private fun tcpMonitorAge(seconds: Long) = when {
-    seconds < 60 -> "$seconds s ago"
-    seconds < 3600 -> "${seconds / 60} min ago"
-    seconds < 86400 -> "${seconds / 3600} h ago"
-    else -> "${seconds / 86400} d ago"
 }
 
 @Composable

@@ -33,6 +33,7 @@
 #include "OutboxStorage.h"
 #include "TcpMonitor.h"
 #include "DiagnosticHistory.h"
+#include "TcpTrace.h"
 
 // ================= CONFIGURACION DEL PIN POR EL INSTALADOR ==================
 // Cambia este valor ANTES de compilar. Exactamente 6 cifras, entre comillas.
@@ -236,6 +237,10 @@ static bool gWifiEnabled = false;
 static bool gWifiConnected = false;
 static bool gTcpConnected = false;
 static TcpMonitor gTcpMonitor;
+static TcpTraceBuffer<6> gTcpTraffic;
+static TcpTraceBuffer<2> gTcpHeartbeatTrace;
+static uint32_t gTcpTraceSequence = 0;
+static void recordTcpTrace(char direction, const char *detail, bool heartbeat = false);
 static DiagnosticHistory gDiagnosticHistory;
 static bool gHistoryDirty = false, gHistoryWriteAttempted = false;
 static uint32_t gHistoryLastWriteMs = 0;
@@ -259,7 +264,10 @@ static void saveDiagnosticHistory(bool force) {
 }
 
 static void recordTcpDown(const char *reason) {
-  if (gTcpMonitor.disconnected(millis(), reason)) recordDiagnostic(reason);
+  if (gTcpMonitor.disconnected(millis(), reason)) {
+    recordDiagnostic(reason);
+    recordTcpTrace('D', reason);
+  }
 }
 
 static bool gTcpConnectedPrev = false;
@@ -1128,6 +1136,7 @@ static void tcpConnectTick() {
         } else {
           gTcpMonitor.connected(millis());
           recordDiagnostic("TCP_CONNECTED");
+          recordTcpTrace('U', "TCP_CONNECTED");
           logLine("TCP CONNECTED greeting queued");
         }
       } else {
@@ -1150,6 +1159,53 @@ static void tcpConnectTick() {
       gTcpState = TCP_WAIT_RETRY;
       break;
   }
+}
+
+static void recordTcpTrace(char direction, const char *detail, bool heartbeat) {
+  TcpTraceEntry entry{};
+  entry.sequence = ++gTcpTraceSequence;
+  entry.direction = direction;
+  if (gRtcIso.length() == 19 && !gRtcIso.startsWith("0000-"))
+    strlcpy(entry.time, gRtcIso.c_str(), sizeof(entry.time));
+  strlcpy(entry.detail, detail, sizeof(entry.detail));
+  if (heartbeat) gTcpHeartbeatTrace.add(entry);
+  else gTcpTraffic.add(entry);
+}
+
+static void recordTcpReceived(const char *line, size_t size) {
+  if (!strcmp(line, "PONG") || !strncmp(line, "PONG;", 5)) {
+    recordTcpTrace('R', "PONG", true);
+    return;
+  }
+  uint32_t id;
+  if (!strncmp(line, "ACK=", 4) && parseU32(String(line + 4), id)) {
+    char detail[24];
+    snprintf(detail, sizeof(detail), "ACK=%lu", (unsigned long)id);
+    recordTcpTrace('R', detail);
+    return;
+  }
+  char detail[24];
+  snprintf(detail, sizeof(detail), "TEXT %u B", (unsigned)size);
+  recordTcpTrace('R', detail);
+}
+
+static void recordTcpSent(const uint8_t *data, size_t size, uint32_t eventId) {
+  if (size == 6 && !memcmp(data, "PING\r\n", 6)) {
+    recordTcpTrace('T', "PING", true);
+    return;
+  }
+  if (size >= 10 && !memcmp(data, "CONNECTED;", 10)) {
+    recordTcpTrace('T', "CONNECTED");
+    return;
+  }
+  char detail[24];
+  if (eventId)
+    snprintf(detail, sizeof(detail), "EVT=%lu %u B", (unsigned long)eventId, (unsigned)size);
+  else if (size > 20 && data[0] == 0x06 && data[20] == 0x02)
+    snprintf(detail, sizeof(detail), "READING %u B", (unsigned)size);
+  else
+    snprintf(detail, sizeof(detail), "MESSAGE %u B", (unsigned)size);
+  recordTcpTrace('T', detail);
 }
 
 static void tcpPollRx() {
@@ -1187,6 +1243,7 @@ static void tcpPollRx() {
       binary[n++] = c;
       if (n == 4) {
         n = 0;
+        recordTcpTrace('R', "BINARY 4 B");
         BleCmd cmd = {};
         cmd.type = cmdFromBinary4(binary);
         cmd.receivedMs = millis();
@@ -1205,6 +1262,7 @@ static void tcpPollRx() {
       if (used && !overflow) {
         line[used] = 0;
         gTcpMonitor.receive(millis(), line, used);
+        recordTcpReceived(line, used);
         if (!strcmp(line, "PONG") || !strncmp(line, "PONG;", 5)) {
           gLastTcpRxMs = millis();
           gTcpPongSeen = true;
@@ -2236,7 +2294,7 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
     cmd.type = BLECMD_OTA_ABORT;
   } else if (rxTrim.startsWith("AUTH=") || rxTrim.startsWith("ACK=") ||
              rxTrim.startsWith("ACKMODE=") || rxTrim.startsWith("TCPADV=") ||
-             rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" || rxTrim == "HISTORY?" ||
+             rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" || rxTrim == "HISTORY?" || rxTrim.startsWith("HISTORY?=") || rxTrim == "TCPTRACE?" ||
              rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
              rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("IDLEMIN=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
     cmd.type = BLECMD_TEXT;
@@ -2451,7 +2509,8 @@ static void bleProcessPendingOnce() {
           msg += "ID=" + gId + ";";
           msg += "REASON=WIFI_DISABLED\r\n";
 
-          tcpWriteAvailable((const uint8_t *)msg.c_str(), msg.length());
+          if (tcpWriteAvailable((const uint8_t *)msg.c_str(), msg.length()) == (int)msg.length())
+            recordTcpTrace('T', "DISCONNECTED");
 
           gTcpClient.stop();
         }
@@ -3280,10 +3339,24 @@ static void runtimeLoad() {
   const uint32_t idle = p.getUInt("idle_min", 120);
   gIdleMinutes = idle >= 1 && idle <= 1440 ? idle : 120;
   gLastCutReason = p.getString("last_cut", "");
-  DiagnosticHistory history;
+  static DiagnosticHistory history;
   if (p.getBytesLength("diag_history") == sizeof(history) &&
       p.getBytes("diag_history", &history, sizeof(history)) == sizeof(history) &&
-      history.valid()) gDiagnosticHistory = history;
+      history.valid()) {
+    gDiagnosticHistory = history;
+  } else {
+    LegacyDiagnosticHistory old;
+    if (p.getBytesLength("diag_history") == sizeof(old) &&
+        p.getBytes("diag_history", &old, sizeof(old)) == sizeof(old) && old.valid()) {
+      gDiagnosticHistory = DiagnosticHistory{};
+      for (uint8_t i = old.count; i > 0; --i) {
+        const auto &event = old.newest(i - 1);
+        gDiagnosticHistory.add(event.boot, event.seconds, event.reason);
+      }
+      gDiagnosticHistory.sequence = old.sequence;
+      gHistoryDirty = true;
+    }
+  }
   const uint32_t tcpAdvanced = p.getUInt("tcp_adv", 0);
   const uint32_t pingSeconds = (tcpAdvanced >> 2) & 0x7F;
   const uint32_t timeoutSeconds = tcpAdvanced >> 9;
@@ -3516,13 +3589,40 @@ static void handleTextCommand(const BleCmd &cmd) {
     if (gOutbox.count && gOutbox.items[0].id == id) outboxPop();
     return;
   }
-  if (s == "HISTORY?") {
+  if (s == "TCPTRACE?") {
     if (cmd.source != 0) return;
-    String line = "HISTORY=";
-    for (uint8_t i = 0; i < gDiagnosticHistory.count; ++i) {
-      if (i) line += '|';
+    String line = "TCPTRACE=";
+    auto append = [&](const TcpTraceEntry &entry) {
+      if (line.length() > sizeof("TCPTRACE=") - 1) line += '|';
+      line += String(entry.sequence) + "," + entry.time + "," + entry.direction + "," + entry.detail;
+    };
+    for (size_t i = 0; i < gTcpTraffic.count; ++i) append(gTcpTraffic.newest(i));
+    for (size_t i = 0; i < gTcpHeartbeatTrace.count; ++i) append(gTcpHeartbeatTrace.newest(i));
+    replyLine(true, line);
+    return;
+  }
+  if (s == "HISTORY?" || s.startsWith("HISTORY?=")) {
+    if (cmd.source != 0) return;
+    const bool paged = s != "HISTORY?";
+    uint32_t before = 0;
+    if (paged && !parseU32(s.substring(sizeof("HISTORY?=") - 1), before)) {
+      replyLine(false, "ERR=HISTORY_CURSOR");
+      return;
+    }
+    size_t offset = 0;
+    if (before) {
+      offset = gDiagnosticHistory.count;
+      if (before <= gDiagnosticHistory.sequence &&
+          gDiagnosticHistory.sequence - before < gDiagnosticHistory.count)
+        offset = size_t(gDiagnosticHistory.sequence - before) + 1;
+    }
+    const size_t end = min(offset + 8, size_t(gDiagnosticHistory.count));
+    const uint32_t next = end < gDiagnosticHistory.count ? gDiagnosticHistory.sequence - (end - 1) : 0;
+    String line = paged ? "HISTORYPAGE=" + String(next) + "|" : String("HISTORY=");
+    for (size_t i = offset; i < end; ++i) {
+      if (i != offset) line += '|';
       const auto &event = gDiagnosticHistory.newest(i);
-      line += String(gDiagnosticHistory.sequence - i) + "," + String(event.boot) +
+      line += String(gDiagnosticHistory.sequence - uint32_t(i)) + "," + String(event.boot) +
               "," + String(event.seconds) + "," + event.reason;
     }
     replyLine(true, line);
@@ -3533,7 +3633,7 @@ static void handleTextCommand(const BleCmd &cmd) {
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
                         (cmd.source == 0 ? String(";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1;READERTIMEOUT=") + String(gReaderTimeoutMs) +
-                         ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1" : String()));
+                         ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1;HISTORYPAGE=1;TCPTRACE=1" : String()));
     return;
   }
   if (s == "STATUS?") {
@@ -3760,6 +3860,7 @@ static void txTick() {
         if (tcpOffset == p.len) {
           tcpDone = true;
           accepted = true;
+          recordTcpSent(p.data, p.len, p.eventId);
         }
       } else if (n == -1) {
         recordTcpDown("WRITE_FAILED");
