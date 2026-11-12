@@ -60,7 +60,7 @@ void sendHotkey(ShortcutPeer){replyLine(true,"HIDHOTKEY=CTRL+ALT+L");}
 void sendDeviceStatus(){replyLine(true,"STATUS=1;FW=TEST;ID=TRUCK-1");}
 void handleIdentityCommand(const String&,uint8_t){replyLine(true,"ID=TRUCK-1;HWID=AABBCCDDEEFF;NAME=TRUCK-1");}
 '''
-names = ['sendCounters','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','tcpTextCommandType','cfgSendOk','cfgSendErr','cfgSendCurrent','tcpAdvancedValues','setReaderTimeout','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendOff','powerCut','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','tcpWatchdog','eventTick']
+names = ['sendCounters','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','cfgSendOk','cfgSendErr','cfgSendCurrent','tcpAdvancedValues','setReaderTimeout','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendOff','powerCut','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','tcpWatchdog','eventTick']
 body += extra+'\n'+'\n'.join(base['function'](n).split('{',1)[0]+';' for n in names)+'\n'
 body += '\n'.join(base['function'](n) for n in names)
 body += r'''
@@ -138,6 +138,16 @@ int main(){
  run(cmd(BLECMD_TEXT,0,"HISTORYTIME?=0"));drain();
  CHECK(bleBytes().find("HISTORYPAGE=2|7,")!=std::string::npos);
  CHECK(bleBytes().find(",TCP_CONNECTED,2026-11-12T14:41:23")!=std::string::npos);
+ // A custom heartbeat remains line-framed, and only the expected reply refreshes it.
+ fresh();gMaintenanceAuthorized=true;run(cmd(BLECMD_TEXT,0,"TCPADV=1,0,10,20,31,30"));drain();
+ CHECK(bleBytes().find("TCPADV=1,0,10,20,31,30")!=std::string::npos);
+ gLastTcpPingMs=nowMs-10001;gLastTcpRxMs=nowMs;gTcpClient.sent.clear();tcpWatchdog();drain();
+ CHECK(gTcpClient.sent=="1\r\n");
+ auto prior=gLastTcpRxMs;gTcpClient.rx="PONG\r\n";tcpPollRx();CHECK(gLastTcpRxMs==prior);
+ gTcpClient.rx="0\r\n";tcpPollRx();CHECK(gLastTcpRxMs>prior);
+ CHECK(gTcpHeartbeatTrace.newest(0).direction=='R');
+ gHeartbeatEnabled=false;gHeartbeatMessages=HeartbeatMessages{"PING","PONG"};
+ storedBlobs.erase("tcp_adv2");
  // Automatic NETSTAT remains useful to BLE but does not add traffic to the server.
  fresh();netSendStatus(true);drain();CHECK(gTcpClient.sent.empty());CHECK(bleBytes().find("NETSTAT=")!=std::string::npos);
  // Counter snapshots are read-only, bounded and unsigned, including a full outbox.

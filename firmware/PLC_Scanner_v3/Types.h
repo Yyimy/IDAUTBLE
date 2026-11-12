@@ -117,11 +117,22 @@ struct CommandReplyScope {
   ~CommandReplyScope() { current = previous; }
 };
 
+struct HeartbeatMessages {
+  char request[17];
+  char response[17];
+};
+
+struct StoredTcpAdvanced {
+  uint32_t packed;
+  HeartbeatMessages messages;
+};
+
 struct TxPacket {
   uint16_t len;
   uint32_t session;
   uint32_t tcpSession;
   TxTarget target;
+  bool heartbeat;
   uint32_t eventId;
   uint8_t data[512];
   HeightTiming heightTiming;

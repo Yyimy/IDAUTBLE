@@ -2,7 +2,8 @@ package com.example.idautble
 
 internal data class TcpTraceEntry(val sequence: Long, val dateTime: String, val direction: String, val detail: String) {
     val time get() = dateTime.takeIf { it.length == 19 }?.substring(11) ?: "Time unavailable"
-    val heartbeat get() = direction == "T" && detail == "PING" || direction == "R" && detail == "PONG"
+    val heartbeat get() = direction == "T" && detail in listOf("PING", "HEARTBEAT TX") ||
+        direction == "R" && detail in listOf("PONG", "HEARTBEAT RX")
 }
 
 internal val plcTimestampPattern = Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}")
