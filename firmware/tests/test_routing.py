@@ -42,7 +42,7 @@ std::atomic<uint8_t> gOtaPct{0};bool gOtaParamsReady=false;
 bool gCutConfirmed=false;uint32_t gEventLastAttempt=0,gEventOverflow=0;
 char gCutReason[96]="";
 uint32_t gCutRequestedMs=0,gLastCutAttemptMs=0;
-uint32_t gBootCount=12,gPonTotal=1540,gPalCargado=320,gPalDescargado=319,gLecturasFallidas=8;
+uint32_t gPonTotal=1540,gPalCargado=320,gPalDescargado=319,gLecturasFallidas=8;
 int countersMux=0,locks=0;void portENTER_CRITICAL(int*){++locks;}void portEXIT_CRITICAL(int*){--locks;}
 void rtcUpdateCacheIfNeeded(){}
 void netSave(){}void wifiStartFromConfig(){}
@@ -112,6 +112,14 @@ int main(){
  CHECK(storedSettings["last_cut"]=="INACTIVITY_3_MIN");
  gCutRequested=false;runtimeLoad();CHECK(gLastCutReason=="INACTIVITY_3_MIN");
  storedUIntSettings.erase("idle_min");storedSettings.erase("last_cut");runtimeLoad();
+ // History is a maintenance-only response, including while a client and TCP are present.
+ fresh();plcHid::clientGeneration=31;run(cmd(BLECMD_TEXT,0,"HISTORY?"));drain();
+ CHECK(bleBytes().find("HISTORY=")!=std::string::npos);
+ CHECK(bleBytes().find("INACTIVITY_3_MIN")!=std::string::npos);
+ CHECK(clientBytes().empty()&&gTcpClient.sent.empty());
+ fresh();run(cmd(BLECMD_TEXT,1,"HISTORY?"));drain();
+ CHECK(tcpTextCommandType("HISTORY?")==BLECMD_NONE);
+ CHECK(gTcpClient.sent.empty()&&bleBytes().empty());
  // Automatic NETSTAT remains useful to BLE but does not add traffic to the server.
  fresh();netSendStatus(true);drain();CHECK(gTcpClient.sent.empty());CHECK(bleBytes().find("NETSTAT=")!=std::string::npos);
  // Counter snapshots are read-only, bounded and unsigned, including a full outbox.

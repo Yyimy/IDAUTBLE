@@ -21,11 +21,12 @@ class TcpMonitor {
     connectedAt = now;
   }
 
-  void disconnected(uint32_t now, const char *reason) {
-    if (!up) return;
+  bool disconnected(uint32_t now, const char *reason) {
+    if (!up) return false;
     up = false;
     disconnectedAt = now;
     disconnectReason = reason;
+    return true;
   }
 
   void receive(uint32_t now, const char *text, size_t length) {
