@@ -49,15 +49,32 @@ fun parseNetConfigLine(line: String): NetConfig? {
 }
 
 internal fun parseTcpAdvanced(line: String): TcpAdvancedConfig? {
-    val values = when {
-        line.startsWith("TCPADV=") -> line.substringAfter('=')
-        else -> networkFields(line, "NET=")?.get("TCPADV") ?: return null
-    }.split(',')
-    if (values.size != 4 || values.take(2).any { it != "0" && it != "1" }) return null
-    val interval = values[2].toIntOrNull() ?: return null
-    val timeout = values[3].toIntOrNull() ?: return null
-    return TcpAdvancedConfig(values[0] == "1", values[1] == "1", interval, timeout)
-        .takeIf { it.valid && it.command() == "TCPADV=" + values.joinToString(",") }
+    val fields = if (line.startsWith("TCPADV=")) null else {
+        networkFields(line, "NET=") ?: return null
+    }
+    val raw = if (fields == null) line.substringAfter('=') else fields["TCPADV"] ?: return null
+    val values = raw.split(',')
+    if (values.size !in listOf(4, 6) || values.take(2).any { it != "0" && it != "1" }) return null
+    val interval = values[2].toIntOrNull()?.takeIf { it.toString() == values[2] } ?: return null
+    val timeout = values[3].toIntOrNull()?.takeIf { it.toString() == values[3] } ?: return null
+    val hexPair = if (values.size == 6) values.drop(4) else fields?.get("HBMSG")?.split(',')
+    val messages = if (hexPair != null) {
+        if (hexPair.size != 2) return null
+        HeartbeatMessages(decodeHeartbeatText(hexPair[0]) ?: return null, decodeHeartbeatText(hexPair[1]) ?: return null)
+    } else null
+    return TcpAdvancedConfig(values[0] == "1", values[1] == "1", interval, timeout, messages)
+        .takeIf { it.valid }
+}
+
+private fun decodeHeartbeatText(hex: String): String? {
+    if (hex.length !in 2..32 || hex.length % 2 != 0 || hex.any { it !in '0'..'9' && it !in 'A'..'F' }) return null
+    return buildString {
+        for (pair in hex.chunked(2)) {
+            val code = pair.toInt(16)
+            if (code !in 32..126) return null
+            append(code.toChar())
+        }
+    }
 }
 
 fun parseNetStatusLine(line: String): NetStatus? {

@@ -423,7 +423,7 @@ class NetworkSession(private val now: () -> Long, private val send: (String, Lon
                         "ERR=AUTH_LOCKED" ->
                             "PLC authorisation is required. Enter the PIN and retry."
                         "ERR=TCPADV_STORAGE" -> "The PLC could not save TCP settings."
-                        "ERR=TCPADV_INVALID" -> "The PLC rejected the heartbeat timing."
+                        "ERR=TCPADV_INVALID" -> "The PLC rejected the heartbeat settings."
                         "BUSY",
                         "ERR=BUSY",
                         "ERR=ID_BUSY" ->

@@ -315,7 +315,7 @@ private fun LiveConnectionPanel(
         NetworkHeading("LIVE CONNECTION")
         if (!stale && state.tcpAdvanced != null && status != null) {
             if (state.tcpAdvanced.heartbeat) {
-                NetworkValue("Last PONG", status.pongAgeSeconds?.let { "${it + (age ?: 0)} s ago" } ?: "—")
+                NetworkValue("Last heartbeat reply", status.pongAgeSeconds?.let { "${it + (age ?: 0)} s ago" } ?: "—")
             }
             NetworkValue("Pending events", status.pendingEvents?.toString() ?: "—")
         }
@@ -478,7 +478,7 @@ private fun TcpMonitorPanel(
                         listOf(
                             Triple("Show TX", showTx, { showTx = !showTx }),
                             Triple("Show RX", showRx, { showRx = !showRx }),
-                            Triple("Show PING / PONG", showHeartbeat, { showHeartbeat = !showHeartbeat }),
+                            Triple("Show heartbeat", showHeartbeat, { showHeartbeat = !showHeartbeat }),
                             Triple("Show connection events", showConnections, { showConnections = !showConnections }),
                         ).forEach { (label, checked, toggle) ->
                             DropdownMenuItem(
@@ -733,8 +733,12 @@ private fun TcpAdvancedSettings(
     var acknowledgements by rememberSaveable(config) { mutableStateOf(config.acknowledgements) }
     var interval by rememberSaveable(config) { mutableStateOf(config.intervalSeconds.toString()) }
     var timeout by rememberSaveable(config) { mutableStateOf(config.timeoutSeconds.toString()) }
+    val savedMessages = config.heartbeatMessages
+    var request by rememberSaveable(config) { mutableStateOf(savedMessages?.request.orEmpty()) }
+    var response by rememberSaveable(config) { mutableStateOf(savedMessages?.response.orEmpty()) }
     val draft = TcpAdvancedConfig(
         heartbeat, acknowledgements, interval.toIntOrNull() ?: 0, timeout.toIntOrNull() ?: 0,
+        savedMessages?.let { HeartbeatMessages(request, response) },
     )
     val focus = LocalFocusManager.current
     CollapsibleSettingsSection(
@@ -745,14 +749,24 @@ private fun TcpAdvancedSettings(
             Text("Enable heartbeat", Modifier.weight(1f))
             Switch(checked = heartbeat, onCheckedChange = { heartbeat = it }, enabled = enabled)
         }
-        Text("The server must reply PONG to PING.", fontSize = 12.sp)
-        NetworkInput("Ping interval (s)", interval, enabled, keyboard = KeyboardType.Number) {
+        if (savedMessages == null) {
+            Text("The server must reply PONG to PING.", fontSize = 12.sp)
+        } else {
+            NetworkInput("Heartbeat request", request, enabled) { request = it.take(16) }
+            NetworkInput("Expected heartbeat reply", response, enabled) { response = it.take(16) }
+            Text("1–16 printable ASCII characters. The PLC adds CRLF to each request.", fontSize = 12.sp)
+            if (draft.heartbeatMessages?.valid == false) Text(
+                "Use printable text and choose a reply distinct from PLC commands.",
+                color = MaterialTheme.colorScheme.error, fontSize = 12.sp,
+            )
+        }
+        NetworkInput("Heartbeat interval (s)", interval, enabled, keyboard = KeyboardType.Number) {
             interval = it.filter { c -> c in '0'..'9' }.take(3)
         }
         NetworkInput("Response timeout (s)", timeout, enabled, keyboard = KeyboardType.Number) {
             timeout = it.filter { c -> c in '0'..'9' }.take(3)
         }
-        if (!draft.valid) Text(
+        if (draft.intervalSeconds !in 5..120 || draft.timeoutSeconds <= draft.intervalSeconds || draft.timeoutSeconds > 300) Text(
             "Interval must be 5–120 s. Timeout must exceed the interval and be at most 300 s.",
             color = MaterialTheme.colorScheme.error, fontSize = 12.sp,
         )

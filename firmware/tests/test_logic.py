@@ -83,7 +83,7 @@ outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
 tcp_monitor=(sketch/'TcpMonitor.h').read_text().replace('#pragma once','')
 history_header=(sketch/'DiagnosticHistory.h').read_text().replace('#pragma once','')
 trace_header=(sketch/'TcpTrace.h').read_text().replace('#pragma once','')
-names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','recordDiagnostic','saveDiagnosticHistory','recordTcpTrace','recordTcpDown','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','recordTcpReceived','recordTcpSent','setIdleMinutes','appendTcpMonitor','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
+names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','tcpTextCommandType','validHeartbeatMessages','decodeHeartbeatMessage','heartbeatReplyMatches','heartbeatValues','recordDiagnostic','saveDiagnosticHistory','recordTcpTrace','recordTcpDown','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','recordTcpReceived','recordTcpSent','setIdleMinutes','appendTcpMonitor','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
 using std::min;
@@ -127,7 +127,9 @@ std::atomic<bool> gMaintenanceAuthorized{false};uint32_t gAuthBlockedUntil=0;uin
 String gMaintenancePin,gOtaApPass,gOtaApSsid,gLastCutReason;bool gPinChangedOnBoot=false,gHeartbeatEnabled=false;
 const char* OTA_AP_PASS=nullptr;
 uint32_t gTcpPingSeconds=10,gTcpTimeoutSeconds=20,gLastTcpRxMs=0,gLastTcpPingMs=0;
-bool gTcpPongSeen=false,failUIntWrite=false;
+bool gTcpPongSeen=false,failUIntWrite=false,failBlobWrite=false;
+HeartbeatMessages gHeartbeatMessages{"PING","PONG"};
+static bool queueTargetFrame(const uint8_t*,size_t,const HeightTiming*,TxTarget,uint32_t,bool=false);
 TcpMonitor gTcpMonitor;
 DiagnosticHistory gDiagnosticHistory;
 TcpTraceBuffer<6> gTcpTraffic;TcpTraceBuffer<2> gTcpHeartbeatTrace;
@@ -146,7 +148,7 @@ struct Preferences {
  size_t putString(const char*k,const String&v){storedSettings[k]=v;return v.length();}
  bool getBool(const char*,bool def){return def;}size_t getBytesLength(const char*k){return storedBlobs.count(k)?storedBlobs[k].size():0;}
  size_t getBytes(const char*k,void*out,size_t cap){auto n=getBytesLength(k);if(!n||n>cap)return 0;memcpy(out,storedBlobs[k].data(),n);return n;}
- size_t putBytes(const char*k,const void*data,size_t size){const auto*p=(const uint8_t*)data;storedBlobs[k]={p,p+size};return size;}
+ size_t putBytes(const char*k,const void*data,size_t size){if(failBlobWrite)return 0;const auto*p=(const uint8_t*)data;storedBlobs[k]={p,p+size};return size;}
 };
 struct SerialMock {void printf(const char*,...){}} Serial;
 uint32_t esp_random(){return 123456789;}
@@ -296,7 +298,7 @@ int main(){
  CHECK(std::string(gDiagnosticHistory.newest(0).reason)=="PONG_TIMEOUT");
  storedBlobs.erase("diag_history");gDiagnosticHistory=DiagnosticHistory{};
  gRtcIso="2026-11-12T14:30:06";recordTcpReceived("ACK=42",6);
- const uint8_t ping[]={'P','I','N','G',13,10};recordTcpSent(ping,sizeof(ping),0);
+ const uint8_t ping[]={'P','I','N','G',13,10};recordTcpSent(ping,sizeof(ping),0,true);
  CHECK(std::string(gTcpTraffic.newest(0).detail)=="ACK=42");
  CHECK(std::string(gTcpTraffic.newest(0).time)=="2026-11-12T14:30:06");
  CHECK(std::string(gTcpHeartbeatTrace.newest(0).detail)=="PING");
@@ -307,11 +309,18 @@ int main(){
  CHECK(validTcpTiming(5,6));CHECK(validTcpTiming(120,300));
  CHECK(!validTcpTiming(4,20));CHECK(!validTcpTiming(10,10));CHECK(!validTcpTiming(10,301));
  runtimeLoad();CHECK(!gHeartbeatEnabled&&!gAckMode&&gTcpPingSeconds==10&&gTcpTimeoutSeconds==20);
- gTcpPongSeen=true;CHECK(saveTcpAdvanced(true,true,15,45));CHECK(!gTcpPongSeen);
- failUIntWrite=true;CHECK(!saveTcpAdvanced(false,false,10,20));failUIntWrite=false;
+ gTcpPongSeen=true;CHECK(saveTcpAdvanced(true,true,15,45,gHeartbeatMessages));CHECK(!gTcpPongSeen);
+ failBlobWrite=true;CHECK(!saveTcpAdvanced(false,false,10,20,gHeartbeatMessages));failBlobWrite=false;
  CHECK(gHeartbeatEnabled&&gAckMode&&gTcpPingSeconds==15&&gTcpTimeoutSeconds==45);
  gTcpPingSeconds=10;gTcpTimeoutSeconds=20;gHeartbeatEnabled=false;gAckMode=false;runtimeLoad();
  CHECK(gHeartbeatEnabled&&gAckMode&&gTcpPingSeconds==15&&gTcpTimeoutSeconds==45);
+ CHECK(saveTcpAdvanced(true,true,15,45,HeartbeatMessages{"1","0"}));
+ runtimeLoad();CHECK(heartbeatReplyMatches("0")&&!heartbeatReplyMatches("PONG"));
+ CHECK(heartbeatValues()=="31,30");
+ CHECK(!validHeartbeatMessages(HeartbeatMessages{"1","ACK=5"}));
+ CHECK(!validHeartbeatMessages(HeartbeatMessages{"1","NETSTAT?"}));
+ CHECK(!decodeHeartbeatMessage("0A",gHeartbeatMessages.request));
+ storedBlobs.erase("tcp_adv2");
  storedUIntSettings.erase("tcp_adv");runtimeLoad();
  CHECK(gIdleMinutes==120);
  storedUIntSettings["idle_min"]=15;storedSettings["last_cut"]="COMMAND";runtimeLoad();
