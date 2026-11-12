@@ -1,0 +1,35 @@
+name: Build Windows TCP server
+on:
+  push:
+    branches: [verify/windows-tcp-server]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: tools/windows-tcp-server
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - run: python test_reconnection.py
+      - run: python -m pip install pyinstaller==6.14.2
+      - run: python -m PyInstaller --onefile --windowed --clean --name Servidor_TCP_PLC servidor_plc.py
+      - name: Check executable and prepare download
+        shell: pwsh
+        run: |
+          $exe = "dist/Servidor_TCP_PLC.exe"
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $exe))
+          if ($bytes.Length -lt 1000000 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) {
+            throw "The Windows executable is missing or invalid."
+          }
+          Copy-Item LEEME.txt dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Servidor_TCP_PLC_Windows
+          path: tools/windows-tcp-server/dist/
+          if-no-files-found: error
