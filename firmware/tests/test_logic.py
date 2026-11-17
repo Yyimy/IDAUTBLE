@@ -84,7 +84,7 @@ outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
 tcp_monitor=(sketch/'TcpMonitor.h').read_text().replace('#pragma once','')
 history_header=(sketch/'DiagnosticHistory.h').read_text().replace('#pragma once','')
 trace_header=(sketch/'TcpTrace.h').read_text().replace('#pragma once','')
-names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','tcpTextCommandType','validHeartbeatMessages','decodeHeartbeatMessage','heartbeatReplyMatches','heartbeatValues','recordDiagnostic','saveDiagnosticHistory','recordTcpTrace','recordTcpDown','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','omitFrameTime','txTick','parseU32','recordTcpReceived','recordTcpSent','setIdleMinutes','appendTcpMonitor','saveNvsSetting','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
+names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','tcpTextCommandType','validHeartbeatMessages','decodeHeartbeatMessage','heartbeatReplyMatches','heartbeatValues','recordDiagnostic','releaseLegacyDiagnosticStorage','recordTcpTrace','recordTcpDown','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','omitFrameTime','txTick','parseU32','recordTcpReceived','recordTcpSent','setIdleMinutes','appendTcpMonitor','saveNvsSetting','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
 using std::min;
@@ -136,8 +136,7 @@ DiagnosticHistory gDiagnosticHistory;
 TcpTraceBuffer<6> gTcpTraffic;TcpTraceBuffer<2> gTcpHeartbeatTrace;
 uint32_t gTcpTraceSequence=0;
 static void recordTcpTrace(char,const char*,bool=false);
-bool gHistoryDirty=false,gHistoryWriteAttempted=false;
-uint32_t gHistoryLastWriteMs=0,gBootCount=0;
+uint32_t gBootCount=0;
 std::map<std::string,std::vector<uint8_t>> storedBlobs;
 std::map<std::string,String> storedSettings;
 std::map<std::string,uint32_t> storedUIntSettings;
@@ -153,7 +152,7 @@ struct Preferences {
 };
 using nvs_handle_t = int;
 using esp_err_t = int;
-constexpr esp_err_t ESP_OK = 0;
+constexpr esp_err_t ESP_OK = 0, ESP_ERR_NVS_NOT_FOUND = 2;
 constexpr int NVS_READWRITE = 1;
 struct nvs_stats_t {size_t free_entries, used_entries, total_entries;};
 esp_err_t nvs_open(const char*,int,nvs_handle_t *handle){*handle=1;return ESP_OK;}
@@ -163,11 +162,15 @@ esp_err_t nvs_set_u32(nvs_handle_t,const char *key,uint32_t value){
 esp_err_t nvs_set_blob(nvs_handle_t,const char *key,const void *data,size_t size){
   return Preferences{}.putBytes(key,data,size)==size?ESP_OK:1;
 }
-esp_err_t nvs_commit(nvs_handle_t){return ESP_OK;}
+unsigned nvsCommitCount=0;
+esp_err_t nvs_commit(nvs_handle_t){++nvsCommitCount;return ESP_OK;}
+esp_err_t nvs_erase_key(nvs_handle_t,const char *key){
+  return storedBlobs.erase(key)?ESP_OK:ESP_ERR_NVS_NOT_FOUND;
+}
 void nvs_close(nvs_handle_t){}
 esp_err_t nvs_get_stats(const char*,nvs_stats_t*){return ESP_OK;}
 const char *esp_err_to_name(esp_err_t error){return error?"TEST_WRITE_ERROR":"ESP_OK";}
-struct SerialMock {void printf(const char*,...){}} Serial;
+struct SerialMock {void printf(const char*,...){} void println(const char*){}} Serial;
 uint32_t esp_random(){return 123456789;}
 #define OUTBOX_CAPACITY 8
 #define ESP_OK 0
@@ -291,29 +294,25 @@ int main(){
  CHECK(snapshot.find("+|2,504F4E47") != std::string::npos);
  gTcpMonitor=TcpMonitor{};
 
- // Critical diagnostics survive boot, stay bounded and batch routine writes.
+ // Diagnostic history stays bounded and is never written to flash.
  nowMs=1000;gBootCount=7;gRtcIso="2026-11-12T14:30:06";
  for(int i=0;i<130;++i)recordDiagnostic("TCP_CONNECTED");
- CHECK(gDiagnosticHistory.count==128&&gDiagnosticHistory.sequence==130&&gDiagnosticHistory.valid());
- saveDiagnosticHistory(false);CHECK(!gHistoryDirty);
- nowMs=3000;recordDiagnostic("PONG_TIMEOUT");saveDiagnosticHistory(false);CHECK(gHistoryDirty);
- recordDiagnostic("INACTIVITY_1_MIN");saveDiagnosticHistory(true);CHECK(!gHistoryDirty);
- gDiagnosticHistory=DiagnosticHistory{};runtimeLoad();
- CHECK(gDiagnosticHistory.sequence==132&&gDiagnosticHistory.newest(0).boot==7);
- CHECK(std::string(gDiagnosticHistory.newest(1).reason)=="PONG_TIMEOUT");
- CHECK(std::string(gDiagnosticHistory.newest(1).time)=="2026-11-12T14:30:06");
- storedBlobs.erase("diag_history");gDiagnosticHistory=DiagnosticHistory{};
-
- UntimedDiagnosticHistory untimed;
- untimed.add(7,50,"PONG_TIMEOUT");untimed.sequence=55;
- Preferences oldHistoryPrefs;oldHistoryPrefs.putBytes("diag_history",&untimed,sizeof(untimed));
- runtimeLoad();CHECK(gDiagnosticHistory.sequence==55&&gDiagnosticHistory.newest(0).time[0]==0);
- LegacyDiagnosticHistory legacy;
- legacy.add(6,15,"TCP_CONNECTED");legacy.add(6,30,"PONG_TIMEOUT");legacy.sequence=41;
- Preferences historyPrefs;historyPrefs.putBytes("diag_history",&legacy,sizeof(legacy));runtimeLoad();
- CHECK(gHistoryDirty&&gDiagnosticHistory.count==2&&gDiagnosticHistory.sequence==41);
+ recordDiagnostic("PONG_TIMEOUT");
+ CHECK(gDiagnosticHistory.count==128&&gDiagnosticHistory.sequence==131&&gDiagnosticHistory.valid());
+ CHECK(gDiagnosticHistory.newest(0).boot==7);
  CHECK(std::string(gDiagnosticHistory.newest(0).reason)=="PONG_TIMEOUT");
- storedBlobs.erase("diag_history");gDiagnosticHistory=DiagnosticHistory{};
+ CHECK(std::string(gDiagnosticHistory.newest(0).time)=="2026-11-12T14:30:06");
+ CHECK(!storedBlobs.count("diag_history"));
+ // Recovery deletes just the old key, even if a new blob could not be allocated.
+ storedBlobs["diag_history"]=std::vector<uint8_t>(sizeof(DiagnosticHistory),0);
+ storedBlobs["unrelated"]={1,2,3};
+ failBlobWrite=true;gDiagnosticHistory=DiagnosticHistory{};
+ const auto beforeCleanup=nvsCommitCount;
+ runtimeLoad();
+ CHECK(!storedBlobs.count("diag_history")&&storedBlobs.at("unrelated")==std::vector<uint8_t>({1,2,3}));
+ CHECK(gDiagnosticHistory.count==0&&nvsCommitCount==beforeCleanup+1);
+ runtimeLoad();CHECK(nvsCommitCount==beforeCleanup+1);
+ failBlobWrite=false;storedBlobs.erase("unrelated");
  gRtcIso="2026-11-12T14:30:06";recordTcpReceived("ACK=42",6);
  const uint8_t ping[]={'P','I','N','G',13,10};recordTcpSent(ping,sizeof(ping),0,true);
  CHECK(std::string(gTcpTraffic.newest(0).detail)=="ACK=42");

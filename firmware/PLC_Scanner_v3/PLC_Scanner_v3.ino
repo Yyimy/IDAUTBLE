@@ -242,23 +242,8 @@ static TcpTraceBuffer<2> gTcpHeartbeatTrace;
 static uint32_t gTcpTraceSequence = 0;
 static void recordTcpTrace(char direction, const char *detail, bool heartbeat = false);
 static DiagnosticHistory gDiagnosticHistory;
-static bool gHistoryDirty = false, gHistoryWriteAttempted = false;
-static uint32_t gHistoryLastWriteMs = 0;
 
 static void recordDiagnostic(const char *reason);
-
-static void saveDiagnosticHistory(bool force) {
-  if (!gHistoryDirty) return;
-  const uint32_t now = millis();
-  if (!force && gHistoryWriteAttempted && now - gHistoryLastWriteMs < 30000U) return;
-  gHistoryLastWriteMs = now;
-  gHistoryWriteAttempted = true;
-  Preferences prefs;
-  if (!prefs.begin("runtime3", false)) return;
-  const size_t written = prefs.putBytes("diag_history", &gDiagnosticHistory, sizeof(gDiagnosticHistory));
-  prefs.end();
-  if (written == sizeof(gDiagnosticHistory)) gHistoryDirty = false;
-}
 
 static void recordTcpDown(const char *reason) {
   if (gTcpMonitor.disconnected(millis(), reason)) {
@@ -512,7 +497,6 @@ static void recordDiagnostic(const char *reason) {
   auto &event = gDiagnosticHistory.add(gBootCount, millis() / 1000U, reason);
   if (gRtcIso.length() == 19 && !gRtcIso.startsWith("0000-"))
     strlcpy(event.time, gRtcIso.c_str(), sizeof(event.time));
-  gHistoryDirty = true;
 }
 static unsigned long gRtcLastReadMs = 0;
 
@@ -2088,7 +2072,6 @@ void powerCut(const char *reason) {
   gCutRequestedMs = millis();
   gLastCutAttemptMs = 0;
   recordDiagnostic(reason);
-  saveDiagnosticHistory(true);
   Preferences preferences;
   if (preferences.begin("runtime3", false)) {
     if (preferences.putString("last_cut", gCutReason) != strlen(gCutReason))
@@ -3332,7 +3315,6 @@ void loop() {
   updateLedMode();
   ledEstadoBlinkTick();
   outboxSaveIfNeeded();
-  if (!otaActive) saveDiagnosticHistory(false);
   eventTick();
   txTick();
   plcHid::tick();
@@ -3422,7 +3404,29 @@ static void otaUpdateApSsid() {
   gOtaApSsid += gId;
 }
 
+// Old firmware persisted a large diagnostic history in the shared NVS.
+static void releaseLegacyDiagnosticStorage() {
+  nvs_handle_t handle;
+  esp_err_t error = nvs_open("runtime3", NVS_READWRITE, &handle);
+  if (error == ESP_OK) {
+    error = nvs_erase_key(handle, "diag_history");
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+      nvs_close(handle);
+      return;
+    }
+    if (error == ESP_OK) error = nvs_commit(handle);
+    nvs_close(handle);
+  }
+  if (error == ESP_OK) {
+    Serial.println("NVS: released legacy diagnostic history; history is now RAM-only");
+  } else {
+    Serial.printf("NVS ERROR runtime3/diag_history operation=release error=%s (0x%X)\n",
+                  esp_err_to_name(error), unsigned(error));
+  }
+}
+
 static void runtimeLoad() {
+  releaseLegacyDiagnosticStorage();
   Preferences p;
   p.begin("runtime3", false);
   // El codigo es la fuente de verdad. NVS solo recuerda el ultimo PIN aplicado
@@ -3439,30 +3443,6 @@ static void runtimeLoad() {
   const uint32_t idle = p.getUInt("idle_min", 120);
   gIdleMinutes = idle >= 1 && idle <= 1440 ? idle : 120;
   gLastCutReason = p.getString("last_cut", "");
-  static DiagnosticHistory history;
-  if (p.getBytesLength("diag_history") == sizeof(history) &&
-      p.getBytes("diag_history", &history, sizeof(history)) == sizeof(history) &&
-      history.valid()) {
-    gDiagnosticHistory = history;
-  } else {
-    const auto migrate = [&](auto &old) {
-      if (p.getBytesLength("diag_history") != sizeof(old) ||
-          p.getBytes("diag_history", &old, sizeof(old)) != sizeof(old) || !old.valid())
-        return false;
-      gDiagnosticHistory.count = 0;
-      gDiagnosticHistory.next = 0;
-      for (uint8_t i = old.count; i > 0; --i) {
-        const auto &event = old.newest(i - 1);
-        gDiagnosticHistory.add(event.boot, event.seconds, event.reason);
-      }
-      gDiagnosticHistory.sequence = old.sequence;
-      gHistoryDirty = true;
-      return true;
-    };
-    static UntimedDiagnosticHistory untimed;
-    LegacyDiagnosticHistory legacy;
-    if (!migrate(untimed)) migrate(legacy);
-  }
   uint32_t tcpAdvanced = p.getUInt("tcp_adv", 0);
   gHeartbeatMessages = HeartbeatMessages{"PING", "PONG"};
   StoredTcpAdvanced storedTcp{};
