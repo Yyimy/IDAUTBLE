@@ -1,0 +1,48 @@
+name: Verify RTC frame timestamps
+on:
+  push:
+    branches: [verify/rtc-frame-timestamps]
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: |
+          if [ ! -f "$ANDROID_HOME/platforms/android-36/android.jar" ]; then
+            sdkmanager "platforms;android-36"
+          fi
+      - run: ./gradlew testDebugUnitTest assembleDebug
+        working-directory: android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Android-RTC-frame-timestamps
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: |
+          python3 firmware/tests/test_routing.py
+          python3 firmware/tests/test_pin_constant.py
+          python3 firmware/tests/test_plc_hid_gatt.py
+          python3 firmware/tests/test_network.py
+      - uses: arduino/setup-arduino-cli@v2
+        with:
+          version: 1.3.1
+      - run: |
+          index=https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index --additional-urls "$index"
+          arduino-cli core install esp32:esp32@3.0.7 --additional-urls "$index"
+          arduino-cli lib install 'Adafruit BusIO@1.16.2'
+          arduino-cli lib install --no-deps 'Adafruit ADS1X15@2.5.0'
+          arduino-cli compile --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,PartitionScheme=min_spiffs firmware/PLC_Scanner_v3 --warnings all --output-dir firmware-build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ESP32-S3-RTC-frame-timestamps
+          path: firmware-build/*.bin
