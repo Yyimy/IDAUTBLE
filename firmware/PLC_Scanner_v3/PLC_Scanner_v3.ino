@@ -2374,6 +2374,35 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
 }
 
 static void applyConfiguredPin();
+// Keep the existing NVS keys and types, and report which step failed.
+static bool saveNvsSetting(const char *nameSpace, const char *key, const void *data,
+                           size_t size, bool scalar, const char *operation) {
+  const char *stage = "open";
+  nvs_handle_t handle;
+  esp_err_t error = nvs_open(nameSpace, NVS_READWRITE, &handle);
+  if (error == ESP_OK) {
+    stage = "write";
+    error = scalar ? nvs_set_u32(handle, key, *static_cast<const uint32_t *>(data))
+                   : nvs_set_blob(handle, key, data, size);
+    if (error == ESP_OK) {
+      stage = "commit";
+      error = nvs_commit(handle);
+    }
+    nvs_close(handle);
+  }
+  if (error == ESP_OK) return true;
+
+  nvs_stats_t stats = {};
+  const esp_err_t statsError = nvs_get_stats("nvs", &stats);
+  Serial.printf("NVS ERROR %s/%s stage=%s error=%s (0x%X) "
+                "bytes=%u free=%u used=%u total=%u stats=%s operation=%s uptime_ms=%lu\n",
+                nameSpace, key, stage, esp_err_to_name(error), unsigned(error), unsigned(size),
+                unsigned(stats.free_entries), unsigned(stats.used_entries),
+                unsigned(stats.total_entries), esp_err_to_name(statsError), operation,
+                (unsigned long)millis());
+  return false;
+}
+
 #include "PlcHid.h"
 
 void ensureAdvertising() { plcHid::advertise(); }
@@ -3595,34 +3624,6 @@ static void setReaderTimeout(const String &value, uint8_t source) {
   replyLine(true, "READERTIMEOUT=" + String(gReaderTimeoutMs));
 }
 
-// Keep the existing NVS keys and types, and report which step failed.
-static bool saveRuntimeSetting(const char *key, const void *data, size_t size, bool scalar) {
-  const char *stage = "open";
-  nvs_handle_t handle;
-  esp_err_t error = nvs_open("runtime3", NVS_READWRITE, &handle);
-  if (error == ESP_OK) {
-    stage = "write";
-    error = scalar ? nvs_set_u32(handle, key, *static_cast<const uint32_t *>(data))
-                   : nvs_set_blob(handle, key, data, size);
-    if (error == ESP_OK) {
-      stage = "commit";
-      error = nvs_commit(handle);
-    }
-    nvs_close(handle);
-  }
-  if (error == ESP_OK) return true;
-
-  nvs_stats_t stats = {};
-  const esp_err_t statsError = nvs_get_stats("nvs", &stats);
-  Serial.printf("NVS ERROR runtime3/%s stage=%s error=%s (0x%X) "
-                "bytes=%u free=%u used=%u total=%u stats=%s uptime_ms=%lu\n",
-                key, stage, esp_err_to_name(error), unsigned(error), unsigned(size),
-                unsigned(stats.free_entries), unsigned(stats.used_entries),
-                unsigned(stats.total_entries), esp_err_to_name(statsError),
-                (unsigned long)millis());
-  return false;
-}
-
 static bool saveTcpAdvanced(bool heartbeat, bool ack, uint32_t interval, uint32_t timeout,
                             const HeartbeatMessages &messages) {
   const bool messagesChanged = strcmp(messages.request, gHeartbeatMessages.request) ||
@@ -3632,7 +3633,7 @@ static bool saveTcpAdvanced(bool heartbeat, bool ack, uint32_t interval, uint32_
   const uint32_t packed = (timeout << 9) | (interval << 2) |
                           (ack ? 2U : 0U) | (heartbeat ? 1U : 0U);
   const StoredTcpAdvanced stored{packed, messages};
-  if (!saveRuntimeSetting("tcp_adv2", &stored, sizeof(stored), false)) return false;
+  if (!saveNvsSetting("runtime3", "tcp_adv2", &stored, sizeof(stored), false, "tcp_advanced")) return false;
   if (heartbeat != gHeartbeatEnabled || interval != gTcpPingSeconds || timeout != gTcpTimeoutSeconds || messagesChanged) {
     gTcpPongSeen = false;
     gLastTcpRxMs = millis();
@@ -3699,7 +3700,7 @@ static void handleTextCommand(const BleCmd &cmd) {
     }
     if (flags != gFrameTimes) {
       const uint32_t stored = flags;
-      if (!saveRuntimeSetting("frame_times", &stored, sizeof(stored), true)) {
+      if (!saveNvsSetting("runtime3", "frame_times", &stored, sizeof(stored), true, "frame_times")) {
         replyLine(false, "ERR=RTCFRAME_STORAGE");
         return;
       }
