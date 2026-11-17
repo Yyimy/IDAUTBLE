@@ -84,7 +84,7 @@ outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
 tcp_monitor=(sketch/'TcpMonitor.h').read_text().replace('#pragma once','')
 history_header=(sketch/'DiagnosticHistory.h').read_text().replace('#pragma once','')
 trace_header=(sketch/'TcpTrace.h').read_text().replace('#pragma once','')
-names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','tcpTextCommandType','validHeartbeatMessages','decodeHeartbeatMessage','heartbeatReplyMatches','heartbeatValues','recordDiagnostic','saveDiagnosticHistory','recordTcpTrace','recordTcpDown','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','omitFrameTime','txTick','parseU32','recordTcpReceived','recordTcpSent','setIdleMinutes','appendTcpMonitor','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
+names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','tcpTextCommandType','validHeartbeatMessages','decodeHeartbeatMessage','heartbeatReplyMatches','heartbeatValues','recordDiagnostic','saveDiagnosticHistory','recordTcpTrace','recordTcpDown','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','omitFrameTime','txTick','parseU32','recordTcpReceived','recordTcpSent','setIdleMinutes','appendTcpMonitor','saveRuntimeSetting','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
 using std::min;
@@ -151,6 +151,22 @@ struct Preferences {
  size_t getBytes(const char*k,void*out,size_t cap){auto n=getBytesLength(k);if(!n||n>cap)return 0;memcpy(out,storedBlobs[k].data(),n);return n;}
  size_t putBytes(const char*k,const void*data,size_t size){if(failBlobWrite)return 0;const auto*p=(const uint8_t*)data;storedBlobs[k]={p,p+size};return size;}
 };
+using nvs_handle_t = int;
+using esp_err_t = int;
+constexpr esp_err_t ESP_OK = 0;
+constexpr int NVS_READWRITE = 1;
+struct nvs_stats_t {size_t free_entries, used_entries, total_entries;};
+esp_err_t nvs_open(const char*,int,nvs_handle_t *handle){*handle=1;return ESP_OK;}
+esp_err_t nvs_set_u32(nvs_handle_t,const char *key,uint32_t value){
+  return Preferences{}.putUInt(key,value)==sizeof(value)?ESP_OK:1;
+}
+esp_err_t nvs_set_blob(nvs_handle_t,const char *key,const void *data,size_t size){
+  return Preferences{}.putBytes(key,data,size)==size?ESP_OK:1;
+}
+esp_err_t nvs_commit(nvs_handle_t){return ESP_OK;}
+void nvs_close(nvs_handle_t){}
+esp_err_t nvs_get_stats(const char*,nvs_stats_t*){return ESP_OK;}
+const char *esp_err_to_name(esp_err_t error){return error?"TEST_WRITE_ERROR":"ESP_OK";}
 struct SerialMock {void printf(const char*,...){}} Serial;
 uint32_t esp_random(){return 123456789;}
 #define OUTBOX_CAPACITY 8

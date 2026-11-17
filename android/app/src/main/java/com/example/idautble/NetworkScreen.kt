@@ -717,7 +717,7 @@ private fun NetworkConfigurationPanel(
             }
         }
         state.tcpAdvanced?.let {
-            TcpAdvancedSettings(it, controls, session::saveTcpAdvanced)
+            TcpAdvancedSettings(it, state.configReceivedAt, controls, session::saveTcpAdvanced)
         }
     }
 }
@@ -725,30 +725,33 @@ private fun NetworkConfigurationPanel(
 @Composable
 private fun TcpAdvancedSettings(
     config: TcpAdvancedConfig,
+    configReceivedAt: Long?,
     enabled: Boolean,
     onSave: (TcpAdvancedConfig) -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
-    var heartbeat by rememberSaveable(config) { mutableStateOf(config.heartbeat) }
-    var acknowledgements by rememberSaveable(config) { mutableStateOf(config.acknowledgements) }
-    var interval by rememberSaveable(config) { mutableStateOf(config.intervalSeconds.toString()) }
-    var timeout by rememberSaveable(config) { mutableStateOf(config.timeoutSeconds.toString()) }
+    var heartbeat by rememberSaveable(config, configReceivedAt) { mutableStateOf(config.heartbeat) }
+    var acknowledgements by rememberSaveable(config, configReceivedAt) { mutableStateOf(config.acknowledgements) }
+    var interval by rememberSaveable(config, configReceivedAt) { mutableStateOf(config.intervalSeconds.toString()) }
+    var timeout by rememberSaveable(config, configReceivedAt) { mutableStateOf(config.timeoutSeconds.toString()) }
     val savedMessages = config.heartbeatMessages
-    var request by rememberSaveable(config) { mutableStateOf(savedMessages?.request.orEmpty()) }
-    var response by rememberSaveable(config) { mutableStateOf(savedMessages?.response.orEmpty()) }
+    var request by rememberSaveable(config, configReceivedAt) { mutableStateOf(savedMessages?.request.orEmpty()) }
+    var response by rememberSaveable(config, configReceivedAt) { mutableStateOf(savedMessages?.response.orEmpty()) }
     val draft = TcpAdvancedConfig(
         heartbeat, acknowledgements, interval.toIntOrNull() ?: 0, timeout.toIntOrNull() ?: 0,
         savedMessages?.let { HeartbeatMessages(request, response) },
     )
     val focus = LocalFocusManager.current
     CollapsibleSettingsSection(
-        "ADVANCED NETWORK SETTINGS", "Heartbeat and event acknowledgements",
+        "ADVANCED NETWORK SETTINGS",
+        if (config.heartbeat) "Heartbeat saved on PLC: on" else "Heartbeat saved on PLC: off",
         expanded, { expanded = !expanded },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Enable heartbeat", Modifier.weight(1f))
             Switch(checked = heartbeat, onCheckedChange = { heartbeat = it }, enabled = enabled)
         }
+        if (draft != config) Text("Unsaved changes. Use Save advanced settings to apply.", fontSize = 12.sp)
         if (savedMessages == null) {
             Text("The server must reply PONG to PING.", fontSize = 12.sp)
         } else {
