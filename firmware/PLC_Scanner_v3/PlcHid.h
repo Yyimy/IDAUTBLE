@@ -274,20 +274,28 @@ static void loadReceiver() {
   if (savedReceiver.valid && !savedReceiver.subscriptionsKnown) Serial.println("HID RECEIVER legacy subscriptions unknown; fresh HID subscription required");
   Serial.println(savedReceiver.valid ? "HID RECEIVER loaded" : "HID STORAGE invalid record; assign again or forget");
 }
-static bool saveReceiver(const probe::ReceiverIdentity &identity) {
+static bool receiverRecordError(const char *operation, const char *stage) {
+  Serial.printf("HID STORAGE ERROR operation=%s stage=%s uptime_ms=%lu\n",
+                operation, stage, (unsigned long)millis());
+  return false;
+}
+
+static bool saveReceiver(const probe::ReceiverIdentity &identity, const char *operation) {
   uint8_t record[probe::receiverRecordSize];
-  if (!receiverStorageReady || !probe::encodeReceiver(identity, record)) return false;
-  if (receiverPreferences.putBytes("receiver", record, sizeof(record)) != sizeof(record)) return false;
+  if (!receiverStorageReady) return receiverRecordError(operation, "unavailable");
+  if (!probe::encodeReceiver(identity, record)) return receiverRecordError(operation, "encode");
+  if (!saveNvsSetting("plc_hid", "receiver", record, sizeof(record), false, operation)) return false;
   savedReceiver = identity;
   return true;
 }
 static bool writeReceiverRemoval(const probe::ReceiverIdentity &identity = {}) {
-  if (!receiverStorageReady) return false;
+  const char *operation = identity.valid ? "hid_forget_begin" : "hid_forget_finish";
+  if (!receiverStorageReady) return receiverRecordError(operation, "unavailable");
   uint8_t record[probe::receiverRecordSize];
   if (identity.valid) {
-    if (!probe::encodeReceiver(identity, record, true)) return false;
+    if (!probe::encodeReceiver(identity, record, true)) return receiverRecordError(operation, "encode");
   } else probe::clearReceiverRecord(record);
-  return receiverPreferences.putBytes("receiver", record, sizeof(record)) == sizeof(record);
+  return saveNvsSetting("plc_hid", "receiver", record, sizeof(record), false, operation);
 }
 static String receiverText(bool extended = false) {
   auto s = snapshot();
@@ -355,7 +363,7 @@ static void receiverTick() {
     if (p.reportSeen) { updated.subscriptionsKnown = true; updated.subscriptions = (updated.subscriptions & ~1u) | (p.reportNotify ? 1 : 0); }
     if (p.bootSeen) { updated.subscriptionsKnown = true; updated.subscriptions = (updated.subscriptions & ~2u) | (p.bootNotify ? 2 : 0); }
     if (updated.subscriptionsKnown && (!savedReceiver.subscriptionsKnown || updated.subscriptions != savedReceiver.subscriptions)) {
-      if (!saveReceiver(updated)) { Serial.println("HID CCCD storage failed; recovery deferred"); continue; }
+      if (!saveReceiver(updated, "hid_subscription_update")) { Serial.println("HID CCCD storage failed; recovery deferred"); continue; }
     }
     portENTER_CRITICAL(&peerMux);
     peers.restoreSubscriptions(p.token, savedReceiver);
@@ -928,7 +936,7 @@ static void pairTick() {
   }
   portEXIT_CRITICAL(&peerMux);
   if (!bound) return;
-  if (!saveReceiver(selectedIdentity)) {
+  if (!saveReceiver(selectedIdentity, "hid_assign")) {
     portENTER_CRITICAL(&peerMux);
     peers.unbindKeyboard();
     portEXIT_CRITICAL(&peerMux);
