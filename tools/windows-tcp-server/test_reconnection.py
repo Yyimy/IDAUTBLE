@@ -30,6 +30,10 @@ with tempfile.TemporaryDirectory() as directory:
                 frame = b"\x062026-11-12T16:00:00\x02IS-P\x1b90\x1b01\x1b0\x1bPAL\x1bLOC\x1b\x03"
                 current.sendall(b"EVT=78\r\n" + frame)
                 assert current.recv(100) == b"ACK=78\r\n"
+                short = frame[:1] + frame[20:]
+                current.sendall(b"EVT=79\r\n" + short[:2])
+                current.sendall(short[2:])
+                assert current.recv(100) == b"ACK=79\r\n"
         with socket.create_connection(endpoint, timeout=1) as after:
             after.sendall(b"PING\r\n")
             assert after.recv(100) == b"PONG;test\r\n"

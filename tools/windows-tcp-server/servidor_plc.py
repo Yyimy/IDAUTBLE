@@ -21,8 +21,11 @@ class Decoder:
         self.buffer.extend(data)
         while self.buffer:
             newline = self.buffer.find(b"\n")
-            binary = self.buffer[0] == 6 and len(self.buffer) > 20 and self.buffer[20] == 2
-            end = self.buffer.find(b"\x03", 21) if binary else newline
+            binary = len(self.buffer) > 1 and self.buffer[0] == 6 and (
+                self.buffer[1] == 2 or
+                (len(self.buffer) > 20 and self.buffer[20] == 2 and (newline < 0 or newline > 20))
+            )
+            end = self.buffer.find(b"\x03", 2) if binary else newline
             if end < 0:
                 if len(self.buffer) > 8192:
                     raise ValueError("Mensaje demasiado largo o sin terminador.")
@@ -33,10 +36,11 @@ class Decoder:
 
 
 def reading(frame):
-    timestamp = frame[1:20].decode("ascii")
-    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}", timestamp):
+    stx = 1 if frame[1] == 2 else 20
+    timestamp = frame[1:stx].decode("ascii") or None
+    if timestamp is not None and not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}", timestamp):
         raise ValueError("El campo RTC no tiene el formato de la trama V2.")
-    parts = frame[21:-1].decode("ascii").split("\x1b")
+    parts = frame[stx + 1:-1].decode("ascii").split("\x1b")
     if len(parts) != 7 or parts[-1] or not parts[0] or any(
         not 32 <= ord(char) <= 126 for field in parts for char in field
     ):
@@ -177,7 +181,7 @@ class Server:
                         continue
                     device, battery, height, photo, pallet, location = fields
                     detail = f"{device} · Palé {pallet} · Ubicación {location}"
-                    self.log("RX", f"V2 {timestamp} · {detail} · Batería {battery} · Altura {height} · Foto {photo}")
+                    self.log("RX", f"V2 {timestamp or 'sin fecha PLC'} · {detail} · Batería {battery} · Altura {height} · Foto {photo}")
                     if current is not None:
                         try:
                             result = save_event(db, device, current, record)
