@@ -77,12 +77,38 @@ void fresh(){drain();commands.clear();txQueue.clear();characteristic.notificatio
  gTcpClient.sent.clear();gTcpClient.rx.clear();gTcpClient.up=gTcpConnected=true;gTcpClient.limit=1000;gTcpClient.blockedCalls=0;
  deviceConnected=gBleSecure=true;gCccd->enabled=true;gBleSession=10;gTcpSession=20;gOtaBleSession=10;
  gOtaTaskHandle=nullptr;gOtaState=OTA_IDLE;gMaintenanceAuthorized=false;gMaintenancePin=PLC_MAINTENANCE_PIN;gAuthFails=0;gAuthBlockedUntil=0;gReplyContext={TX_BOTH,0};
- gWifiEnabled=gWifiConnected=true;gAckMode=false;gHeartbeatEnabled=false;gOutbox={};gOutbox.nextId=1;gOutboxDirty=false;gEventInFlight=false;gEventLastAttempt=0;
+ gWifiEnabled=gWifiConnected=true;gAckMode=false;gFrameTimes=ALL_FRAME_TIMES;gHeartbeatEnabled=false;gOutbox={};gOutbox.nextId=1;gOutboxDirty=false;gEventInFlight=false;gEventLastAttempt=0;
  resetScanner();gFotoLista=true;PaletCargado=false;gRtcIso="2026-11-03T10:43:38";gId="TRUCK-1";gNivelBat4="4647";nowMs+=1000;
 }
 BleCmd cmd(BleCmdType type,uint8_t origin,const char*text=""){BleCmd c={};c.type=type;c.source=origin;c.session=origin==CMD_SOURCE_CLIENT?plcHid::clientSession():origin?gTcpSession.load():gBleSession.load();c.receivedMs=nowMs;strlcpy(c.payload,text,sizeof(c.payload));return c;}
 void run(BleCmd c){commands.push_back(c);bleProcessPendingOnce();}
 int main(){
+ // BLE and TCP select independently, including simultaneous client notifications.
+ for (uint8_t flags : {0, 1, 2, 3}) {
+  fresh();gFrameTimes=flags;plcHid::clientGeneration=30;gTcpClient.limit=2;
+  const std::string full="\x06" "2026-11-03T10:43:38" "\x02" "TRUCK-1\x1b-\x1b-\x1b-\x1bP\x1bU\x1b\x03";
+  const std::string shortFrame=full.substr(0,1)+full.substr(20);
+  queueFrame((const uint8_t*)full.data(),full.size(),nullptr);drain();
+  CHECK(gTcpClient.sent==((flags&TCP_FRAME_TIME)?full:shortFrame));
+  CHECK(bleBytes()==((flags&BLE_FRAME_TIME)?full:shortFrame));
+  CHECK(clientBytes()==bleBytes());
+  gTcpClient.sent.clear();characteristic.notifications.clear();
+  gAckMode=true;gOutbox.count=1;auto &event=gOutbox.items[0];
+  event.id=42;event.len=full.size();memcpy(event.frame,full.data(),event.len);
+  eventTick();drain();
+  const std::string expected="EVT=42\r\n"+((flags&TCP_FRAME_TIME)?full:shortFrame);
+  CHECK(gTcpClient.sent==expected&&gOutbox.count==1);
+  gTcpClient.sent.clear();eventTick();drain();CHECK(gTcpClient.sent==expected);
+  gMaintenanceAuthorized=true;
+  const std::string changeTcp="RTCFRAME="+std::to_string(flags^TCP_FRAME_TIME);
+  run(cmd(BLECMD_TEXT,0,changeTcp.c_str()));drain();
+  CHECK(bleBytes().find("ERR=RTCFRAME_PENDING")!=std::string::npos&&gFrameTimes==flags);
+ }
+ fresh();run(cmd(BLECMD_TEXT,0,"RTCFRAME=1"));drain();
+ CHECK(bleBytes().find("ERR=RTCFRAME_AUTH")!=std::string::npos&&gFrameTimes==ALL_FRAME_TIMES);
+ fresh();gMaintenanceAuthorized=true;run(cmd(BLECMD_TEXT,0,"RTCFRAME=1"));drain();
+ CHECK(bleBytes().find("RTCFRAME=1")!=std::string::npos&&storedUIntSettings["frame_times"]==1);
+ runtimeLoad();CHECK(gFrameTimes==1);storedUIntSettings.erase("frame_times");
  // Both links are live: queries, handshakes and configuration ACKs stay with their requester.
  for(uint8_t origin:{0,1}){
   for(const char*q:{"INFO?","STATUS?","COUNTERS?","DIAG?","ID?"}){

@@ -391,6 +391,10 @@ class MainActivity : ComponentActivity() {
     private var readerTimeoutRequest = 0
     private val uiIdleShutdown = mutableStateOf(IdleShutdownState())
     private var idleShutdownRequest = 0
+    private var frameTimes by mutableStateOf<Int?>(null)
+    private var frameTimesSaving by mutableStateOf(false)
+    private var frameTimesMessage by mutableStateOf<String?>(null)
+    private var frameTimesRequest = 0
     private val uiShutdownNotice = mutableStateOf<String?>(null)
     private val uiDiagnosticHistory = mutableStateOf<List<DiagnosticEvent>?>(null)
     private var diagnosticHistorySupported by mutableStateOf(false)
@@ -1025,6 +1029,48 @@ class MainActivity : ComponentActivity() {
         }, 8000)
     }
 
+    private fun saveFrameTimes(flags: Int) {
+        if (!bleChannelReady || frameTimes == null || frameTimesSaving) return
+        if (!maintenanceSession.isAuthorized()) {
+            showIdentityAuthorizationMessage()
+            return
+        }
+        frameTimesSaving = true
+        frameTimesMessage = "Saving…"
+        val request = ++frameTimesRequest
+        sendText("RTCFRAME=$flags", addCrlf = true)
+        mainHandler.postDelayed({
+            if (request == frameTimesRequest && frameTimesSaving) {
+                frameTimesSaving = false
+                frameTimesMessage = "No confirmation. Checking the PLC setting…"
+                sendText("INFO?", addCrlf = true)
+            }
+        }, 8000)
+    }
+
+    private fun handleFrameTimesMessage(message: PlcMessage) {
+        val text = message.text
+        if (message.acknowledged && text.startsWith("FW=")) {
+            frameTimes = text.split(';').firstOrNull { it.startsWith("RTCFRAME=") }
+                ?.substringAfter('=')?.toIntOrNull()?.takeIf { it in 0..3 }
+            if (!frameTimesSaving) frameTimesMessage = null
+        } else if (message.acknowledged && text.startsWith("RTCFRAME=")) {
+            frameTimes = text.substringAfter('=').toIntOrNull()?.takeIf { it in 0..3 } ?: return
+            frameTimesRequest++
+            frameTimesSaving = false
+            frameTimesMessage = "Saved on the PLC."
+        } else if (message.rejected && frameTimesSaving && text.startsWith("ERR=RTCFRAME_")) {
+            frameTimesRequest++
+            frameTimesSaving = false
+            frameTimesMessage = when (text) {
+                "ERR=RTCFRAME_AUTH" -> "Enter the PIN in PIN / ACCESS first."
+                "ERR=RTCFRAME_PENDING" -> "Wait for the server to acknowledge pending readings."
+                "ERR=RTCFRAME_STORAGE" -> "The PLC could not save the setting."
+                else -> "The PLC rejected the setting."
+            }
+        }
+    }
+
     private fun handlePowerMessage(message: PlcMessage) {
         val text = message.text
         if (message.acknowledged && text.startsWith("FW=")) {
@@ -1194,6 +1240,10 @@ class MainActivity : ComponentActivity() {
         uiReaderTimeout.value = ReaderTimeoutState()
         idleShutdownRequest++
         uiIdleShutdown.value = IdleShutdownState()
+        frameTimesRequest++
+        frameTimes = null
+        frameTimesSaving = false
+        frameTimesMessage = null
         uiDiagnosticHistory.value = null
         diagnosticHistorySupported = false
         historyLoading = false
@@ -1694,6 +1744,7 @@ class MainActivity : ComponentActivity() {
         handleHidOutputMessage(message)
         handleReaderTimeoutMessage(message)
         handlePowerMessage(message)
+        handleFrameTimesMessage(message)
         if (message.acknowledged && text.startsWith("HISTORY=")) {
             parseDiagnosticHistory(text)?.let { uiDiagnosticHistory.value = it }
         }
@@ -2606,6 +2657,10 @@ class MainActivity : ComponentActivity() {
                     },
                     onSetRtc = { sendText("RTC=${uiRtcIso.value}", addCrlf = true) },
                     onRefreshRtc = { uiRtcIso.value = nowIso() },
+                    frameTimes = frameTimes,
+                    frameTimesSaving = frameTimesSaving,
+                    frameTimesMessage = frameTimesMessage,
+                    onSaveFrameTimes = ::saveFrameTimes,
                     onManualEdit = { index, line -> uiManualLines[index] = line },
                     onManualAdd = { if (uiManualLines.size < MANUAL_LINE_LIMIT) uiManualLines.add(ManualLine()) },
                     onManualRemoveLast = { if (uiManualLines.size > 1) uiManualLines.removeAt(uiManualLines.lastIndex) },
@@ -2777,6 +2832,10 @@ private fun PlcBleTesterLandscape(
     onSetCfg: () -> Unit,
     onSetRtc: () -> Unit,
     onRefreshRtc: () -> Unit,
+    frameTimes: Int?,
+    frameTimesSaving: Boolean,
+    frameTimesMessage: String?,
+    onSaveFrameTimes: (Int) -> Unit,
     onManualEdit: (Int, ManualLine) -> Unit,
     onManualAdd: () -> Unit,
     onManualRemoveLast: () -> Unit,
@@ -3268,6 +3327,31 @@ private fun PlcBleTesterLandscape(
                                                         )
                                                         MaintenanceActionButton(
                                                             "Set", onSetRtc, MaintenanceActionTone.SUCCESS, Modifier.weight(1f),
+                                                        )
+                                                    }
+                                                    if (frameTimes != null) {
+                                                        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                                                        listOf(1 to "BLE", 2 to "TCP").forEach { (flag, channel) ->
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                            ) {
+                                                                Text(
+                                                                    "Include date and time in $channel frames",
+                                                                    modifier = Modifier.weight(1f),
+                                                                    style = MaterialTheme.typography.bodyMedium,
+                                                                )
+                                                                Switch(
+                                                                    checked = frameTimes and flag != 0,
+                                                                    onCheckedChange = { onSaveFrameTimes(frameTimes xor flag) },
+                                                                    enabled = connected && !frameTimesSaving,
+                                                                )
+                                                            }
+                                                        }
+                                                        Text(
+                                                            frameTimesMessage ?: "Changes require PIN / ACCESS.",
+                                                            style = MaterialTheme.typography.bodySmall,
                                                         )
                                                     }
                                                 }

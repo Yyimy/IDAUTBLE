@@ -99,7 +99,7 @@ fun ReadingResultsSection(state: PlcReadingsState, expanded: Boolean, onToggle: 
                         ReportedBattery(2, reading.battery2, Modifier.weight(1f))
                     }
                     Text(
-                        "${reading.deviceId} • ${if (reading.clockValid) reading.plcTime else "PLC clock unavailable"}",
+                        "${reading.deviceId} • ${if (reading.plcTime == null) "No timestamp in frame" else if (reading.clockValid) reading.plcTime else "PLC clock unavailable"}",
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

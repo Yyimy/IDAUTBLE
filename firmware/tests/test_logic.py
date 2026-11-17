@@ -6,7 +6,7 @@ sketch=root/'PLC_Scanner_v3'
 if not sketch.exists():sketch=root/'deliverables/PLC_Scanner_v3'
 source=(sketch/'PLC_Scanner_v3.ino').read_text()
 def function(name):
- m=re.search(r'^(?:static\s+)?(?:inline\s+)?(?:bool|void|String|uint8_t|int|BleCmdType) '+name+r'\([^;]*?\)\s*\{',source,re.M|re.S)
+ m=re.search(r'^(?:static\s+)?(?:inline\s+)?(?:bool|void|String|uint8_t|int|size_t|BleCmdType) '+name+r'\([^;]*?\)\s*\{',source,re.M|re.S)
  assert m,name
  i=m.end();depth=1
  while depth:
@@ -73,6 +73,7 @@ std::vector<String> emitted;void outboxPush(const String&s){emitted.push_back(s)
 #define PIN_SENSOR_PALET 4
 bool gFotoLista=false,PaletCargado=false,armadoInactividad=false;int rawFoto=LOW,gFotoUltLect=LOW,estadoSensorFiltrado=LOW,lecturaAnteriorRaw=LOW;
 uint32_t gFotoUltCambioMs=0,ultimoRebote=0,lastFotoActivaMs=0;const uint32_t FOTO_STABLE_MS=1500,retardoRebote=250;uint32_t gIdleMinutes=120;
+constexpr uint8_t BLE_FRAME_TIME=1,TCP_FRAME_TIME=2,ALL_FRAME_TIMES=3;uint8_t gFrameTimes=ALL_FRAME_TIMES;
 char gFotoEstado='0';bool gOtaAbort=false,gOtaTaskHandle=false;int loaded=0,unloaded=0;
 int digitalRead(int){return rawFoto;}void countersIncPalCargado(){++loaded;}void countersIncPalDescargado(){++unloaded;}
 String cutReason;
@@ -83,7 +84,7 @@ outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
 tcp_monitor=(sketch/'TcpMonitor.h').read_text().replace('#pragma once','')
 history_header=(sketch/'DiagnosticHistory.h').read_text().replace('#pragma once','')
 trace_header=(sketch/'TcpTrace.h').read_text().replace('#pragma once','')
-names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','tcpTextCommandType','validHeartbeatMessages','decodeHeartbeatMessage','heartbeatReplyMatches','heartbeatValues','recordDiagnostic','saveDiagnosticHistory','recordTcpTrace','recordTcpDown','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','txTick','parseU32','recordTcpReceived','recordTcpSent','setIdleMinutes','appendTcpMonitor','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
+names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','tcpTextCommandType','validHeartbeatMessages','decodeHeartbeatMessage','heartbeatReplyMatches','heartbeatValues','recordDiagnostic','saveDiagnosticHistory','recordTcpTrace','recordTcpDown','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','omitFrameTime','txTick','parseU32','recordTcpReceived','recordTcpSent','setIdleMinutes','appendTcpMonitor','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
 shim+=r'''
 #define BAT_SAFETY_PERIOD 1000
 using std::min;
