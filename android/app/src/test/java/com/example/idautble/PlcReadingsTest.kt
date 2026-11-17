@@ -41,6 +41,18 @@ class PlcReadingsTest {
     }
 
     @Test
+    fun readingWithoutTimestampStillDecodesAcrossChunks() {
+        val wire = frame(time = "").bytes
+        val decoder = PlcStreamDecoder()
+        assertTrue(decoder.feed(wire.copyOfRange(0, 2)).isEmpty())
+        val reading = parsePlcReading(decoder.feed(wire.copyOfRange(2, wire.size)).single())!!
+        assertNull(reading.plcTime)
+        assertFalse(reading.clockValid)
+        assertEquals("RC12345", reading.pallet)
+        assertEquals("RACK-A2", reading.location)
+    }
+
+    @Test
     fun partialCommandClearsEarlierCodesAndMeasurements() {
         val state = PlcReadingsState().receive(frame(), 1000)
         val batteryOnly =

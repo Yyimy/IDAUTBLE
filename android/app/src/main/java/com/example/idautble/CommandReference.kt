@@ -57,6 +57,7 @@ private val commandGroups = linkedMapOf(
         CommandEntry("ID?", MAINTENANCE_TCP, "Read the configured PLC identifier."),
         CommandEntry("ID=<name>", MAINTENANCE_PIN, "Set the identifier used in PLC data frames and the Bluetooth name."),
         CommandEntry("RTC=YYYY-MM-DDThh:mm:ss", MAINTENANCE_PIN, "Set the PLC clock while the scanner is idle."),
+        CommandEntry("RTCFRAME=<0|1|2|3>", MAINTENANCE_PIN, "Save date and time in data frames for neither channel (0), BLE only (1), TCP only (2), or both (3, default). INFO? over BLE returns the saved setting. With ACK mode on, TCP changes require an empty event queue."),
         CommandEntry("CFG?", MAINTENANCE_TCP, "Read the pallet and location barcode prefixes."),
         CommandEntry("CFG=PFXP=<pallet>;PFXU=<location>", MAINTENANCE_PIN, "Save the barcode prefixes while the scanner is idle."),
         CommandEntry("ALT?", MAINTENANCE_TCP, "Check whether height measurement is enabled."),

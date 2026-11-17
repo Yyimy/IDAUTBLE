@@ -461,6 +461,10 @@ int estadoSensorAnterior = LOW;
 static int lecturaAnteriorRaw = HIGH;  // SOLO para debounce (lectura cruda)
 
 static uint32_t gIdleMinutes = 120;
+static constexpr uint8_t BLE_FRAME_TIME = 1;
+static constexpr uint8_t TCP_FRAME_TIME = 2;
+static constexpr uint8_t ALL_FRAME_TIMES = BLE_FRAME_TIME | TCP_FRAME_TIME;
+static uint8_t gFrameTimes = ALL_FRAME_TIMES;
 bool armadoInactividad = false;
 unsigned long lastFotoActivaMs = 0;
 bool powerCutEjecutado = false;
@@ -1219,7 +1223,8 @@ static void recordTcpSent(const uint8_t *data, size_t size, uint32_t eventId, bo
   char detail[24];
   if (eventId)
     snprintf(detail, sizeof(detail), "EVT=%lu %u B", (unsigned long)eventId, (unsigned)size);
-  else if (size > 20 && data[0] == 0x06 && data[20] == 0x02)
+  else if (size > 2 && data[0] == 0x06 && data[size - 1] == 0x03 &&
+           (data[1] == 0x02 || (size > 20 && data[20] == 0x02)))
     snprintf(detail, sizeof(detail), "READING %u B", (unsigned)size);
   else
     snprintf(detail, sizeof(detail), "MESSAGE %u B", (unsigned)size);
@@ -2330,7 +2335,7 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
              rxTrim.startsWith("ACKMODE=") || rxTrim.startsWith("TCPADV=") ||
              rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" || rxTrim == "HISTORY?" || rxTrim.startsWith("HISTORY?=") || rxTrim.startsWith("HISTORYTIME?=") || rxTrim == "TCPTRACE?" ||
              rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
-             rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("IDLEMIN=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
+             rxTrim.startsWith("RTCFRAME=") || rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("IDLEMIN=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
     cmd.type = BLECMD_TEXT;
     strlcpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload));
   } else {
@@ -3400,6 +3405,8 @@ static void runtimeLoad() {
   OTA_AP_PASS = PLC_OTA_WIFI_PASSWORD;
   gAckMode = p.getBool("ack", false);
   gHeartbeatEnabled = p.getBool("heartbeat", false);
+  const uint32_t frameTimes = p.getUInt("frame_times", ALL_FRAME_TIMES);
+  gFrameTimes = frameTimes <= ALL_FRAME_TIMES ? frameTimes : ALL_FRAME_TIMES;
   const uint32_t idle = p.getUInt("idle_min", 120);
   gIdleMinutes = idle >= 1 && idle <= 1440 ? idle : 120;
   gLastCutReason = p.getString("last_cut", "");
@@ -3650,6 +3657,33 @@ static void setIdleMinutes(const String &value, uint8_t source) {
 static void handleTextCommand(const BleCmd &cmd) {
   String s(cmd.payload);
   if (plcHid::handle(s, cmd.source)) return;
+  if (s.startsWith("RTCFRAME=")) {
+    if (cmd.source != 0 || !maintenanceAuthorized()) {
+      replyLine(false, "ERR=RTCFRAME_AUTH");
+      return;
+    }
+    const String value = s.substring(sizeof("RTCFRAME=") - 1);
+    if (value.length() != 1 || value[0] < '0' || value[0] > '3') {
+      replyLine(false, "ERR=RTCFRAME_INVALID");
+      return;
+    }
+    const uint8_t flags = value[0] - '0';
+    // Keep the TCP payload identical for every retry of an acknowledged event.
+    if (gAckMode && (gOutbox.count || gEventInFlight) && ((flags ^ gFrameTimes) & TCP_FRAME_TIME)) {
+      replyLine(false, "ERR=RTCFRAME_PENDING");
+      return;
+    }
+    if (flags != gFrameTimes) {
+      Preferences p;
+      if (!p.begin("runtime3", false) || p.putUInt("frame_times", flags) != sizeof(uint32_t)) {
+        replyLine(false, "ERR=RTCFRAME_STORAGE");
+        return;
+      }
+      gFrameTimes = flags;
+    }
+    replyLine(true, "RTCFRAME=" + String(gFrameTimes));
+    return;
+  }
   if (s.startsWith("IDLEMIN=")) {
     setIdleMinutes(s.substring(sizeof("IDLEMIN=") - 1), cmd.source);
     return;
@@ -3721,7 +3755,7 @@ static void handleTextCommand(const BleCmd &cmd) {
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
                         (cmd.source == 0 ? String(";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1;READERTIMEOUT=") + String(gReaderTimeoutMs) +
-                         ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1;HISTORYPAGE=1;HISTORYTIME=1;TCPTRACE=1" : String()));
+                         ";RTCFRAME=" + String(gFrameTimes) + ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1;HISTORYPAGE=1;HISTORYTIME=1;TCPTRACE=1" : String()));
     return;
   }
   if (s == "STATUS?") {
@@ -3921,8 +3955,28 @@ static int tcpWriteAvailable(const uint8_t *data, size_t len) {
     return -2;
   return -1;
 }
+// Remove only the timestamp in a complete V2 data packet, preserving any EVT line.
+static size_t omitFrameTime(const uint8_t *data, size_t len, bool event, uint8_t *output) {
+  size_t start = 0;
+  if (event && len && data[0] == 'E') {
+    const auto *end = static_cast<const uint8_t *>(memchr(data, '\n', len));
+    if (!end) return 0;
+    start = size_t(end - data) + 1;
+  }
+  constexpr size_t stxOffset = 20;
+  constexpr size_t timeLength = stxOffset - 1;
+  if (len <= start + stxOffset || data[start] != 0x06 ||
+      data[start + stxOffset] != 0x02 || data[len - 1] != 0x03)
+    return 0;
+  memcpy(output, data, start + 1);
+  memcpy(output + start + 1, data + start + stxOffset, len - start - stxOffset);
+  return len - timeLength;
+}
 static void txTick() {
   static TxPacket p;
+  static uint8_t shortFrame[sizeof(p.data)];
+  static bool shortBle = false, shortTcp = false;
+  static size_t shortLen = 0;
   static bool active = false, tcpDone = false, bleDone = false,
               clientDone = false, accepted = false;
   static size_t offset = 0, tcpOffset = 0, clientOffset = 0;
@@ -3944,19 +3998,27 @@ static void txTick() {
     tcpOffset = 0;
     clientOffset = 0;
     started = millis();
+    shortLen = gFrameTimes == ALL_FRAME_TIMES ? 0 :
+        omitFrameTime(p.data, p.len, p.eventId != 0, shortFrame);
+    shortBle = shortLen && !(gFrameTimes & BLE_FRAME_TIME);
+    shortTcp = shortLen && !(gFrameTimes & TCP_FRAME_TIME);
   }
+  uint8_t *bleData = shortBle ? shortFrame : p.data;
+  const size_t bleLen = shortBle ? shortLen : p.len;
+  const uint8_t *tcpData = shortTcp ? shortFrame : p.data;
+  const size_t tcpLen = shortTcp ? shortLen : p.len;
   if (!tcpDone) {
     if (gOtaTaskHandle || gOtaState != OTA_IDLE || !gTcpConnected ||
         !gTcpClient.connected() || p.tcpSession != gTcpSession)
       tcpDone = true;
     else {
-      int n = tcpWriteAvailable(p.data + tcpOffset, p.len - tcpOffset);
+      int n = tcpWriteAvailable(tcpData + tcpOffset, tcpLen - tcpOffset);
       if (n > 0) {
         tcpOffset += (size_t)n;
-        if (tcpOffset == p.len) {
+        if (tcpOffset == tcpLen) {
           tcpDone = true;
           accepted = true;
-          recordTcpSent(p.data, p.len, p.eventId, p.heartbeat);
+          recordTcpSent(tcpData, tcpLen, p.eventId, p.heartbeat);
         }
       } else if (n == -1) {
         recordTcpDown("WRITE_FAILED");
@@ -3977,17 +4039,17 @@ static void txTick() {
   if (p.heightTiming.active && p.heightTiming.source == 1 && tcpDone &&
       !heightTimingReported) {
     logHeightTiming(p.heightTiming,
-                    tcpOffset == p.len ? "TCP_SUBMITTED" : "TCP_NOT_SENT", started);
+                    tcpOffset == tcpLen ? "TCP_SUBMITTED" : "TCP_NOT_SENT", started);
     heightTimingReported = true;
   }
   if (!bleDone) {
     if (millis() - lastChunk >= 15) {
       lastChunk = millis();
-      const int submitted = plcHid::notify(p.session, p.data + offset, p.len - offset);
+      const int submitted = plcHid::notify(p.session, bleData + offset, bleLen - offset);
       if (submitted < 0) bleDone = true;
       else if (submitted > 0) {
         offset += size_t(submitted);
-        if (offset == p.len) {
+        if (offset == bleLen) {
           bleDone = true;
           accepted = true;
         }
@@ -3996,11 +4058,11 @@ static void txTick() {
   }
   if (!clientDone && millis() - clientLastChunk >= 15) {
     clientLastChunk = millis();
-    const int submitted = plcHid::notify(clientSession, p.data + clientOffset, p.len - clientOffset);
+    const int submitted = plcHid::notify(clientSession, bleData + clientOffset, bleLen - clientOffset);
     if (submitted < 0) clientDone = true;
     else if (submitted > 0) {
       clientOffset += size_t(submitted);
-      if (clientOffset == p.len) {
+      if (clientOffset == bleLen) {
         clientDone = true;
         accepted = true;
       }
@@ -4013,13 +4075,13 @@ static void txTick() {
   if (p.heightTiming.active && p.heightTiming.source == 0 && bleDone &&
       !heightTimingReported) {
     logHeightTiming(p.heightTiming,
-                    offset == p.len ? "BLE_SUBMITTED" : "BLE_NOT_SENT", started);
+                    offset == bleLen ? "BLE_SUBMITTED" : "BLE_NOT_SENT", started);
     heightTimingReported = true;
   }
   if (p.heightTiming.active && p.heightTiming.source == CMD_SOURCE_CLIENT && clientDone &&
       !heightTimingReported) {
     logHeightTiming(p.heightTiming,
-                    clientOffset == p.len ? "BLE_SUBMITTED" : "BLE_NOT_SENT", started);
+                    clientOffset == bleLen ? "BLE_SUBMITTED" : "BLE_NOT_SENT", started);
     heightTimingReported = true;
   }
   if (tcpDone && bleDone && clientDone) {
