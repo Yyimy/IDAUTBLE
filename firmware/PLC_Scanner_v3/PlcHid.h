@@ -8,6 +8,7 @@
 #include <mbedtls/aes.h>
 #include "ProbeKeyboard.h"
 #include "HidEarlyAuth.h"
+#include "FactoryDefaults.h"
 
 static void replyLine(bool ok, const String &text);
 static bool maintenanceAuthorized();
@@ -27,7 +28,14 @@ static probe::ReceiverIdentity savedReceiver;
 static probe::ReceiverIdentity receiverToRemove;
 static probe::Token receiverRemovalOwner;
 static uint32_t nextReceiverRemovalAttempt;
-static probe::OutputFormat outputFormat;
+static probe::OutputFormat factoryOutputFormat() {
+  probe::OutputFormat format;
+  format.separator[0] = '\n';
+  format.layout = probe::KeyLayout::ES;
+  format.hotkey = factoryDefaults::hotkey;
+  return format;
+}
+static probe::OutputFormat outputFormat = factoryOutputFormat();
 static bool receiverStorageReady, unbindAfterRelease;
 static std::atomic<bool> pairWindow{false};
 static uint32_t pairStarted, lastIdentityCheck;
@@ -239,7 +247,7 @@ static probe::ReceiverIdentity authenticatedIdentity(const probe::Peer &peer) {
   return found;
 }
 static void loadOutputFormat() {
-  outputFormat = {};
+  outputFormat = factoryOutputFormat();
   if (!receiverStorageReady || !receiverPreferences.isKey("format")) return;
   const String stored = receiverPreferences.getString("format", "");
   if (!probe::parseOutputFormat(stored.c_str(), outputFormat)) Serial.println("HID FORMAT invalid; defaults active");
@@ -1008,6 +1016,16 @@ static probe::Token shortcutReceiver() {
 
 static void sendHotkey(probe::Token receiver) {
   peerReply(receiver, true, "HIDHOTKEY=" + String(outputFormat.hotkey.c_str()));
+}
+
+static bool outputBusyForRestore() {
+  return keyboard.busy() || pendingCount || pairWindow || receiverToRemove.valid;
+}
+
+static void applyFactoryOutput() {
+  outputFormat = factoryOutputFormat();
+  const auto receiver = shortcutReceiver();
+  if (receiver.generation) sendHotkey(receiver);
 }
 
 static bool shortcutEnabled(uint32_t session) {

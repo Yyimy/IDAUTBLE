@@ -57,10 +57,19 @@ uint32_t hidGeneration=0;
 ShortcutPeer shortcutReceiver(){return {hidGeneration};}
 void sendHotkey(ShortcutPeer){replyLine(true,"HIDHOTKEY=CTRL+ALT+L");}
 }
+namespace factoryRestore {
+int calls=0;
+esp_err_t run(bool){++calls;return ESP_OK;}
+}
+namespace plcHid {
+bool outputBusyForRestore(){return false;}
+void applyFactoryOutput(){}
+}
+bool gNetworkRestorePending=false;
 void sendDeviceStatus(){replyLine(true,"STATUS=1;FW=TEST;ID=TRUCK-1");}
 void handleIdentityCommand(const String&,uint8_t){replyLine(true,"ID=TRUCK-1;HWID=AABBCCDDEEFF;NAME=TRUCK-1");}
 '''
-names = ['sendCounters','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','cfgSendOk','cfgSendErr','cfgSendCurrent','tcpAdvancedValues','setReaderTimeout','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendOff','powerCut','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','tcpWatchdog','eventTick']
+names = ['sendCounters','handleRestoreDefaults','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','cfgSendOk','cfgSendErr','cfgSendCurrent','tcpAdvancedValues','setReaderTimeout','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendOff','powerCut','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','tcpWatchdog','eventTick']
 body += extra+'\n'+'\n'.join(base['function'](n).split('{',1)[0]+';' for n in names)+'\n'
 body += '\n'.join(base['function'](n) for n in names)
 body += r'''
@@ -83,6 +92,20 @@ void fresh(){drain();commands.clear();txQueue.clear();characteristic.notificatio
 BleCmd cmd(BleCmdType type,uint8_t origin,const char*text=""){BleCmd c={};c.type=type;c.source=origin;c.session=origin==CMD_SOURCE_CLIENT?plcHid::clientSession():origin?gTcpSession.load():gBleSession.load();c.receivedMs=nowMs;strlcpy(c.payload,text,sizeof(c.payload));return c;}
 void run(BleCmd c){commands.push_back(c);bleProcessPendingOnce();}
 int main(){
+ fresh();
+ run(cmd(BLECMD_TEXT,0,"RESTOREDEFAULTS"));drain();
+ CHECK(factoryRestore::calls==0&&bleBytes().find("ERR=RESTORE_AUTH")!=std::string::npos);
+ fresh();
+ run(cmd(BLECMD_TEXT,0,"AUTH=123456"));drain();
+ gOutbox.count=1;
+ run(cmd(BLECMD_TEXT,0,"RESTOREDEFAULTS"));drain();
+ CHECK(factoryRestore::calls==0&&gOutbox.count==1&&bleBytes().find("ERR=RESTORE_PENDING")!=std::string::npos);
+ gOutbox.count=0;
+ run(cmd(BLECMD_TEXT,0,"RESTOREDEFAULTS"));drain();
+ CHECK(factoryRestore::calls==1&&bleBytes().find("RESTOREDEFAULTS=OK")!=std::string::npos);
+ CHECK(!gWifiEnabled&&gNetMode==NETMODE_DHCP&&gNetPort==51236&&gNetHost=="192.168.0.118");
+ CHECK(gPfxPalet=="P"&&gPfxUbic=="U"&&gIdleMinutes==60&&gFrameTimes==0);
+ gPfxPalet="]d1";gPfxUbic="]Q1";
  // BLE and TCP select independently, including simultaneous client notifications.
  for (uint8_t flags : {0, 1, 2, 3}) {
   fresh();gFrameTimes=flags;plcHid::clientGeneration=30;gTcpClient.limit=2;
