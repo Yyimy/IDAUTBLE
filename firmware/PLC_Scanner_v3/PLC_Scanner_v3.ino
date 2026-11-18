@@ -31,6 +31,8 @@
 
 #include "Types.h"
 #include "OutboxStorage.h"
+#include "FactoryDefaults.h"
+#include "FactoryRestore.h"
 #include "TcpMonitor.h"
 #include "DiagnosticHistory.h"
 #include "TcpTrace.h"
@@ -225,12 +227,12 @@ static NetMode gNetMode = NETMODE_DHCP;
 static String gNetSsid = "";
 static String gNetPwd = "";
 
-static String gNetIp = "192.168.0.213";
-static String gNetGw = "192.168.0.1";
-static String gNetMask = "255.255.255.0";
+static String gNetIp = factoryDefaults::ip;
+static String gNetGw = factoryDefaults::gateway;
+static String gNetMask = factoryDefaults::mask;
 
-static String gNetHost = "192.168.0.10";
-static uint16_t gNetPort = 9000;
+static String gNetHost = factoryDefaults::tcpHost;
+static uint16_t gNetPort = factoryDefaults::tcpPort;
 
 static bool gWifiEnabled = false;
 
@@ -257,7 +259,8 @@ static bool gTcpConnectedPrev = false;
 WiFiClient gTcpClient;
 static unsigned long gLastTcpAttempt = 0;
 static unsigned long gLastTcpActivity = 0;
-static uint32_t gTcpPingSeconds = 10, gTcpTimeoutSeconds = 20;
+static uint32_t gTcpPingSeconds = factoryDefaults::pingSeconds;
+static uint32_t gTcpTimeoutSeconds = factoryDefaults::timeoutSeconds;
 static HeartbeatMessages gHeartbeatMessages{"PING", "PONG"};
 static const unsigned long TCP_RETRY_MS = 3000;
 
@@ -423,7 +426,7 @@ static bool gBat2PresentPrev = true;
 #define TXD1EN 21
 
 String gAltura = "-";               // "MM.CC"
-static bool gAlturaEnabled = true;  // ALT=1 habilita, ALT=0 deshabilita
+static bool gAlturaEnabled = false;  // ALT=1 habilita, ALT=0 deshabilita
 uint8_t tramaRS[5] = {0x40, 0x43, 0x00, 0x00, 0x01};
 HardwareSerial RS485(1);
 
@@ -445,11 +448,11 @@ int estadoSensorAnterior = LOW;
 
 static int lecturaAnteriorRaw = HIGH;  // SOLO para debounce (lectura cruda)
 
-static uint32_t gIdleMinutes = 120;
+static uint32_t gIdleMinutes = factoryDefaults::idleMinutes;
 static constexpr uint8_t BLE_FRAME_TIME = 1;
 static constexpr uint8_t TCP_FRAME_TIME = 2;
 static constexpr uint8_t ALL_FRAME_TIMES = BLE_FRAME_TIME | TCP_FRAME_TIME;
-static uint8_t gFrameTimes = ALL_FRAME_TIMES;
+static uint8_t gFrameTimes = factoryDefaults::frameTimes;
 bool armadoInactividad = false;
 unsigned long lastFotoActivaMs = 0;
 bool powerCutEjecutado = false;
@@ -467,7 +470,7 @@ static const unsigned long FOTO_STABLE_MS = 1500;  // 1.5 s
 #define TX0 43
 
 HardwareSerial PLCSerial(0);
-static constexpr uint32_t DEFAULT_READER_TIMEOUT_MS = 2000;
+static constexpr uint32_t DEFAULT_READER_TIMEOUT_MS = factoryDefaults::readerTimeoutMs;
 static uint32_t gReaderTimeoutMs = DEFAULT_READER_TIMEOUT_MS;
 
 static bool validReaderTimeout(uint32_t ms) {
@@ -1679,8 +1682,8 @@ static void sendBleReply(const uint8_t *data, size_t len) {
 // CFG (PREFIJOS LECTOR) - (Opción B) debajo de sendFrame()
 // ============================================================================
 static const char *NVS_NS_CFG = "cfg";
-static String gPfxPalet = "]d1";
-static String gPfxUbic = "]Q1";
+static String gPfxPalet = factoryDefaults::palletPrefix;
+static String gPfxUbic = factoryDefaults::locationPrefix;
 
 static bool isValidPrefix(const String &pfx) {
   if (pfx.length() == 0 || pfx.length() > 12) return false;
@@ -2318,7 +2321,7 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
              rxTrim.startsWith("ACKMODE=") || rxTrim.startsWith("TCPADV=") ||
              rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" || rxTrim == "HISTORY?" || rxTrim.startsWith("HISTORY?=") || rxTrim.startsWith("HISTORYTIME?=") || rxTrim == "TCPTRACE?" ||
              rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
-             rxTrim.startsWith("RTCFRAME=") || rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("IDLEMIN=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
+             rxTrim == "RESTOREDEFAULTS" || rxTrim.startsWith("RTCFRAME=") || rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("IDLEMIN=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
     cmd.type = BLECMD_TEXT;
     strlcpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload));
   } else {
@@ -3129,6 +3132,9 @@ void setup() {
     Serial.println("FATAL: RAM/colas");
     while (true) delay(1000);
   }
+  const esp_err_t restoreError = factoryRestore::run(false);
+  if (restoreError != ESP_OK)
+    Serial.printf("FACTORY RESTORE recovery failed: %s\n", esp_err_to_name(restoreError));
   runtimeLoad();
 
   // CFG + contadores
@@ -3438,10 +3444,10 @@ static void runtimeLoad() {
   OTA_AP_PASS = PLC_OTA_WIFI_PASSWORD;
   gAckMode = p.getBool("ack", false);
   gHeartbeatEnabled = p.getBool("heartbeat", false);
-  const uint32_t frameTimes = p.getUInt("frame_times", ALL_FRAME_TIMES);
-  gFrameTimes = frameTimes <= ALL_FRAME_TIMES ? frameTimes : ALL_FRAME_TIMES;
-  const uint32_t idle = p.getUInt("idle_min", 120);
-  gIdleMinutes = idle >= 1 && idle <= 1440 ? idle : 120;
+  const uint32_t frameTimes = p.getUInt("frame_times", factoryDefaults::frameTimes);
+  gFrameTimes = frameTimes <= ALL_FRAME_TIMES ? frameTimes : factoryDefaults::frameTimes;
+  const uint32_t idle = p.getUInt("idle_min", factoryDefaults::idleMinutes);
+  gIdleMinutes = idle >= 1 && idle <= 1440 ? idle : factoryDefaults::idleMinutes;
   gLastCutReason = p.getString("last_cut", "");
   uint32_t tcpAdvanced = p.getUInt("tcp_adv", 0);
   gHeartbeatMessages = HeartbeatMessages{"PING", "PONG"};
@@ -3460,8 +3466,8 @@ static void runtimeLoad() {
     gTcpPingSeconds = pingSeconds;
     gTcpTimeoutSeconds = timeoutSeconds;
   } else {
-    gTcpPingSeconds = 10;
-    gTcpTimeoutSeconds = 20;
+    gTcpPingSeconds = factoryDefaults::pingSeconds;
+    gTcpTimeoutSeconds = factoryDefaults::timeoutSeconds;
   }
   const auto readerTimeout = p.getUInt("reader_ms", DEFAULT_READER_TIMEOUT_MS);
   gReaderTimeoutMs = validReaderTimeout(readerTimeout) ? readerTimeout : DEFAULT_READER_TIMEOUT_MS;
@@ -3659,8 +3665,64 @@ static void setIdleMinutes(const String &value, uint8_t source) {
   replyLine(true, "IDLEMIN=" + String(gIdleMinutes));
 }
 
+static void handleRestoreDefaults(uint8_t source) {
+  if (source != 0 || !maintenanceAuthorized()) {
+    replyLine(false, "ERR=RESTORE_AUTH");
+    return;
+  }
+  if (gOutbox.count || gEventInFlight || gOutboxDirty) {
+    replyLine(false, "ERR=RESTORE_PENDING");
+    return;
+  }
+  if (gScanActive || gScanCount || gCutRequested || gOtaTaskHandle ||
+      gOtaState != OTA_IDLE || gNetworkRestorePending || plcHid::outputBusyForRestore()) {
+    replyLine(false, "ERR=RESTORE_BUSY");
+    return;
+  }
+  const esp_err_t error = factoryRestore::run(true);
+  if (error != ESP_OK) {
+    Serial.printf("FACTORY RESTORE failed: %s\n", esp_err_to_name(error));
+    replyLine(false, "ERR=RESTORE_STORAGE");
+    return;
+  }
+
+  gPfxPalet = factoryDefaults::palletPrefix;
+  gPfxUbic = factoryDefaults::locationPrefix;
+  gReaderTimeoutMs = DEFAULT_READER_TIMEOUT_MS;
+  gAlturaEnabled = false;
+  gAltura = "-";
+  gIdleMinutes = factoryDefaults::idleMinutes;
+  lastFotoActivaMs = millis();
+  gNetMode = NETMODE_DHCP;
+  gNetIp = factoryDefaults::ip;
+  gNetGw = factoryDefaults::gateway;
+  gNetMask = factoryDefaults::mask;
+  gNetHost = factoryDefaults::tcpHost;
+  gNetPort = factoryDefaults::tcpPort;
+  gAckMode = false;
+  gHeartbeatEnabled = false;
+  gTcpPingSeconds = factoryDefaults::pingSeconds;
+  gTcpTimeoutSeconds = factoryDefaults::timeoutSeconds;
+  gHeartbeatMessages = HeartbeatMessages{"PING", "PONG"};
+  gFrameTimes = factoryDefaults::frameTimes;
+
+  const bool wifiWasEnabled = gWifiEnabled;
+  gWifiEnabled = false;
+  wifiStartFromConfig();
+  gTcpConnectedPrev = false;
+  if (wifiWasEnabled) WiFi.disconnect(true);
+  plcHid::applyFactoryOutput();
+  logLine("FACTORY RESTORE OK");
+  recordDiagnostic("FACTORY_RESTORE");
+  replyLine(true, "RESTOREDEFAULTS=OK");
+}
+
 static void handleTextCommand(const BleCmd &cmd) {
   String s(cmd.payload);
+  if (s == "RESTOREDEFAULTS") {
+    handleRestoreDefaults(cmd.source);
+    return;
+  }
   if (plcHid::handle(s, cmd.source)) return;
   if (s.startsWith("RTCFRAME=")) {
     if (cmd.source != 0 || !maintenanceAuthorized()) {
@@ -3759,7 +3821,7 @@ static void handleTextCommand(const BleCmd &cmd) {
     replyLine(true, "FW=" FIRMWARE_VERSION ";PROTO=V2;ACKMODE=" +
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
-                        (cmd.source == 0 ? String(";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1;READERTIMEOUT=") + String(gReaderTimeoutMs) +
+                        (cmd.source == 0 ? String(";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1;RESTOREDEFAULTS=1;READERTIMEOUT=") + String(gReaderTimeoutMs) +
                          ";RTCFRAME=" + String(gFrameTimes) + ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1;HISTORYPAGE=1;HISTORYTIME=1;TCPTRACE=1" : String()));
     return;
   }

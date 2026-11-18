@@ -82,6 +82,7 @@ void powerCut(const char* reason){gCutRequested=true;cutReason=reason;}
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
 outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
 tcp_monitor=(sketch/'TcpMonitor.h').read_text().replace('#pragma once','')
+factory_defaults=(sketch/'FactoryDefaults.h').read_text().replace('#pragma once','')
 history_header=(sketch/'DiagnosticHistory.h').read_text().replace('#pragma once','')
 trace_header=(sketch/'TcpTrace.h').read_text().replace('#pragma once','')
 names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','tcpTextCommandType','validHeartbeatMessages','decodeHeartbeatMessage','heartbeatReplyMatches','heartbeatValues','recordDiagnostic','releaseLegacyDiagnosticStorage','recordTcpTrace','recordTcpDown','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','omitFrameTime','txTick','parseU32','recordTcpReceived','recordTcpSent','setIdleMinutes','appendTcpMonitor','saveNvsSetting','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
@@ -209,7 +210,7 @@ void reading(const String &pallet, const String &location, uint32_t) { readings.
 '''
 # Types require integer definitions and String prototypes are declared by Arduino in firmware.
 includes=shim[:shim.index('using std::size_t;')]
-body=includes+types+'\n'+outbox_storage+'\n'+tcp_monitor+'\n' +history_header+'\n'+trace_header+'\n'+shim[shim.index('using std::size_t;'):]+'\n'
+body=includes+types+'\n'+outbox_storage+'\n'+tcp_monitor+'\n' +history_header+'\n'+factory_defaults+'\n'+trace_header+'\n'+shim[shim.index('using std::size_t;'):]+'\n'
 body+='\n'.join(function(n).split('{',1)[0]+';' for n in names)+'\n'
 body+='\n'.join(function(n) for n in names)
 body+=r'''
@@ -338,10 +339,10 @@ int main(){
  CHECK(!decodeHeartbeatMessage("0A",gHeartbeatMessages.request));
  storedBlobs.erase("tcp_adv2");
  storedUIntSettings.erase("tcp_adv");runtimeLoad();
- CHECK(gIdleMinutes==120);
+ CHECK(gIdleMinutes==60);
  storedUIntSettings["idle_min"]=15;storedSettings["last_cut"]="COMMAND";runtimeLoad();
  CHECK(gIdleMinutes==15&&gLastCutReason=="COMMAND");
- storedUIntSettings["idle_min"]=1441;runtimeLoad();CHECK(gIdleMinutes==120);
+ storedUIntSettings["idle_min"]=1441;runtimeLoad();CHECK(gIdleMinutes==60);
  storedUIntSettings.erase("idle_min");storedSettings.erase("last_cut");
 
  // The compiled PIN wins over any prior NVS value and invalidates old bonds.

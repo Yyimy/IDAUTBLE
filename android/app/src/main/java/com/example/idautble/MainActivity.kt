@@ -387,6 +387,10 @@ class MainActivity : ComponentActivity() {
     private val uiHidReceiver = mutableStateOf(HidReceiverState())
     private var hidReceiverRequest = 0L
     private val uiHidOutput = mutableStateOf(HidOutputState())
+    private var restoreDefaultsSupported by mutableStateOf(false)
+    private var restoreDefaultsPending by mutableStateOf(false)
+    private var restoreDefaultsMessage by mutableStateOf("")
+    private var restoreDefaultsRequest = 0
     private val uiReaderTimeout = mutableStateOf(ReaderTimeoutState())
     private var readerTimeoutRequest = 0
     private val uiIdleShutdown = mutableStateOf(IdleShutdownState())
@@ -964,6 +968,52 @@ class MainActivity : ComponentActivity() {
         }, 8000)
     }
 
+    private fun restoreFactoryDefaults() {
+        if (!bleChannelReady || !restoreDefaultsSupported || restoreDefaultsPending ||
+            !maintenanceSession.isAuthorized() || statusRefresh.otaActive
+        ) return
+        if ((uiCounters.value.counters?.pendingEvents ?: 0) > 0) {
+            restoreDefaultsMessage = "Wait for pending readings to be delivered."
+            return
+        }
+        restoreDefaultsPending = true
+        restoreDefaultsMessage = "Restoring factory defaults…"
+        val request = ++restoreDefaultsRequest
+        sendText("RESTOREDEFAULTS", addCrlf = true)
+        mainHandler.postDelayed({
+            if (request == restoreDefaultsRequest && restoreDefaultsPending) {
+                restoreDefaultsPending = false
+                restoreDefaultsMessage = "No PLC confirmation. Refresh the settings to check whether they were restored."
+            }
+        }, 8000)
+    }
+
+    private fun handleRestoreDefaultsMessage(message: PlcMessage) {
+        if (message.acknowledged && message.text == "RESTOREDEFAULTS=OK") {
+            restoreDefaultsRequest++
+            restoreDefaultsPending = false
+            restoreDefaultsMessage = "IDAUT factory defaults restored."
+            sendText("INFO?", addCrlf = true)
+            sendText("CFG?", addCrlf = true)
+            sendText("ALT?", addCrlf = true)
+            requestHidOutput(null)
+            networkSession.readConfiguration()
+            requestDeviceStatus()
+            requestDeviceCounters()
+        } else if (message.rejected && restoreDefaultsPending && message.text.startsWith("ERR=RESTORE_")) {
+            restoreDefaultsRequest++
+            restoreDefaultsPending = false
+            restoreDefaultsMessage = when (message.text) {
+                "ERR=RESTORE_AUTH" -> "Enter the PIN in PIN / ACCESS first."
+                "ERR=RESTORE_PENDING" -> "Wait for pending readings to be delivered."
+                "ERR=RESTORE_BUSY" -> "Wait for the PLC to finish its current operation."
+                "ERR=RESTORE_STORAGE" -> "The PLC could not finish restoring the settings. Retry the restore."
+                else -> "The PLC rejected the restore."
+            }
+            if (message.text == "ERR=RESTORE_PENDING") requestDeviceCounters()
+        }
+    }
+
     private fun saveReaderTimeout(ms: Int) {
         val state = uiReaderTimeout.value
         if (!bleChannelReady || state.currentMs == null || state.pendingMs != null || ms !in readerTimeoutOptions) return
@@ -1230,6 +1280,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun resetSecureTransport() {
+        restoreDefaultsRequest++
+        restoreDefaultsSupported = false
+        restoreDefaultsPending = false
+        restoreDefaultsMessage = ""
         maintenanceLeaseSupported = false
         maintenanceReleaseSupported = false
         maintenanceReleasePending = false
@@ -1733,6 +1787,7 @@ class MainActivity : ComponentActivity() {
             }
             maintenanceLeaseSupported = "MAINTLEASE=1" in capabilities
             maintenanceReleaseSupported = "MAINTRELEASE=1" in capabilities
+            restoreDefaultsSupported = "RESTOREDEFAULTS=1" in capabilities
         }
         if (maintenanceReleasePending && message.rejected && text.startsWith("ERR=MAINT_RELEASE")) {
             maintenanceReleasePending = false
@@ -1745,6 +1800,7 @@ class MainActivity : ComponentActivity() {
         handleReaderTimeoutMessage(message)
         handlePowerMessage(message)
         handleFrameTimesMessage(message)
+        handleRestoreDefaultsMessage(message)
         if (message.acknowledged && text.startsWith("HISTORY=")) {
             parseDiagnosticHistory(text)?.let { uiDiagnosticHistory.value = it }
         }
@@ -2605,6 +2661,11 @@ class MainActivity : ComponentActivity() {
                     onIdentityClick = { openIdentityDialog() },
                     onMaintenanceClick = { openPinDialog() },
                     onForgetPin = { forgetSavedPin() },
+                    restoreDefaultsSupported = restoreDefaultsSupported,
+                    restoreDefaultsPending = restoreDefaultsPending,
+                    restoreDefaultsMessage = restoreDefaultsMessage,
+                    onRestoreDefaults = ::restoreFactoryDefaults,
+                    onRefreshCounters = ::requestDeviceCounters,
                     onLockMaintenance = { lockMaintenance() },
                     devices = uiDevices.value,
                     selected = uiSelected.value,
@@ -2792,6 +2853,11 @@ private fun PlcBleTesterLandscape(
     onIdentityClick: () -> Unit,
     onMaintenanceClick: () -> Unit,
     onForgetPin: () -> Unit,
+    restoreDefaultsSupported: Boolean,
+    restoreDefaultsPending: Boolean,
+    restoreDefaultsMessage: String,
+    onRestoreDefaults: () -> Unit,
+    onRefreshCounters: () -> Unit,
     onLockMaintenance: () -> Unit,
     devices: List<BleDevice>,
     selected: BleDevice?,
@@ -3208,6 +3274,17 @@ private fun PlcBleTesterLandscape(
                                                         enabled = connected,
                                                         modifier = Modifier.fillMaxWidth(),
                                                     )
+                                                    if (restoreDefaultsSupported) {
+                                                        RestoreFactoryDefaultsAction(
+                                                            authorised = connected && maintenanceAuthorised,
+                                                            restoring = restoreDefaultsPending,
+                                                            pendingReadings = deviceCounters.counters?.pendingEvents ?: 0,
+                                                            checkingCounters = deviceCounters.busy,
+                                                            message = restoreDefaultsMessage,
+                                                            onCheckCounters = onRefreshCounters,
+                                                            onRestore = onRestoreDefaults,
+                                                        )
+                                                    }
                                                 }
                                             }
                                             TerminalSection.HID_RECEIVER -> {
