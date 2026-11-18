@@ -9,7 +9,7 @@ source = (sketch / 'PlcHid.h').read_text()
 ino = (sketch / 'PLC_Scanner_v3.ino').read_text()
 types = (sketch / 'Types.h').read_text().replace('#pragma once', '').replace('#include <Arduino.h>', '')
 commands = '\n'.join(re.findall(r'^const uint8_t CMD_[LBAPDICO]\[4\] = \{[^\n]+?\};', ino, re.M))
-for name in ('matchCommand', 'cmdFromBinary4', 'isClientReading'):
+for name in ('matchCommand', 'cmdFromBinary4', 'autoReadAction', 'isClientReading'):
     commands += '\n' + re.search(r'^(?:static inline |static )?\w+ ' + name + r'\([^\n]*\) \{\n.*?^\}', ino, re.M | re.S).group()
 staging = source[source.index('struct PreparedWrite {'):source.index('static probe::Sessions snapshot()')]
 dispatcher = source[source.index('static void sendClientReady('):source.index('static uint8_t reportMap[]')]
@@ -295,6 +295,11 @@ int main() {
   write(1,21,disabled);write(1,20,"\x1b" "L\r\n");
   assert(queued.size()==expected.size() && gBleSession==owner);
 
+  write(1,21,enabled);
+  write(1,20,"AUTOREAD=0\r\n");
+  assert(queued.back().type==BLECMD_AUTOREAD && queued.back().source==CMD_SOURCE_CLIENT && queued.back().payload[0]=='0');
+  queued.pop_back();
+
   // Assigning HID releases the client slot and preserves maintenance.
   disconnected.clear();
   pairWindow=true;
@@ -333,6 +338,9 @@ int main() {
   assert(queued.size()==2 && queued[0].type==BLECMD_TEXT && queued[1].type==BLECMD_L);
   for (const auto &cmd : queued) assert(cmd.source==CMD_SOURCE_HID && cmd.session==keyboard.generation);
   assert(peers.keyboardReady(keyboard) && peers.uartReady(maintenance));
+  write(1,20,"AUTOREAD=1\r\n");
+  assert(queued.back().type==BLECMD_AUTOREAD && queued.back().source==CMD_SOURCE_HID && queued.back().payload[0]=='1');
+  queued.pop_back();
 
   // An existing HID receiver requests CLIENT on the same secure connection.
   pairWindow=false;
@@ -492,7 +500,7 @@ int main() {
 '''
 with tempfile.TemporaryDirectory(prefix='plc_hid_gatt_') as tmp:
     cpp, exe = Path(tmp) / 'test.cpp', Path(tmp) / 'test'
-    cpp.write_text('#include <cstdint>\n#include <cstddef>\n' + types + commands + shim + boot_advertising_state + '\n' + bond_reset + staging + dispatcher + lease + release + advertising_control + advertising_tick + cases)
+    cpp.write_text('#include <cstdint>\n#include <cstddef>\n#include <cstring>\n' + types + commands + shim + boot_advertising_state + '\n' + bond_reset + staging + dispatcher + lease + release + advertising_control + advertising_tick + cases)
     subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I',
                     str(sketch), str(cpp), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)

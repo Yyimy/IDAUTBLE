@@ -46,6 +46,9 @@ int main(){
   CHECK(contains(";COUNTERS=1"));
   CHECK(contains(";B1=PRESENT;B1V=18.00;B1P=66;B1AGE=0")); CHECK(contains(";LOWEST=BOTH"));
   bleReady=true; sendDeviceStatus(); CHECK(contains(";LED=READY;WHY=LINK_READY"));
+  gAutomaticReading=false;sendDeviceStatus();CHECK(contains(";LED=MANOEUVRE;WHY=AUTOREAD_PAUSED"));CHECK(contains(";AUTOREAD=0"));
+  bleReady=false;sendDeviceStatus();CHECK(contains(";LED=DISCONNECTED"));CHECK(contains(";AUTOREAD=0"));
+  bleReady=true;gAutomaticReading=true;
   // Both slots fitted: battery 2 at 15% must determine the low-battery alert.
   gNivelBat2="15";sendDeviceStatus();CHECK(contains(";LOWEST=B2"));
   nowMs=3000;fresh();sendDeviceStatus();CHECK(contains(";WHY=BATTERY_LOW"));CHECK(contains(";B2P=15"));

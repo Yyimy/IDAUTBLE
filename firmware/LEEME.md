@@ -522,3 +522,25 @@ de mantenimiento autorizada cuando está en reposo y la cola de lecturas está v
 Se conservan las credenciales Wi-Fi, el ID, el reloj, los vínculos Bluetooth, el receptor HID
 y los contadores. Las lecturas pendientes deben entregarse antes de restaurar. El monitor serie
 muestra `FACTORY RESTORE OK` al completar la operación desde la app.
+
+## Modo maniobra
+
+`AUTOREAD?` consulta el estado. `AUTOREAD=0` pausa la lectura automática
+y `AUTOREAD=1` la reanuda. Usa texto ASCII con CRLF por FFE1. Los CLIENT
+registrados y el receptor HID asignado pueden cambiarlo por su conexión
+segura. En BLE de mantenimiento el cambio requiere autorizar el PIN.
+La app muestra el estado y los controles en **Device status**.
+
+El PLC responde `<ACK>AUTOREAD=0<CR><LF>` o
+`<ACK>AUTOREAD=1<CR><LF>`. Con `ERR=AUTOREAD_BUSY`, espera a que
+termine la operación en curso y reintenta antes de mover el palet.
+La pausa mantiene la detección, los contadores y la inactividad de la
+fotocélula. Las lecturas manuales y la entrega de eventos anteriores
+siguen disponibles. La siguiente transición de fotocélula tras reanudar
+dispara la lectura. El estado se conserva al reiniciar y la restauración
+de fábrica vuelve a activar la lectura automática.
+
+Con el enlace requerido disponible, el LED en pausa hace un destello largo
+de **1 s encendido y 2 s apagado**. Fallo, batería, OTA y falta de enlace
+tienen prioridad. El monitor serie indica `AUTOREAD PAUSED` y
+`AUTOREAD RESUMED` al confirmar cada cambio.

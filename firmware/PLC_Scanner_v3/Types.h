@@ -7,7 +7,8 @@ enum LedMode : uint8_t {
   LED_BAT_LOW,
   LED_BAT_CRITICAL,
   LED_ERROR,
-  LED_OTA
+  LED_OTA,
+  LED_MANOEUVRE
 };
 
 enum BleCmdType : uint8_t {
@@ -37,7 +38,8 @@ enum BleCmdType : uint8_t {
   BLECMD_OTA_START,
   BLECMD_OTA_STATUS,
   BLECMD_OTA_ABORT,
-  BLECMD_TEXT
+  BLECMD_TEXT,
+  BLECMD_AUTOREAD
 
 };
 

@@ -72,7 +72,7 @@ std::vector<String> emitted;void outboxPush(const String&s){emitted.push_back(s)
 #define LOW 0
 #define PIN_SENSOR_PALET 4
 bool gFotoLista=false,PaletCargado=false,armadoInactividad=false;int rawFoto=LOW,gFotoUltLect=LOW,estadoSensorFiltrado=LOW,lecturaAnteriorRaw=LOW;
-uint32_t gFotoUltCambioMs=0,ultimoRebote=0,lastFotoActivaMs=0;const uint32_t FOTO_STABLE_MS=1500,retardoRebote=250;uint32_t gIdleMinutes=120;
+uint32_t gFotoUltCambioMs=0,ultimoRebote=0,lastFotoActivaMs=0;const uint32_t FOTO_STABLE_MS=1500,retardoRebote=250;uint32_t gIdleMinutes=120;bool gAutomaticReading=true;
 constexpr uint8_t BLE_FRAME_TIME=1,TCP_FRAME_TIME=2,ALL_FRAME_TIMES=3;uint8_t gFrameTimes=ALL_FRAME_TIMES;
 char gFotoEstado='0';bool gOtaAbort=false,gOtaTaskHandle=false;int loaded=0,unloaded=0;
 int digitalRead(int){return rawFoto;}void countersIncPalCargado(){++loaded;}void countersIncPalDescargado(){++unloaded;}
@@ -255,10 +255,12 @@ int main(){
  const int triggers=PLCSerial.triggers;enqueueCommandScan(shortcut);scanTick();CHECK(!gScanActive&&PLCSerial.triggers==triggers);
  resetScanner();nowMs=5000;gAlturaEnabled=true;enqueueScan(BLECMD_A,false);scanTick();CHECK(gScanActive);nowMs=5251;scanTick();CHECK(!gScanActive&&gAltura=="-");CHECK(plcHid::readings.size()==2);
  resetScanner();nowMs=6000;gFotoLista=false;gFotoUltLect=LOW;rawFoto=LOW;gFotoUltCambioMs=6000;photoTick();nowMs=7500;photoTick();CHECK(gFotoLista&&armadoInactividad&&!PaletCargado);
- rawFoto=HIGH;nowMs=7600;photoTick();nowMs=7851;photoTick();CHECK(PaletCargado&&loaded==1);
+ gAutomaticReading=false;
+ rawFoto=HIGH;nowMs=7600;photoTick();nowMs=7851;photoTick();CHECK(PaletCargado&&loaded==1&&gScanCount==0);
  // Hold a pallet longer than inactivity period; unloading must start a fresh timer.
  nowMs=8000000;photoTick();CHECK(!gCutRequested);
- rawFoto=LOW;nowMs=8000100;photoTick();nowMs=8000351;photoTick();CHECK(!PaletCargado&&!gCutRequested&&unloaded==1);
+ rawFoto=LOW;nowMs=8000100;photoTick();nowMs=8000351;photoTick();CHECK(!PaletCargado&&!gCutRequested&&unloaded==1&&gScanCount==0);
+ gAutomaticReading=true;photoTick();CHECK(gScanCount==0);
  gIdleMinutes=1;nowMs=8000351+60000-1;photoTick();CHECK(!gCutRequested);nowMs++;photoTick();CHECK(gCutRequested&&cutReason=="INACTIVITY_1_MIN");
 
  gCutRequested=false;lastBatSafetyCheck=0;vCollapseSinceMs=0;vWarnSinceMs=0;gBatV1=13.4f;gBatV2=19;gBatValid[0]=gBatValid[1]=true;
