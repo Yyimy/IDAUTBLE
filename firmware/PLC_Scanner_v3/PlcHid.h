@@ -671,7 +671,7 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
     if (handle == controlHandle && data[0] <= 1) p->suspended = data[0] == 0;
     if (handle == outputHandle || handle == bootOutputHandle) p->capsLock = data[0] & 0x02;
   }
-  // Registered CLIENT writes are limited to the binary reading commands.
+  // Registered CLIENT writes are limited to reading and manoeuvre commands.
   constexpr char clientHello[] = "CLIENT\r\n";
   const bool uartWrite = pCharacteristic && handle == pCharacteristic->getHandle();
   if (uartWrite && !write.is_prep && !write.offset) {
@@ -679,6 +679,19 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
     constexpr char trigger[] = "HIDREAD\r\n";
     const bool getHotkey = length == sizeof(query) - 1 && !memcmp(data, query, length);
     const bool read = length == sizeof(trigger) - 1 && !memcmp(data, trigger, length);
+    const char autoAction = autoReadAction(data, length);
+    const bool operationalPeer = peers.clientReady(p->token) || peers.shortcutReady(p->token);
+    if (autoAction && operationalPeer) {
+      BleCmd cmd = {};
+      cmd.type = BLECMD_AUTOREAD;
+      cmd.source = peers.clientReady(p->token) ? CMD_SOURCE_CLIENT : CMD_SOURCE_HID;
+      cmd.session = p->token.generation;
+      cmd.receivedMs = millis();
+      cmd.payload[0] = autoAction;
+      portEXIT_CRITICAL(&peerMux);
+      queueBleCommand(cmd);
+      return;
+    }
     if (getHotkey || read) {
       if (!peers.shortcutReady(p->token)) { portEXIT_CRITICAL(&peerMux); return; }
       BleCmd cmd = {};

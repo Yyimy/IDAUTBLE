@@ -203,6 +203,15 @@ static inline BleCmdType cmdFromBinary4(const uint8_t rx[4]) {
   return BLECMD_NONE;
 }
 
+// Accept only exact operator commands on FFE1.
+static char autoReadAction(const uint8_t *data, size_t length) {
+  if (length >= 2 && data[length - 2] == '\r' && data[length - 1] == '\n') length -= 2;
+  if (length == 9 && !memcmp(data, "AUTOREAD?", 9)) return '?';
+  if (length == 10 && !memcmp(data, "AUTOREAD=", 9) && (data[9] == '0' || data[9] == '1'))
+    return char(data[9]);
+  return 0;
+}
+
 static bool isClientReading(BleCmdType type) {
   return type == BLECMD_L || type == BLECMD_B || type == BLECMD_A ||
          type == BLECMD_P || type == BLECMD_D || type == BLECMD_I;
@@ -449,6 +458,7 @@ int estadoSensorAnterior = LOW;
 static int lecturaAnteriorRaw = HIGH;  // SOLO para debounce (lectura cruda)
 
 static uint32_t gIdleMinutes = factoryDefaults::idleMinutes;
+static bool gAutomaticReading = true;
 static constexpr uint8_t BLE_FRAME_TIME = 1;
 static constexpr uint8_t TCP_FRAME_TIME = 2;
 static constexpr uint8_t ALL_FRAME_TIMES = BLE_FRAME_TIME | TCP_FRAME_TIME;
@@ -2279,7 +2289,11 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
   // --------------------------
   // 1) TEXTO (RTC/CFG) -> se difiere, NO se ejecuta aquí
   // --------------------------
-  if (rxTrim.startsWith("RTC=")) {
+  const char autoAction = autoReadAction(reinterpret_cast<const uint8_t *>(rxTrim.c_str()), rxTrim.length());
+  if (autoAction) {
+    cmd.type = BLECMD_AUTOREAD;
+    cmd.payload[0] = autoAction;
+  } else if (rxTrim.startsWith("RTC=")) {
     cmd.type = BLECMD_RTC_SET;
     strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
     cmd.payload[sizeof(cmd.payload) - 1] = '\0';
@@ -2400,7 +2414,8 @@ static void bleProcessPendingOnce() {
   BleCmd cmd = {};
   if (xQueueReceive(gCommandQueue, &cmd, 0) != pdTRUE) return;
   if (cmd.source == CMD_SOURCE_CLIENT &&
-      (!isClientReading(cmd.type) || !cmd.session || cmd.session != plcHid::clientSession())) {
+      ((!isClientReading(cmd.type) && cmd.type != BLECMD_AUTOREAD) ||
+       !cmd.session || cmd.session != plcHid::clientSession())) {
     logHeightRejected(cmd, "SESSION_EXPIRED");
     return;
   }
@@ -2418,6 +2433,10 @@ static void bleProcessPendingOnce() {
   if (cmd.source == CMD_SOURCE_HID) {
     const auto receiver = plcHid::shortcutReceiver();
     if (!receiver.generation || receiver.generation != cmd.session) return;
+    if (cmd.type == BLECMD_AUTOREAD) {
+      handleAutoRead(cmd);
+      return;
+    }
     if (cmd.type == BLECMD_TEXT) {
       plcHid::sendHotkey(receiver);
       return;
@@ -2425,6 +2444,10 @@ static void bleProcessPendingOnce() {
     if (cmd.type != BLECMD_L) return;
     if (!plcHid::shortcutEnabled(cmd.session)) { replyLine(false, "ERR=HIDREAD_DISABLED"); return; }
     if (gCutRequested || gScanActive || gScanCount) { replyLine(false, "ERR=HIDREAD_BUSY"); return; }
+  }
+  if (cmd.type == BLECMD_AUTOREAD) {
+    handleAutoRead(cmd);
+    return;
   }
   if (cmd.type == BLECMD_TEXT) {
     handleTextCommand(cmd);
@@ -2817,8 +2840,8 @@ static inline void updateLedMode() {
     const bool ready = gWifiEnabled
                            ? (gTcpConnected && gTcpClient.connected())
                            : (bleCanNotify() || plcHid::keyboardReady());
-    gLedMode = ready ? LED_READY : LED_DISCONNECTED;
-    gLedReason = ready ? "LINK_READY"
+    gLedMode = ready ? (gAutomaticReading ? LED_READY : LED_MANOEUVRE) : LED_DISCONNECTED;
+    gLedReason = ready ? (gAutomaticReading ? "LINK_READY" : "AUTOREAD_PAUSED")
                        : (gWifiEnabled ? "TCP_REQUIRED" : "BLE_REQUIRED");
   }
 }
@@ -2828,6 +2851,8 @@ static bool ledPatternOn(LedMode mode, uint32_t dt) {
   switch (mode) {
     case LED_READY:
       return dt % 3000 < 100;  // READY: 100 ms ON, 2900 ms OFF.
+    case LED_MANOEUVRE:
+      return dt % 3000 < 1000;
     case LED_DISCONNECTED:
       return dt % 1000 < 500;
     case LED_BAT_LOW: {
@@ -3442,6 +3467,7 @@ static void runtimeLoad() {
   // La clave del codigo es la fuente de verdad. Se ignora apkey de versiones anteriores.
   gOtaApPass = PLC_OTA_WIFI_PASSWORD;
   OTA_AP_PASS = PLC_OTA_WIFI_PASSWORD;
+  gAutomaticReading = p.getUInt("auto_read", 1) != 0;
   gAckMode = p.getBool("ack", false);
   gHeartbeatEnabled = p.getBool("heartbeat", false);
   const uint32_t frameTimes = p.getUInt("frame_times", factoryDefaults::frameTimes);
@@ -3520,7 +3546,7 @@ static void sendDeviceStatus() {
   updateLedMode();  // Same decision as the physical LED, including hysteresis.
   const uint32_t now = millis();
   const char *modes[] = {"READY", "DISCONNECTED", "BAT_LOW",
-                         "BAT_CRITICAL", "ERROR", "OTA"};
+                         "BAT_CRITICAL", "ERROR", "OTA", "MANOEUVRE"};
   String d;
   d.reserve(460);
   d = "STATUS=1;FW=" FIRMWARE_VERSION ";ID=" + gId;
@@ -3556,6 +3582,7 @@ static void sendDeviceStatus() {
   d += ";CUT=" +
        String(gCutConfirmed ? "CONFIRMED" : (gCutRequested ? "PENDING" : "NO"));
   d += ";REASON=" + String(gCutReason);
+  d += gAutomaticReading ? ";AUTOREAD=1" : ";AUTOREAD=0";
   d += ";COUNTERS=1";  // Capability only; counters use a separate bounded reply.
   replyLine(true, d);
 }
@@ -3665,6 +3692,33 @@ static void setIdleMinutes(const String &value, uint8_t source) {
   replyLine(true, "IDLEMIN=" + String(gIdleMinutes));
 }
 
+static void handleAutoRead(const BleCmd &cmd) {
+  if (cmd.source != 0 && cmd.source != CMD_SOURCE_CLIENT && cmd.source != CMD_SOURCE_HID) return;
+  const char action = cmd.payload[0];
+  if (action != '?') {
+    if (cmd.source == 0 && !maintenanceAuthorized()) {
+      replyLine(false, "ERR=AUTOREAD_AUTH");
+      return;
+    }
+    if (action != '0' && action != '1') return;
+    const bool enabled = action == '1';
+    if (enabled != gAutomaticReading) {
+      if (gScanActive || gScanCount || gCutRequested || gOtaTaskHandle || gOtaState != OTA_IDLE) {
+        replyLine(false, "ERR=AUTOREAD_BUSY");
+        return;
+      }
+      const uint32_t stored = enabled ? 1 : 0;
+      if (!saveNvsSetting("runtime3", "auto_read", &stored, sizeof(stored), true, "auto_read")) {
+        replyLine(false, "ERR=AUTOREAD_STORAGE");
+        return;
+      }
+      gAutomaticReading = enabled;
+      logLine(enabled ? "AUTOREAD RESUMED" : "AUTOREAD PAUSED");
+    }
+  }
+  replyLine(true, gAutomaticReading ? "AUTOREAD=1" : "AUTOREAD=0");
+}
+
 static void handleRestoreDefaults(uint8_t source) {
   if (source != 0 || !maintenanceAuthorized()) {
     replyLine(false, "ERR=RESTORE_AUTH");
@@ -3689,6 +3743,7 @@ static void handleRestoreDefaults(uint8_t source) {
   gPfxPalet = factoryDefaults::palletPrefix;
   gPfxUbic = factoryDefaults::locationPrefix;
   gReaderTimeoutMs = DEFAULT_READER_TIMEOUT_MS;
+  gAutomaticReading = true;
   gAlturaEnabled = false;
   gAltura = "-";
   gIdleMinutes = factoryDefaults::idleMinutes;
@@ -4394,10 +4449,11 @@ static void photoTick() {
       j.event = true;
       j.photo = gFotoEstado;
       strlcpy(j.iso, gRtcIso.c_str(), sizeof(j.iso));
-      outboxPush(frameForScan(j));
+      if (gAutomaticReading) outboxPush(frameForScan(j));
       replyLine(false, "ERR=MOVEMENT_DURING_OTA");
-    } else
+    } else if (gAutomaticReading) {
       enqueueScan(BLECMD_L, true);
+    }
   }
   if (!gOtaTaskHandle && armadoInactividad && !PaletCargado &&
       now - lastFotoActivaMs >= gIdleMinutes * 60000UL) {

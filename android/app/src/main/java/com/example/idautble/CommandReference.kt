@@ -62,6 +62,8 @@ private val commandGroups = linkedMapOf(
         CommandEntry("CFG=PFXP=<pallet>;PFXU=<location>", MAINTENANCE_PIN, "Save the barcode prefixes while the scanner is idle."),
         CommandEntry("ALT?", MAINTENANCE_TCP, "Check whether height measurement is enabled."),
         CommandEntry("ALT=0 or ALT=1", MAINTENANCE_PIN, "Disable or enable height measurement while the scanner is idle."),
+        CommandEntry("AUTOREAD?", "BLE Maintenance / CLIENT / assigned HID receiver", "Read the current automatic reading state."),
+        CommandEntry("AUTOREAD=0 / AUTOREAD=1", "BLE Maintenance with PIN / CLIENT / assigned HID receiver", "Pause or resume automatic photocell readings. The PLC confirms the saved state or reports busy."),
         CommandEntry("RESTOREDEFAULTS", MAINTENANCE_PIN, "Apply the IDAUT factory settings while idle with no pending readings. Wi-Fi is switched off. Saved Wi-Fi credentials, equipment identity, clock, Bluetooth pairing and counters are retained."),
         CommandEntry("READERTIMEOUT=<ms>", MAINTENANCE_PIN, "Set the barcode reader timeout to 1000, 2000, 3000 or 5000 ms."),
         CommandEntry("IDLEMIN=<minutes>", MAINTENANCE_PIN, "Set the photocell inactivity shutdown delay from 1 to 1440 minutes. Read the current value with INFO? over BLE."),

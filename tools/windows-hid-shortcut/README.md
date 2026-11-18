@@ -22,3 +22,14 @@ py -3.12 -m PyInstaller --noconfirm --onefile --windowed --name IDAUT_Lectura --
 ```
 
 El ejecutable queda en `dist/IDAUT_Lectura.exe`.
+
+### Modo maniobra
+
+Con un PLC compatible, **Pausar lecturas** evita que la fotocélula dispare
+nuevas lecturas automáticas. Cuando el PLC confirme **Lecturas pausadas**,
+mueve el palet de delante. Pulsa **Reanudar lecturas** antes de recoger el
+palet del fondo. El siguiente cambio de la fotocélula disparará la lectura.
+
+**Ctrl + Alt + Mayús + L** activa o desactiva el modo. El botón sigue
+disponible si el atajo está ocupado en Windows. El estado confirmado se
+muestra en la ventana y la pausa también aparece en el icono de bandeja.

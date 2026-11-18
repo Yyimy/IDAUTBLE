@@ -53,6 +53,10 @@ fun DeviceStatusSection(
     onAutoRefreshChange: (Boolean) -> Unit,
     expanded: Boolean,
     onToggle: () -> Unit,
+    maintenanceAuthorised: Boolean,
+    manoeuvrePending: Boolean,
+    manoeuvreMessage: String?,
+    onAutomaticReading: (Boolean) -> Unit,
 ) {
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
     var ledGuideOpen by rememberSaveable { mutableStateOf(false) }
@@ -73,12 +77,32 @@ fun DeviceStatusSection(
             else ->
                 "${ledDescription(status.led, status.firmware).substringBefore(" — ")} • ${age}s ago"
         }
+    if (status?.automaticReading == false) {
+        Text(
+            "Automatic readings paused",
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
     CollapsibleSettingsSection(
         title = "DEVICE STATUS",
         summary = summary,
         expanded = expanded,
         onToggle = onToggle,
     ) {
+        status?.automaticReading?.let { enabled ->
+            Column(Modifier.fillMaxWidth()) {
+                Text("Manoeuvre mode · ${if (enabled) "Off" else "On"}")
+                MaintenanceActionButton(
+                    text = if (enabled) "Pause automatic readings" else "Resume automatic readings",
+                    onClick = { onAutomaticReading(!enabled) },
+                    tone = if (enabled) MaintenanceActionTone.WARNING else MaintenanceActionTone.SUCCESS,
+                    enabled = ready && maintenanceAuthorised && !manoeuvrePending,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                manoeuvreMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            }
+        }
         ProvideTextStyle(
             MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 13.sp)
         ) {
@@ -687,7 +711,7 @@ private fun LedPatternGuide(firmware: String?, onDismiss: () -> Unit) {
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                val modes = listOf("READY", "DISCONNECTED", "BAT_LOW", "BAT_CRITICAL", "ERROR", "OTA")
+                val modes = listOf("READY", "DISCONNECTED", "BAT_LOW", "BAT_CRITICAL", "ERROR", "OTA", "MANOEUVRE")
                 modes.forEach { mode ->
                     val description = if (mode == "READY" && firmware == null)
                         "Ready — 1 short flash / 3 s" else ledDescription(mode, firmware)

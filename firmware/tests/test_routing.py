@@ -69,7 +69,7 @@ bool gNetworkRestorePending=false;
 void sendDeviceStatus(){replyLine(true,"STATUS=1;FW=TEST;ID=TRUCK-1");}
 void handleIdentityCommand(const String&,uint8_t){replyLine(true,"ID=TRUCK-1;HWID=AABBCCDDEEFF;NAME=TRUCK-1");}
 '''
-names = ['sendCounters','handleRestoreDefaults','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','cfgSendOk','cfgSendErr','cfgSendCurrent','tcpAdvancedValues','setReaderTimeout','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendOff','powerCut','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','tcpWatchdog','eventTick']
+names = ['sendCounters','handleAutoRead','handleRestoreDefaults','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','cfgSendOk','cfgSendErr','cfgSendCurrent','tcpAdvancedValues','setReaderTimeout','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendOff','powerCut','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','tcpWatchdog','eventTick']
 body += extra+'\n'+'\n'.join(base['function'](n).split('{',1)[0]+';' for n in names)+'\n'
 body += '\n'.join(base['function'](n) for n in names)
 body += r'''
@@ -92,6 +92,19 @@ void fresh(){drain();commands.clear();txQueue.clear();characteristic.notificatio
 BleCmd cmd(BleCmdType type,uint8_t origin,const char*text=""){BleCmd c={};c.type=type;c.source=origin;c.session=origin==CMD_SOURCE_CLIENT?plcHid::clientSession():origin?gTcpSession.load():gBleSession.load();c.receivedMs=nowMs;strlcpy(c.payload,text,sizeof(c.payload));return c;}
 void run(BleCmd c){commands.push_back(c);bleProcessPendingOnce();}
 int main(){
+ fresh();gAutomaticReading=true;
+ run(cmd(BLECMD_AUTOREAD,0,"0"));drain();
+ CHECK(gAutomaticReading&&bleBytes().find("ERR=AUTOREAD_AUTH")!=std::string::npos);
+ fresh();plcHid::clientGeneration=30;
+ run(cmd(BLECMD_AUTOREAD,CMD_SOURCE_CLIENT,"0"));drain();
+ CHECK(!gAutomaticReading&&clientBytes().find("AUTOREAD=0")!=std::string::npos&&bleBytes().empty());
+ runtimeLoad();CHECK(!gAutomaticReading);
+ fresh();plcHid::hidGeneration=10;
+ auto resume=cmd(BLECMD_AUTOREAD,CMD_SOURCE_HID,"1");resume.session=10;run(resume);drain();
+ CHECK(gAutomaticReading&&bleBytes().find("AUTOREAD=1")!=std::string::npos);
+ fresh();run(cmd(BLECMD_AUTOREAD,1,"0"));drain();
+ CHECK(gAutomaticReading&&gTcpClient.sent.empty());
+ storedUIntSettings.erase("auto_read");
  fresh();
  run(cmd(BLECMD_TEXT,0,"RESTOREDEFAULTS"));drain();
  CHECK(factoryRestore::calls==0&&bleBytes().find("ERR=RESTORE_AUTH")!=std::string::npos);

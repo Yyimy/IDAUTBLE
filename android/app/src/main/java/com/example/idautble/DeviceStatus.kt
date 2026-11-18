@@ -18,6 +18,7 @@ data class DeviceStatus(
     val cut: String,
     val cutReason: String,
     val countersSupported: Boolean = false,
+    val automaticReading: Boolean? = null,
 )
 
 /** Strict, versioned snapshot. A partial or malformed response never replaces good data. */
@@ -31,7 +32,7 @@ fun parseDeviceStatus(text: String): DeviceStatus? {
     val id = f["ID"]?.takeIf { validEquipmentId(it) } ?: return null
     val led =
         f["LED"]?.takeIf {
-            it in setOf("READY", "DISCONNECTED", "BAT_LOW", "BAT_CRITICAL", "ERROR", "OTA")
+            it in setOf("READY", "DISCONNECTED", "BAT_LOW", "BAT_CRITICAL", "ERROR", "OTA", "MANOEUVRE")
         } ?: return null
     val reason = f["WHY"]?.takeIf { it.isNotBlank() } ?: return null
     val batteries =
@@ -102,6 +103,7 @@ fun parseDeviceStatus(text: String): DeviceStatus? {
             "1" -> true
             else -> return null
         },
+        if ("AUTOREAD" in f) flag("AUTOREAD") ?: return null else null,
     )
 }
 
@@ -118,11 +120,13 @@ fun ledDescription(mode: String, firmware: String? = null): String =
         "BAT_CRITICAL" -> "Critical battery — 3 flashes every 2 s"
         "ERROR" -> "Fault / power cut — fast flashing"
         "OTA" -> "OTA — 800 ms on / 200 ms off"
+        "MANOEUVRE" -> "Manoeuvre mode — 1 s on / 2 s off"
         else -> mode
     }
 
 fun ledReasonDescription(reason: String): String =
     when (reason) {
+        "AUTOREAD_PAUSED" -> "Automatic reading is paused"
         "LINK_READY" -> "Required communication link is ready"
         "BLE_REQUIRED" -> "Waiting for a secure BLE subscriber"
         "TCP_REQUIRED" -> "WiFi is enabled; waiting for the TCP server"

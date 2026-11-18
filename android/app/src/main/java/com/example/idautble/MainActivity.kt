@@ -391,6 +391,9 @@ class MainActivity : ComponentActivity() {
     private var restoreDefaultsPending by mutableStateOf(false)
     private var restoreDefaultsMessage by mutableStateOf("")
     private var restoreDefaultsRequest = 0
+    private var manoeuvrePending by mutableStateOf(false)
+    private var manoeuvreMessage by mutableStateOf<String?>(null)
+    private var manoeuvreRequest = 0
     private val uiReaderTimeout = mutableStateOf(ReaderTimeoutState())
     private var readerTimeoutRequest = 0
     private val uiIdleShutdown = mutableStateOf(IdleShutdownState())
@@ -968,6 +971,42 @@ class MainActivity : ComponentActivity() {
         }, 8000)
     }
 
+    private fun setAutomaticReading(enabled: Boolean) {
+        if (!bleChannelReady || manoeuvrePending || !maintenanceSession.isAuthorized() ||
+            uiDeviceStatus.value?.automaticReading == null
+        ) return
+        manoeuvrePending = true
+        manoeuvreMessage = null
+        val request = ++manoeuvreRequest
+        sendText("AUTOREAD=${if (enabled) 1 else 0}", addCrlf = true)
+        mainHandler.postDelayed({
+            if (request == manoeuvreRequest && manoeuvrePending) {
+                manoeuvrePending = false
+                manoeuvreMessage = "No confirmation from PLC. Check the current state."
+                requestDeviceStatus()
+            }
+        }, 8000)
+    }
+
+    private fun handleManoeuvreMessage(message: PlcMessage) {
+        val text = message.text
+        if (message.acknowledged && (text == "AUTOREAD=0" || text == "AUTOREAD=1")) {
+            manoeuvreRequest++
+            manoeuvrePending = false
+            manoeuvreMessage = null
+            uiDeviceStatus.value = uiDeviceStatus.value?.copy(automaticReading = text == "AUTOREAD=1")
+            requestDeviceStatus()
+        } else if (message.rejected && manoeuvrePending && text.startsWith("ERR=AUTOREAD_")) {
+            manoeuvreRequest++
+            manoeuvrePending = false
+            manoeuvreMessage = when (text) {
+                "ERR=AUTOREAD_BUSY" -> "The PLC is busy. Wait and try again."
+                "ERR=AUTOREAD_AUTH" -> "Authorise the maintenance PIN first."
+                else -> "The PLC could not save manoeuvre mode."
+            }
+        }
+    }
+
     private fun restoreFactoryDefaults() {
         if (!bleChannelReady || !restoreDefaultsSupported || restoreDefaultsPending ||
             !maintenanceSession.isAuthorized() || statusRefresh.otaActive
@@ -1280,6 +1319,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun resetSecureTransport() {
+        manoeuvreRequest++
+        manoeuvrePending = false
+        manoeuvreMessage = null
         restoreDefaultsRequest++
         restoreDefaultsSupported = false
         restoreDefaultsPending = false
@@ -1801,6 +1843,7 @@ class MainActivity : ComponentActivity() {
         handlePowerMessage(message)
         handleFrameTimesMessage(message)
         handleRestoreDefaultsMessage(message)
+        handleManoeuvreMessage(message)
         if (message.acknowledged && text.startsWith("HISTORY=")) {
             parseDiagnosticHistory(text)?.let { uiDiagnosticHistory.value = it }
         }
@@ -2642,6 +2685,9 @@ class MainActivity : ComponentActivity() {
                     maintenanceStatus = uiMaintenanceStatus.value,
                     maintenanceAuthorised = maintenanceSession.isAuthorized(),
                     deviceStatus = uiDeviceStatus.value,
+                    manoeuvrePending = manoeuvrePending,
+                    manoeuvreMessage = manoeuvreMessage,
+                    onAutomaticReading = ::setAutomaticReading,
                     deviceStatusReceived = uiDeviceStatusReceived.value,
                     deviceStatusReady = uiDeviceStatusReady.value,
                     deviceStatusBusy = uiDeviceStatusBusy.value || uiCounters.value.busy,
@@ -2834,6 +2880,9 @@ private fun PlcBleTesterLandscape(
     maintenanceStatus: String,
     maintenanceAuthorised: Boolean,
     deviceStatus: DeviceStatus?,
+    manoeuvrePending: Boolean,
+    manoeuvreMessage: String?,
+    onAutomaticReading: (Boolean) -> Unit,
     deviceStatusReceived: Long?,
     deviceStatusReady: Boolean,
     deviceStatusBusy: Boolean,
@@ -3228,6 +3277,10 @@ private fun PlcBleTesterLandscape(
                                                     expanded = expanded,
                                                     onToggle = onToggle,
                                                     status = deviceStatus,
+                                                    maintenanceAuthorised = maintenanceAuthorised,
+                                                    manoeuvrePending = manoeuvrePending,
+                                                    manoeuvreMessage = manoeuvreMessage,
+                                                    onAutomaticReading = onAutomaticReading,
                                                     counters = deviceCounters,
                                                     receivedMs = deviceStatusReceived,
                                                     ready = deviceStatusReady,
