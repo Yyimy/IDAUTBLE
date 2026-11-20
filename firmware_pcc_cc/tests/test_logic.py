@@ -1,0 +1,386 @@
+"""Host regression tests extract and execute production functions, not copies."""
+from pathlib import Path
+import re,subprocess
+root=Path(__file__).resolve().parents[1]
+sketch=root/'PLC_Scanner_v3'
+if not sketch.exists():sketch=root/'deliverables/PLC_Scanner_v3'
+source=(sketch/'PLC_Scanner_v3.ino').read_text()
+def function(name):
+ m=re.search(r'^(?:static\s+)?(?:inline\s+)?(?:bool|void|String|uint8_t|int|size_t|BleCmdType) '+name+r'\([^;]*?\)\s*\{',source,re.M|re.S)
+ assert m,name
+ i=m.end();depth=1
+ while depth:
+  if source[i]=='{':depth+=1
+  elif source[i]=='}':depth-=1
+  i+=1
+ return source[m.start():i]
+shim=r'''
+#include <string>
+#include <atomic>
+#include <vector>
+#include <cstring>
+#include <cctype>
+#include <cstdint>
+#include <cstdlib>
+#include <cstdio>
+#include <cmath>
+#include <algorithm>
+#include <stdexcept>
+using std::size_t;
+using byte=uint8_t;
+class String {
+ std::string s;
+ public:
+ String(){} String(int n):s(std::to_string(n)){} String(unsigned n):s(std::to_string(n)){} String(float n,int decimals){char b[48];snprintf(b,sizeof(b),"%.*f",decimals,n);s=b;} String(const char*p):s(p?p:""){} String(const std::string&v):s(v){} String(char c):s(1,c){}
+ void reserve(size_t n){s.reserve(n);}
+ size_t length()const{return s.size();}bool isEmpty()const{return s.empty();}const char*c_str()const{return s.c_str();}
+ char operator[](size_t i)const{return s[i];}
+ String substring(size_t a)const{return a>=s.size()?String():String(s.substr(a));}
+ String substring(size_t a,size_t b)const{return a>=s.size()?String():String(s.substr(a,b-a));}
+ bool startsWith(const String&p)const{return s.rfind(p.s,0)==0;}
+ int indexOf(char c,size_t a=0)const{auto p=s.find(c,a);return p==std::string::npos?-1:(int)p;}
+ void trim(){auto a=s.find_first_not_of(" \r\n\t");if(a==std::string::npos){s.clear();return;}s=s.substr(a,s.find_last_not_of(" \r\n\t")-a+1);}
+ void toUpperCase(){for(char &c:s)c=std::toupper((unsigned char)c);}void toLowerCase(){for(char&c:s)c=std::tolower((unsigned char)c);}
+ long toInt()const{return std::strtol(s.c_str(),nullptr,10);}
+ String&operator+=(const String&o){s+=o.s;return *this;}String&operator+=(char c){s+=c;return *this;}
+ friend String operator+(const String&a,const String&b){return String(a.s+b.s);}
+ friend bool operator==(const String&a,const String&b){return a.s==b.s;}friend bool operator!=(const String&a,const String&b){return !(a==b);}
+};
+bool isDigit(char c){return c>='0'&&c<='9';}
+size_t strlcpy(char*d,const char*s,size_t n){size_t l=strlen(s);if(n){size_t k=std::min(l,n-1);memcpy(d,s,k);d[k]=0;}return l;}
+struct IPAddress {uint8_t b[4]{};bool fromString(const String&s){unsigned v[4];char extra;if(sscanf(s.c_str(),"%u.%u.%u.%u%c",v,v+1,v+2,v+3,&extra)!=4)return false;for(int i=0;i<4;++i){if(v[i]>255)return false;b[i]=v[i];}return true;}uint8_t operator[](int i)const{return b[i];}};
+static uint32_t nowMs=0;uint32_t millis(){return nowMs;}
+void logLine(const String&){}void logf(const char*,...){}void i2cRegisterResult(bool,const char*){}
+struct WireMock {void beginTransmission(int){}void write(uint8_t){}int endTransmission(){return 0;}} Wire;
+struct EspMock {uint32_t getFreeSketchSpace(){return 2000000;}} ESP;
+#define PCF85063_ADDR 0x51
+bool gRtcOk=true,gPeripheralOk[3]={};String gRtcIso;uint32_t gRtcLastReadMs=0;
+String gNetSsid="old",gNetPwd="oldpass",gNetIp="192.168.1.10",gNetGw="192.168.1.1",gNetMask="255.255.255.0",gNetHost="192.168.1.2";
+uint16_t gNetPort=9000;NetMode gNetMode=NETMODE_DHCP;
+String gPfxPalet="]d1",gPfxUbic="]Q1",gCodPalet="-",gCodUbic="-",gOtaUrl,gOtaSha256;uint32_t gOtaSize=0;
+String gAltura="-",gNivelBat4="6598",gId="AABBCCDDEEFF";
+constexpr uint32_t DEFAULT_READER_TIMEOUT_MS=2000;
+uint32_t gReaderTimeoutMs=DEFAULT_READER_TIMEOUT_MS;
+String formatAltura(float m){char b[20];snprintf(b,sizeof(b),"%05.2f",m);return b;}
+struct UARTMock {std::string rx;int triggers=0;int available(){return rx.size();}int read(){char c=rx[0];rx.erase(0,1);return (unsigned char)c;}void print(const char*){++triggers;}void write(uint8_t*,size_t){} } PLCSerial,RS485;
+void clearRxBuffer_RS485(){RS485.rx.clear();}
+bool gCutRequested=false,gScanActive=false,gAlturaEnabled=false;uint8_t gScanPhase=0,gScanHead=0,gScanCount=0,gHeightCount=0;ScanJob gCurrentScan{},gScanJobs[16]{};
+uint32_t gScanStarted=0,gScanOverflow=0;String gReaderBuffer;bool gReaderOverflow=false,gHeightInvalidBytes=false;const uint32_t HEIGHT_TIMEOUT_MS=250;uint8_t gHeightReply[3]{},tramaRS[5]{};
+int failCount=0,ponCount=0;void countersIncPon(){++ponCount;}void countersIncLecturaFallida(){++failCount;}void actualizarCampoBateriaBLE(){}
+std::vector<String> emitted;void outboxPush(const String&s){emitted.push_back(s);}void sendFrame(const uint8_t*,size_t);String authReply;bool authReplyOk=false;void replyLine(bool ok,const String&text){authReplyOk=ok;authReply=text;}
+#define HIGH 1
+#define LOW 0
+#define PIN_SENSOR_PALET 4
+bool gFotoLista=false,PaletCargado=false,armadoInactividad=false;int rawFoto=LOW,gFotoUltLect=LOW,estadoSensorFiltrado=LOW,lecturaAnteriorRaw=LOW;
+uint32_t gFotoUltCambioMs=0,ultimoRebote=0,lastFotoActivaMs=0;const uint32_t FOTO_STABLE_MS=1500,retardoRebote=250;uint32_t gIdleMinutes=120;bool gAutomaticReading=true;
+constexpr uint8_t BLE_FRAME_TIME=1,TCP_FRAME_TIME=2,ALL_FRAME_TIMES=3;uint8_t gFrameTimes=ALL_FRAME_TIMES;
+char gFotoEstado='0';bool gOtaAbort=false,gOtaTaskHandle=false;int loaded=0,unloaded=0;
+int digitalRead(int){return rawFoto;}void countersIncPalCargado(){++loaded;}void countersIncPalDescargado(){++unloaded;}
+String cutReason;
+void powerCut(const char* reason){gCutRequested=true;cutReason=reason;}
+'''
+types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
+outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
+tcp_monitor=(sketch/'TcpMonitor.h').read_text().replace('#pragma once','')
+factory_defaults=(sketch/'FactoryDefaults.h').read_text().replace('#pragma once','')
+history_header=(sketch/'DiagnosticHistory.h').read_text().replace('#pragma once','')
+trace_header=(sketch/'TcpTrace.h').read_text().replace('#pragma once','')
+names=['handleAuthCommand','maintenanceAuthorized','validReaderTimeout','validTcpTiming','tcpTextCommandType','validHeartbeatMessages','decodeHeartbeatMessage','heartbeatReplyMatches','heartbeatValues','recordDiagnostic','releaseLegacyDiagnosticStorage','recordTcpTrace','recordTcpDown','runtimeLoad','otaUpdateApSsid','applyConfiguredPin','batteryTick','pctFrom2Digits','logHeightTiming','logHeightRejected','queueTargetFrame','queueFrame','sendFrame','sendCommandReply','sendBleReply','bleCanNotify','omitFrameTime','txTick','parseU32','recordTcpReceived','recordTcpSent','setIdleMinutes','appendTcpMonitor','saveNvsSetting','saveTcpAdvanced','netParseSet','parseReaderFrame','decToBcd','rtcSetFromIso19','otaParseStart','frameForScan','finishScan','beginHeight','heightReplyByte','heightTimeout','scanTick','enqueueScan','enqueueCommandScan','photoTick']
+shim+=r'''
+#define BAT_SAFETY_PERIOD 1000
+using std::min;
+#define V_BAT_ABSENT 2.0f
+#define V_CUTOFF_COLLAPSE 13.5f
+#define V_CUTOFF_WARN 14.0f
+#define V_COLLAPSE_CONFIRM_MS 3000
+#define V_WARN_CONFIRM_MS 10000
+#define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
+#define MAX_FRAME_BYTES 512
+#define REQUIRE_BLE_PAIRING 1
+const float K_ADC_BAT1=0.0006435f,K_ADC_BAT2=0.0006435f;
+uint32_t lastBatSafetyCheck=0,gBatValidMs[2]{},vWarnSinceMs=0,vCollapseSinceMs=0,batCriticalSinceMs=0;
+bool gBatValid[2]={true,true},gBat1Present=false,gBat2Present=false,gBat1PresentPrev=false,gBat2PresentPrev=false;
+float gBatV1=18,gBatV2=18;String gNivelBat1="66",gNivelBat2="66";
+void actualizarNivelBateria(uint8_t,float,String&,const char*,bool){}void batteryWarnIfNeeded(int){}void sendResponse_B_Cached(){}
+struct FakeCharacteristic {std::string staging;std::vector<std::string> notifications;void setValue(uint8_t*d,size_t n){staging.assign((char*)d,n);}void notify(){notifications.push_back(staging);}} characteristic;
+FakeCharacteristic *pCharacteristic=&characteristic;
+struct FakeCccd {bool enabled=false;bool getNotifications(){return enabled;}} cccd;
+FakeCccd *gCccd=&cccd;bool deviceConnected=false,gBleSecure=false;uint16_t gBleMtu=23;std::atomic<uint32_t> gBleSession{1},gTcpSession{1},gOtaBleSession{1};uint32_t gTxDropped=0;ReplyContext gReplyContext{TX_BOTH,0};
+struct FakeTcp {bool up=false;size_t limit=1000;int blockedCalls=0;std::string sent;bool connected(){return up;}size_t write(uint8_t*p,size_t n){n=std::min(n,limit);sent.append((char*)p,n);return n;}void stop(){up=false;}} gTcpClient;
+static int tcpWriteAvailable(const uint8_t*p,size_t n){if(gTcpClient.blockedCalls>0){--gTcpClient.blockedCalls;return -2;}return (int)gTcpClient.write((uint8_t*)p,n);}
+bool gTcpConnected=false;OtaState gOtaState=OTA_IDLE;
+#define pdTRUE 1
+#include <deque>
+std::deque<TxPacket> txQueue;int gTxQueue=1;
+int xQueueReceive(int,TxPacket*p,int){if(txQueue.empty())return 0;*p=txQueue.front();txQueue.pop_front();return 1;}
+int xQueueSend(int,const TxPacket*p,int){if(txQueue.size()>=24)return 0;txQueue.push_back(*p);return 1;}
+bool gAckMode=false,gEventInFlight=false,gOutboxDirty=false;PersistentOutbox gOutbox{};
+uint8_t gOutboxEncoded[plcOutboxStorage::maxBytes];
+void outboxPop(){if(gOutbox.count)--gOutbox.count;}
+'''
+pin_declaration=re.search(r'static constexpr char PLC_MAINTENANCE_PIN\[\] = "[0-9]+";',source).group()
+ota_declaration=re.search(r'static constexpr char PLC_OTA_WIFI_PASSWORD\[\] = "[^"\n]*";',source).group()
+shim += "\n" + pin_declaration + "\n" + ota_declaration + "\n"
+shim += r'''
+#include <map>
+#define FIRMWARE_VERSION "3.0.1-rc1"
+#define REQUIRE_MAINT_AUTH 1
+std::atomic<bool> gMaintenanceAuthorized{false};uint32_t gAuthBlockedUntil=0;uint8_t gAuthFails=0;
+String gMaintenancePin,gOtaApPass,gOtaApSsid,gLastCutReason;bool gPinChangedOnBoot=false,gHeartbeatEnabled=false;
+const char* OTA_AP_PASS=nullptr;
+uint32_t gTcpPingSeconds=10,gTcpTimeoutSeconds=20,gLastTcpRxMs=0,gLastTcpPingMs=0;
+bool gTcpPongSeen=false,failUIntWrite=false,failBlobWrite=false;
+HeartbeatMessages gHeartbeatMessages{"PING","PONG"};
+static bool queueTargetFrame(const uint8_t*,size_t,const HeightTiming*,TxTarget,uint32_t,bool=false);
+TcpMonitor gTcpMonitor;
+DiagnosticHistory gDiagnosticHistory;
+TcpTraceBuffer<6> gTcpTraffic;TcpTraceBuffer<2> gTcpHeartbeatTrace;
+uint32_t gTcpTraceSequence=0;
+static void recordTcpTrace(char,const char*,bool=false);
+uint32_t gBootCount=0;
+std::map<std::string,std::vector<uint8_t>> storedBlobs;
+std::map<std::string,String> storedSettings;
+std::map<std::string,uint32_t> storedUIntSettings;
+struct Preferences {
+ bool begin(const char*,bool){return true;} void end(){}
+ String getString(const char*k,const char* def){auto it=storedSettings.find(k);return it==storedSettings.end()?String(def):it->second;}
+ uint32_t getUInt(const char*k,uint32_t def){auto it=storedUIntSettings.find(k);return it==storedUIntSettings.end()?def:it->second;}
+ size_t putUInt(const char*k,uint32_t value){if(failUIntWrite)return 0;storedUIntSettings[k]=value;return sizeof(value);}
+ size_t putString(const char*k,const String&v){storedSettings[k]=v;return v.length();}
+ bool getBool(const char*,bool def){return def;}size_t getBytesLength(const char*k){return storedBlobs.count(k)?storedBlobs[k].size():0;}
+ size_t getBytes(const char*k,void*out,size_t cap){auto n=getBytesLength(k);if(!n||n>cap)return 0;memcpy(out,storedBlobs[k].data(),n);return n;}
+ size_t putBytes(const char*k,const void*data,size_t size){if(failBlobWrite)return 0;const auto*p=(const uint8_t*)data;storedBlobs[k]={p,p+size};return size;}
+};
+using nvs_handle_t = int;
+using esp_err_t = int;
+constexpr esp_err_t ESP_OK = 0, ESP_ERR_NVS_NOT_FOUND = 2;
+constexpr int NVS_READWRITE = 1;
+struct nvs_stats_t {size_t free_entries, used_entries, total_entries;};
+esp_err_t nvs_open(const char*,int,nvs_handle_t *handle){*handle=1;return ESP_OK;}
+esp_err_t nvs_set_u32(nvs_handle_t,const char *key,uint32_t value){
+  return Preferences{}.putUInt(key,value)==sizeof(value)?ESP_OK:1;
+}
+esp_err_t nvs_set_blob(nvs_handle_t,const char *key,const void *data,size_t size){
+  return Preferences{}.putBytes(key,data,size)==size?ESP_OK:1;
+}
+unsigned nvsCommitCount=0;
+esp_err_t nvs_commit(nvs_handle_t){++nvsCommitCount;return ESP_OK;}
+esp_err_t nvs_erase_key(nvs_handle_t,const char *key){
+  return storedBlobs.erase(key)?ESP_OK:ESP_ERR_NVS_NOT_FOUND;
+}
+void nvs_close(nvs_handle_t){}
+esp_err_t nvs_get_stats(const char*,nvs_stats_t*){return ESP_OK;}
+const char *esp_err_to_name(esp_err_t error){return error?"TEST_WRITE_ERROR":"ESP_OK";}
+struct SerialMock {void printf(const char*,...){} void println(const char*){}} Serial;
+uint32_t esp_random(){return 123456789;}
+#define OUTBOX_CAPACITY 8
+#define ESP_OK 0
+struct esp_ble_bond_dev_t {uint8_t bd_addr[6];};
+int bondCount=2,bondsRemoved=0;
+int esp_ble_get_bond_device_num(){return bondCount;}
+int esp_ble_get_bond_device_list(int*,esp_ble_bond_dev_t*){return ESP_OK;}
+int esp_ble_remove_bond_device(uint8_t*){++bondsRemoved;return ESP_OK;}
+'''
+shim += r'''
+namespace plcHid {
+void batteryLevel(uint8_t) {}
+bool shortcutEnabled(uint32_t session) { return session == 42; }
+uint32_t clientGeneration=0;
+FakeCharacteristic clientCharacteristic;
+uint32_t clientSession() { return clientGeneration; }
+bool clientCanNotify() { return clientSession() != 0; }
+bool canNotify(uint32_t session) {
+  return session == gBleSession && gBleSecure && deviceConnected && cccd.enabled;
+}
+int notify(uint32_t session, uint8_t *data, size_t length) {
+  const bool client = session != 0 && session == clientSession();
+  if (!client && !canNotify(session)) return -1;
+  const auto size = std::min(length, size_t(gBleMtu - 3));
+  auto &target = client ? clientCharacteristic : characteristic;
+  target.setValue(data, size);
+  target.notify();
+  return int(size);
+}
+bool authorized(uint32_t) { return gMaintenanceAuthorized; }
+void setAuthorized(uint32_t, bool value) { gMaintenanceAuthorized = value; }
+bool handle(const String&, uint8_t) { return false; }
+std::vector<std::pair<String, String>> readings;
+void reading(const String &pallet, const String &location, uint32_t) { readings.emplace_back(pallet, location); }
+}
+'''
+# Types require integer definitions and String prototypes are declared by Arduino in firmware.
+includes=shim[:shim.index('using std::size_t;')]
+body=includes+types+'\n'+outbox_storage+'\n'+tcp_monitor+'\n' +history_header+'\n'+factory_defaults+'\n'+trace_header+'\n'+shim[shim.index('using std::size_t;'):]+'\n'
+body+='\n'.join(function(n).split('{',1)[0]+';' for n in names)+'\n'
+body+='\n'.join(function(n) for n in names)
+body+=r'''
+int checks=0;
+#define CHECK(x) do{++checks;if(!(x)){fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}}while(0)
+void resetScanner(){gScanActive=false;gScanCount=0;gScanHead=0;gCutRequested=false;gAlturaEnabled=false;PLCSerial.rx.clear();RS485.rx.clear();emitted.clear();gReaderBuffer="";failCount=0;}
+int main(){
+ uint32_t v=0;
+ CHECK(parseU32("4294967295",v)&&v==UINT32_MAX);CHECK(!parseU32("4294967296",v));CHECK(!parseU32("-1",v));CHECK(!parseU32("12x",v));CHECK(!parseU32("",v));
+ CHECK(netParseSet("NET=SSID=new;PORT=1234"));CHECK(gNetSsid=="new"&&gNetPort==1234);
+ CHECK(!netParseSet("NET=SSID=broken;PORT=0"));CHECK(gNetSsid=="new"&&gNetPort==1234);
+ CHECK(!netParseSet("NET=PORT=65536"));CHECK(!netParseSet("NET=PORT=-1"));CHECK(!netParseSet("NET=PORT=abc"));CHECK(!netParseSet("NET=PORT=1;PORT=2"));CHECK(!netParseSet("NET=PORT=1;"));
+ CHECK(netParseSet("NET=PWD=***"));CHECK(gNetPwd=="oldpass");
+ CHECK(!netParseSet("NET=MODE=STATIC;IP=192.168.1.0"));CHECK(gNetMode==NETMODE_DHCP);
+ CHECK(!netParseSet("NET=MODE=STATIC;IP=192.168.1.255"));
+ CHECK(!netParseSet("NET=MODE=STATIC;MASK=255.0.255.0"));
+ CHECK(!netParseSet("NET=MODE=STATIC;GW=10.0.0.1"));
+ CHECK(netParseSet("NET=MODE=STATIC;IP=192.168.1.80"));CHECK(gNetMode==NETMODE_STATIC);
+ CHECK(rtcSetFromIso19("2028-02-29T12:30:00"));CHECK(!rtcSetFromIso19("2026-02-29T12:30:00"));CHECK(!rtcSetFromIso19("2026-04-31T12:30:00"));CHECK(!rtcSetFromIso19("2026-10-29Taa:30:00"));CHECK(!rtcSetFromIso19("2026-00-29T12:30:00"));CHECK(!rtcSetFromIso19("2026-10-29T24:30:00"));
+ CHECK(parseReaderFrame("]d1PALET;]Q1UBIC"));CHECK(gCodPalet=="PALET"&&gCodUbic=="UBIC");
+ CHECK(parseReaderFrame("]Q1U;]d1P"));CHECK(gCodPalet=="P"&&gCodUbic=="U");
+ CHECK(parseReaderFrame("]d1P"));CHECK(gCodPalet=="P"&&gCodUbic=="-");
+ CHECK(!parseReaderFrame("garbage"));CHECK(!parseReaderFrame("]d1P;garbage"));CHECK(!parseReaderFrame("]d1P;]Q1U;extra"));
+ String sha=std::string(64,'a');
+ String params="OTA=URL=http://192.168.4.2:8080/firmware.bin;SIZE=100;SHA256=";params+=sha;
+ CHECK(otaParseStart(params));CHECK(gOtaSize==100);
+ CHECK(!otaParseStart("OTA=URL=http://evil.test/x;SIZE=100;SHA256="));
+ CHECK(!otaParseStart("OTA=URL=http://192.168.4.2:8080/x;SIZE=-1;SHA256="));
+ resetScanner();nowMs=0;gRtcIso="2026-10-29T12:00:00";gFotoEstado='1';enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx="]d1PARTIAL";nowMs=2001;scanTick();
+ CHECK(!gScanActive);CHECK(failCount==1);CHECK(gCodPalet=="-"&&gCodUbic=="-");CHECK(emitted.size()==1);
+ storedUIntSettings["reader_ms"]=5000;runtimeLoad();CHECK(gReaderTimeoutMs==5000);
+ resetScanner();nowMs=10000;enqueueScan(BLECMD_L,true);scanTick();
+ nowMs=14999;scanTick();CHECK(gScanActive);
+ nowMs=15000;scanTick();CHECK(!gScanActive);
+ storedUIntSettings["reader_ms"]=4000;runtimeLoad();CHECK(gReaderTimeoutMs==2000);
+ storedUIntSettings.erase("reader_ms");
+ resetScanner();plcHid::readings.clear();nowMs=3000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx="]d1PAL;]Q1LOC\r\n";nowMs=3020;scanTick();CHECK(!gScanActive);CHECK(gCodPalet=="PAL"&&gCodUbic=="LOC");CHECK(failCount==0);
+ CHECK(plcHid::readings.size()==1&&plcHid::readings[0].first=="PAL"&&plcHid::readings[0].second=="LOC");
+ resetScanner();nowMs=4000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx=std::string(330,'A')+"\n";scanTick();CHECK(failCount==1);CHECK(gCodPalet=="-");
+ CHECK(plcHid::readings.size()==2&&plcHid::readings[1].first=="-"&&plcHid::readings[1].second=="-");
+ resetScanner();BleCmd shortcut{};shortcut.type=BLECMD_L;shortcut.source=CMD_SOURCE_HID;shortcut.session=41;
+ const int triggers=PLCSerial.triggers;enqueueCommandScan(shortcut);scanTick();CHECK(!gScanActive&&PLCSerial.triggers==triggers);
+ resetScanner();nowMs=5000;gAlturaEnabled=true;enqueueScan(BLECMD_A,false);scanTick();CHECK(gScanActive);nowMs=5251;scanTick();CHECK(!gScanActive&&gAltura=="-");CHECK(plcHid::readings.size()==2);
+ resetScanner();nowMs=6000;gFotoLista=false;gFotoUltLect=LOW;rawFoto=LOW;gFotoUltCambioMs=6000;photoTick();nowMs=7500;photoTick();CHECK(gFotoLista&&armadoInactividad&&!PaletCargado);
+ gAutomaticReading=false;
+ rawFoto=HIGH;nowMs=7600;photoTick();nowMs=7851;photoTick();CHECK(PaletCargado&&loaded==1&&gScanCount==0);
+ // Hold a pallet longer than inactivity period; unloading must start a fresh timer.
+ nowMs=8000000;photoTick();CHECK(!gCutRequested);
+ rawFoto=LOW;nowMs=8000100;photoTick();nowMs=8000351;photoTick();CHECK(!PaletCargado&&!gCutRequested&&unloaded==1&&gScanCount==0);
+ gAutomaticReading=true;photoTick();CHECK(gScanCount==0);
+ gIdleMinutes=1;nowMs=8000351+60000-1;photoTick();CHECK(!gCutRequested);nowMs++;photoTick();CHECK(gCutRequested&&cutReason=="INACTIVITY_1_MIN");
+
+ gCutRequested=false;lastBatSafetyCheck=0;vCollapseSinceMs=0;vWarnSinceMs=0;gBatV1=13.4f;gBatV2=19;gBatValid[0]=gBatValid[1]=true;
+ nowMs=1000;batteryTick();CHECK(!gCutRequested);nowMs=3999;batteryTick();CHECK(!gCutRequested);nowMs=5000;batteryTick();CHECK(gCutRequested);
+ // Invalid ADC data resets confirmation, and cannot masquerade as removal.
+ gCutRequested=false;gBatValid[0]=false;nowMs=6000;batteryTick();CHECK(vCollapseSinceMs==0&&vWarnSinceMs==0&&!gCutRequested);
+ gBatValid[0]=true;gBatV1=0;gBatV2=19;nowMs=7000;batteryTick();nowMs=20000;batteryTick();CHECK(!gCutRequested&&!gBat1Present&&gBat2Present);
+ // Production TX: TCP works with no BLE peer.
+ txQueue.clear();gCutRequested=false;deviceConnected=false;gTcpClient.up=true;gTcpConnected=true;nowMs=30000;
+ const uint8_t msg[]={6,'O','K',13,10};sendFrame(msg,sizeof(msg));txTick();CHECK(gTcpClient.sent==std::string((const char*)msg,sizeof(msg)));
+ // Production TX: a 50-byte frame is split at MTU-3, with no byte loss.
+ gTcpClient.up=false;gTcpConnected=false;deviceConnected=true;gBleSecure=true;cccd.enabled=true;gBleMtu=23;
+ std::string payload(50,'X');sendFrame((const uint8_t*)payload.data(),payload.size());
+ for(int i=0;i<5;++i){nowMs+=16;txTick();}
+ CHECK(characteristic.notifications.size()==3);std::string rebuilt;
+ for(auto &chunk:characteristic.notifications){CHECK(chunk.size()<=20);rebuilt+=chunk;}CHECK(rebuilt==payload);
+
+ // Production TX: partial nonblocking writes must resume from their offset.
+ deviceConnected=false;gTcpConnected=true;gTcpClient.up=true;gTcpClient.sent.clear();gTcpClient.limit=7;
+ sendFrame((const uint8_t*)payload.data(),payload.size());for(int i=0;i<8;++i){++nowMs;txTick();}
+ CHECK(gTcpClient.sent==payload);
+ gTcpClient.blockedCalls=100;sendFrame(msg,sizeof(msg));++nowMs;txTick();CHECK(gTcpClient.up);
+ nowMs+=2101;txTick();CHECK(!gTcpClient.up&&!gTcpConnected);
+
+ // TCP monitor retains the last real outage and only the five newest server replies.
+ gTcpMonitor.connected(1000);gTcpMonitor.disconnected(2000,"PONG_TIMEOUT");
+ gTcpMonitor.disconnected(3000,"SOCKET_CLOSED");gTcpMonitor.connected(4000);
+ for(int i=0;i<5;++i)gTcpMonitor.receive(4000,"PONG",4);
+ gTcpMonitor.receive(5000,"ACK=42;ABCDEFGHIJKLMNOPQRSTUVWXYZ",33);
+ CHECK(gTcpMonitor.count==5&&gTcpMonitor.newest(0).truncated);
+ String tcpSnapshot;appendTcpMonitor(tcpSnapshot,6000);
+ const std::string snapshot=tcpSnapshot.c_str();
+ CHECK(snapshot.find(";TCPMON=1;TCPUP=2;TCPDOWN=PONG_TIMEOUT,4;TCPRX=1,41434B3D34323B") == 0);
+ CHECK(snapshot.find("+|2,504F4E47") != std::string::npos);
+ gTcpMonitor=TcpMonitor{};
+
+ // Diagnostic history stays bounded and is never written to flash.
+ nowMs=1000;gBootCount=7;gRtcIso="2026-11-12T14:30:06";
+ for(int i=0;i<130;++i)recordDiagnostic("TCP_CONNECTED");
+ recordDiagnostic("PONG_TIMEOUT");
+ CHECK(gDiagnosticHistory.count==128&&gDiagnosticHistory.sequence==131&&gDiagnosticHistory.valid());
+ CHECK(gDiagnosticHistory.newest(0).boot==7);
+ CHECK(std::string(gDiagnosticHistory.newest(0).reason)=="PONG_TIMEOUT");
+ CHECK(std::string(gDiagnosticHistory.newest(0).time)=="2026-11-12T14:30:06");
+ CHECK(!storedBlobs.count("diag_history"));
+ // Recovery deletes just the old key, even if a new blob could not be allocated.
+ storedBlobs["diag_history"]=std::vector<uint8_t>(sizeof(DiagnosticHistory),0);
+ storedBlobs["unrelated"]={1,2,3};
+ failBlobWrite=true;gDiagnosticHistory=DiagnosticHistory{};
+ const auto beforeCleanup=nvsCommitCount;
+ runtimeLoad();
+ CHECK(!storedBlobs.count("diag_history")&&storedBlobs.at("unrelated")==std::vector<uint8_t>({1,2,3}));
+ CHECK(gDiagnosticHistory.count==0&&nvsCommitCount==beforeCleanup+1);
+ runtimeLoad();CHECK(nvsCommitCount==beforeCleanup+1);
+ failBlobWrite=false;storedBlobs.erase("unrelated");
+ gRtcIso="2026-11-12T14:30:06";recordTcpReceived("ACK=42",6);
+ const uint8_t ping[]={'P','I','N','G',13,10};recordTcpSent(ping,sizeof(ping),0,true);
+ CHECK(std::string(gTcpTraffic.newest(0).detail)=="ACK=42");
+ CHECK(std::string(gTcpTraffic.newest(0).time)=="2026-11-12T14:30:06");
+ CHECK(std::string(gTcpHeartbeatTrace.newest(0).detail)=="PING");
+ gRtcIso="0000-00-00T00:00:00";recordTcpReceived("AUTH=secret",11);
+ CHECK(gTcpTraffic.newest(0).time[0]==0&&std::string(gTcpTraffic.newest(0).detail)=="TEXT 11 B");
+
+ // TCP settings are validated, stored together and recovered without resetting live settings on write failure.
+ CHECK(validTcpTiming(5,6));CHECK(validTcpTiming(120,300));
+ CHECK(!validTcpTiming(4,20));CHECK(!validTcpTiming(10,10));CHECK(!validTcpTiming(10,301));
+ runtimeLoad();CHECK(!gHeartbeatEnabled&&!gAckMode&&gTcpPingSeconds==10&&gTcpTimeoutSeconds==20);
+ gTcpPongSeen=true;CHECK(saveTcpAdvanced(true,true,15,45,gHeartbeatMessages));CHECK(!gTcpPongSeen);
+ failBlobWrite=true;CHECK(!saveTcpAdvanced(false,false,10,20,gHeartbeatMessages));failBlobWrite=false;
+ CHECK(gHeartbeatEnabled&&gAckMode&&gTcpPingSeconds==15&&gTcpTimeoutSeconds==45);
+ gTcpPingSeconds=10;gTcpTimeoutSeconds=20;gHeartbeatEnabled=false;gAckMode=false;runtimeLoad();
+ CHECK(gHeartbeatEnabled&&gAckMode&&gTcpPingSeconds==15&&gTcpTimeoutSeconds==45);
+ CHECK(saveTcpAdvanced(true,true,15,45,HeartbeatMessages{"1","0"}));
+ runtimeLoad();CHECK(heartbeatReplyMatches("0")&&!heartbeatReplyMatches("PONG"));
+ CHECK(heartbeatValues()=="31,30");
+ CHECK(!validHeartbeatMessages(HeartbeatMessages{"1","ACK=5"}));
+ CHECK(!validHeartbeatMessages(HeartbeatMessages{"1","NETSTAT?"}));
+ CHECK(!decodeHeartbeatMessage("0A",gHeartbeatMessages.request));
+ storedBlobs.erase("tcp_adv2");
+ storedUIntSettings.erase("tcp_adv");runtimeLoad();
+ CHECK(gIdleMinutes==60);
+ storedUIntSettings["idle_min"]=15;storedSettings["last_cut"]="COMMAND";runtimeLoad();
+ CHECK(gIdleMinutes==15&&gLastCutReason=="COMMAND");
+ storedUIntSettings["idle_min"]=1441;runtimeLoad();CHECK(gIdleMinutes==60);
+ storedUIntSettings.erase("idle_min");storedSettings.erase("last_cut");
+
+ // The compiled PIN wins over any prior NVS value and invalidates old bonds.
+ storedSettings["pin"]="987654";storedSettings["apkey"]="ABCDEF0123456789";
+ runtimeLoad();CHECK(gMaintenancePin==PLC_MAINTENANCE_PIN);CHECK(gPinChangedOnBoot);
+ CHECK(gOtaApPass==PLC_OTA_WIFI_PASSWORD);CHECK(String(OTA_AP_PASS)==PLC_OTA_WIFI_PASSWORD);
+ CHECK(storedSettings["apkey"]=="ABCDEF0123456789"); // Retained for rollback, never used as the active key.
+ applyConfiguredPin();CHECK(bondsRemoved==2);CHECK(!gPinChangedOnBoot);CHECK(storedSettings["pin"]==PLC_MAINTENANCE_PIN);
+ runtimeLoad();CHECK(!gPinChangedOnBoot);applyConfiguredPin();CHECK(bondsRemoved==2);
+ storedSettings["pin"]="987654";bondCount=-1;runtimeLoad();applyConfiguredPin();
+ CHECK(gMaintenancePin==PLC_MAINTENANCE_PIN);CHECK(gPinChangedOnBoot);CHECK(storedSettings["pin"]=="987654");
+
+ // A missing or stale NVS key cannot override the compiled OTA password.
+ storedSettings.erase("apkey");runtimeLoad();CHECK(gOtaApPass==PLC_OTA_WIFI_PASSWORD);CHECK(storedSettings.count("apkey")==0);
+ storedSettings["apkey"]="short";runtimeLoad();CHECK(gOtaApPass==PLC_OTA_WIFI_PASSWORD);CHECK(String(OTA_AP_PASS)==PLC_OTA_WIFI_PASSWORD);
+ gId="TRUCK-7";otaUpdateApSsid();CHECK(gOtaApSsid=="PLC_OTA_TRUCK-7");
+ gId="FORK 7";otaUpdateApSsid();CHECK(gOtaApSsid=="PLC_OTA_FORK 7");
+ gId="ABCDEFGHIJKLMNOPQRST";otaUpdateApSsid();CHECK(gOtaApSsid.length()==28);
+ gId="AABBCCDDEEFF";otaUpdateApSsid();CHECK(gOtaApSsid=="PLC_OTA_AABBCCDDEEFF");
+
+ // Production authentication grants an entire BLE session, not a timed lease.
+ gMaintenancePin="001234";gAuthFails=0;gAuthBlockedUntil=0;nowMs=1000;
+ handleAuthCommand("AUTH=001234",0);CHECK(maintenanceAuthorized());CHECK(authReply=="AUTH=OK;TTL=SESSION"&&authReplyOk);
+ nowMs+=172800000UL;CHECK(maintenanceAuthorized());
+ handleAuthCommand("AUTH=OFF",0);CHECK(!maintenanceAuthorized());CHECK(authReply=="AUTH=OFF"&&authReplyOk);
+ handleAuthCommand("AUTH=001234",0);CHECK(maintenanceAuthorized());
+ handleAuthCommand("AUTH=999999",0);CHECK(!maintenanceAuthorized());CHECK(authReply=="ERR=AUTH"&&!authReplyOk);
+ gAuthFails=0;for(int i=0;i<5;++i)handleAuthCommand("AUTH=999999",0);
+ CHECK(gAuthBlockedUntil>nowMs);
+ handleAuthCommand("AUTH=OFF",0);CHECK(authReplyOk&&authReply=="AUTH=OFF");
+ handleAuthCommand("AUTH=001234",0);CHECK(!maintenanceAuthorized()&&authReply=="ERR=AUTH_LOCKED");
+ nowMs+=60001;handleAuthCommand("AUTH=001234",0);CHECK(maintenanceAuthorized());
+ handleAuthCommand("AUTH=OFF",1);CHECK(maintenanceAuthorized());
+ printf("PASS: %d assertions against extracted production functions\n",checks);return 0;
+}
+'''
+(root/'tests/generated_logic.cpp').write_text(body)
+subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror=return-type','-o',str(root/'tests/logic_tests'),str(root/'tests/generated_logic.cpp')],check=True)
+subprocess.run([str(root/'tests/logic_tests')],check=True)

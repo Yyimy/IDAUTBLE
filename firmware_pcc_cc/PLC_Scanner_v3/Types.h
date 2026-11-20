@@ -1,0 +1,163 @@
+#pragma once
+#include <Arduino.h>
+
+enum LedMode : uint8_t {
+  LED_READY = 0,
+  LED_DISCONNECTED,
+  LED_BAT_LOW,
+  LED_BAT_CRITICAL,
+  LED_ERROR,
+  LED_OTA,
+  LED_MANOEUVRE
+};
+
+enum BleCmdType : uint8_t {
+  BLECMD_NONE = 0,
+
+  // Binarios
+  BLECMD_L,
+  BLECMD_B,
+  BLECMD_A,
+  BLECMD_P,
+  BLECMD_D,
+  BLECMD_I,
+  BLECMD_C,
+  BLECMD_O,
+
+  // Texto
+  BLECMD_RTC_SET,
+  BLECMD_CFG_GET,
+  BLECMD_CFG_SET,
+  BLECMD_NET_GET,
+  BLECMD_NET_SET,
+  BLECMD_NETSTAT_GET,
+  BLECMD_WIFI_GET,
+  BLECMD_WIFI_SET,
+  BLECMD_ALT_GET,
+  BLECMD_ALT_SET,
+  BLECMD_OTA_START,
+  BLECMD_OTA_STATUS,
+  BLECMD_OTA_ABORT,
+  BLECMD_TEXT,
+  BLECMD_AUTOREAD
+
+};
+
+constexpr uint8_t CMD_SOURCE_CLIENT = 2;
+constexpr uint8_t CMD_SOURCE_HID = 3;
+
+struct BleCmd {
+  BleCmdType type;
+  uint8_t source;  // 0=BLE maintenance, 1=TCP, 2=BLE client, 3=HID shortcut
+  uint32_t session;  // Generation of the originating BLE or TCP connection.
+  uint32_t receivedMs;  // Complete command received by the PLC, before queueing.
+  char payload[384];  // para RTC=... o CFG=...
+};
+
+enum NetMode { NETMODE_DHCP = 0, NETMODE_STATIC = 1 };
+
+enum TcpConnState : uint8_t {
+  TCP_IDLE = 0,    // no intentando
+  TCP_WAIT_RETRY,  // esperando siguiente intento
+  TCP_CONNECTING,  // haciendo connect() con timeout corto
+  TCP_CONNECTED    // conectado y operativo
+};
+
+enum OtaState : uint8_t {
+  OTA_IDLE = 0,
+  OTA_CONNECT_WIFI,
+  OTA_WAIT_PARAMS,
+  OTA_HTTP_GET,
+  OTA_FLASHING,
+  OTA_VERIFY,
+  OTA_DONE,
+  OTA_FAIL
+};
+
+enum OutputIndex {
+  O_LED_ESTADO = 0,
+  O_RELE_MOTOR = 1,
+  O_RESERVA2 = 2,
+  O_RESERVA3 = 3,
+  O_RESERVA4 = 4,
+  O_RESERVA5 = 5,
+  O_RESERVA6 = 6,
+  O_RESERVA7 = 7
+};
+
+enum HeightReadResult : uint8_t {
+  HEIGHT_OK, HEIGHT_DISABLED, HEIGHT_TIMEOUT, HEIGHT_INCOMPLETE,
+  HEIGHT_INVALID, HEIGHT_OUT_OF_RANGE
+};
+
+// Diagnostic metadata only; never serialized into V2 or persistent event records.
+struct HeightTiming {
+  bool active;
+  uint8_t source;  // Same values as BleCmd::source.
+  uint32_t session;
+  uint32_t receivedMs;
+  uint32_t sensorStartedMs;
+  uint32_t sensorFinishedMs;
+  uint32_t queuedMs;
+  HeightReadResult result;
+};
+
+// Zero keeps existing value-initialized reading/event packets on both channels.
+enum TxTarget : uint8_t { TX_BOTH = 0, TX_BLE_ONLY, TX_TCP_ONLY };
+
+struct ReplyContext {
+  TxTarget target;
+  uint32_t session;
+};
+
+// Used only by the loop's command dispatcher, never by asynchronous producers.
+struct CommandReplyScope {
+  ReplyContext &current;
+  ReplyContext previous;
+  CommandReplyScope(ReplyContext &context, TxTarget target, uint32_t session)
+      : current(context), previous(context) { current = {target, session}; }
+  ~CommandReplyScope() { current = previous; }
+};
+
+struct HeartbeatMessages {
+  char request[17];
+  char response[17];
+};
+
+struct StoredTcpAdvanced {
+  uint32_t packed;
+  HeartbeatMessages messages;
+};
+
+struct TxPacket {
+  uint16_t len;
+  uint32_t session;
+  uint32_t tcpSession;
+  TxTarget target;
+  bool heartbeat;
+  uint32_t eventId;
+  uint8_t data[512];
+  HeightTiming heightTiming;
+};
+
+struct ScanJob {
+  BleCmdType type;
+  bool event;
+  char iso[20];
+  char photo;
+  HeightTiming heightTiming;
+  uint32_t hidSession;
+};
+
+struct EventRecord {
+  uint32_t id;
+  uint16_t len;
+  uint8_t frame[480];
+};
+
+struct PersistentOutbox {
+  uint32_t magic;
+  uint32_t nextId;
+  uint8_t count;
+  EventRecord items[8];
+};
