@@ -40,10 +40,18 @@ Los comandos pendientes de autorización se cancelan al cerrar el diálogo o des
 
 ## Red
 
-Desde la app 1.3.19, NETWORK muestra **LIVE CONNECTION** a la izquierda (40 %) y
-**PLC CONFIGURATION** a la derecha (60 %) en horizontal con al menos 700 dp de ancho.
-Las tarjetas tienen desplazamiento independiente; en vertical o con menos anchura se
-apilan. Los refrescos automáticos actualizan el estado sin parpadeos de los botones:
+En horizontal y con al menos 700 dp de ancho, NETWORK se divide al 50 %. La
+columna izquierda contiene **LIVE CONNECTION**, la fila con **Read configuration** y
+**Save configuration**, y las tarjetas de ajustes. La derecha se dedica a **TCP MONITOR**.
+Las dos columnas se desplazan por separado. En pantallas estrechas se apilan. Wi-Fi,
+IP, servidor TCP y red avanzada se abren en tarjetas independientes y plegadas por
+defecto. Los ajustes avanzados requieren firmware compatible.
+
+Con el tamaño de letra de Terminal, **TCP MONITOR** muestra la última conexión,
+la última desconexión y su motivo, y las cinco últimas líneas de texto recibidas
+por TCP. Las líneas de más de 24 caracteres se muestran abreviadas. El PLC conserva
+el historial en memoria hasta reiniciar y lo devuelve solo por mantenimiento BLE
+como parte del refresco de red. Los refrescos automáticos actualizan el estado sin parpadeos de los botones:
 no los deshabilitan ni muestran “Refreshing…”. Las acciones manuales siguen indicando
 su progreso y pueden adelantarse a una consulta automática pendiente.
 

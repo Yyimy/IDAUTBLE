@@ -48,6 +48,35 @@ fun parseNetConfigLine(line: String): NetConfig? {
     )
 }
 
+internal fun parseTcpAdvanced(line: String): TcpAdvancedConfig? {
+    val fields = if (line.startsWith("TCPADV=")) null else {
+        networkFields(line, "NET=") ?: return null
+    }
+    val raw = if (fields == null) line.substringAfter('=') else fields["TCPADV"] ?: return null
+    val values = raw.split(',')
+    if (values.size !in listOf(4, 6) || values.take(2).any { it != "0" && it != "1" }) return null
+    val interval = values[2].toIntOrNull()?.takeIf { it.toString() == values[2] } ?: return null
+    val timeout = values[3].toIntOrNull()?.takeIf { it.toString() == values[3] } ?: return null
+    val hexPair = if (values.size == 6) values.drop(4) else fields?.get("HBMSG")?.split(',')
+    val messages = if (hexPair != null) {
+        if (hexPair.size != 2) return null
+        HeartbeatMessages(decodeHeartbeatText(hexPair[0]) ?: return null, decodeHeartbeatText(hexPair[1]) ?: return null)
+    } else null
+    return TcpAdvancedConfig(values[0] == "1", values[1] == "1", interval, timeout, messages)
+        .takeIf { it.valid }
+}
+
+private fun decodeHeartbeatText(hex: String): String? {
+    if (hex.length !in 2..32 || hex.length % 2 != 0 || hex.any { it !in '0'..'9' && it !in 'A'..'F' }) return null
+    return buildString {
+        for (pair in hex.chunked(2)) {
+            val code = pair.toInt(16)
+            if (code !in 32..126) return null
+            append(code.toChar())
+        }
+    }
+}
+
 fun parseNetStatusLine(line: String): NetStatus? {
     val fields = networkFields(line, "NETSTAT=") ?: return null
     val wifi =
@@ -73,8 +102,39 @@ fun parseNetStatusLine(line: String): NetStatus? {
     val ip = fields["IP"]
     if (ip != null && ipv4Value(ip) == null) return null
     val rssi = fields["RSSI"]?.let { it.toIntOrNull()?.takeIf { v -> v in -127..0 } ?: return null }
-    return NetStatus(wifi, link, tcp, ip, rssi)
+    return NetStatus(
+        wifi, link, tcp, ip, rssi,
+        fields["PONGAGE"]?.toLongOrNull()?.takeIf { it >= 0 },
+        fields["EVT_PENDING"]?.toIntOrNull()?.takeIf { it >= 0 },
+        parseTcpMonitor(fields),
+    )
 }
+
+private fun parseTcpMonitor(fields: Map<String, String>): TcpMonitorSnapshot? {
+    if (fields["TCPMON"] != "1") return null
+    val disconnection = fields["TCPDOWN"]?.let { entry ->
+        val reason = entry.substringBefore(',')
+        val age = parseTcpAge(entry.substringAfter(',', ""))
+        if (reason.isNotEmpty() && age != null) TcpDisconnection(reason, age) else null
+    }
+    val replies = fields["TCPRX"].orEmpty().split('|', limit = 6).take(5).mapNotNull { entry ->
+        val age = parseTcpAge(entry.substringBefore(',')) ?: return@mapNotNull null
+        val payload = entry.substringAfter(',', "")
+        val hex = payload.removeSuffix("+")
+        if (hex.length !in 2..48 || hex.length % 2 != 0) return@mapNotNull null
+        val text = buildString {
+            for (pair in hex.chunked(2)) {
+                val code = pair.toIntOrNull(16)?.takeIf { it in 32..126 } ?: return@mapNotNull null
+                append(code.toChar())
+            }
+        }
+        TcpServerReply(age, text, payload.endsWith('+'))
+    }
+    return TcpMonitorSnapshot(parseTcpAge(fields["TCPUP"]), disconnection, replies)
+}
+
+private fun parseTcpAge(value: String?): Long? =
+    value?.toLongOrNull()?.takeIf { it in 0..4_294_967L }
 
 // Construcción del comando para enviar al PLC
 fun buildNetSetCommand(cfg: NetConfig): String {

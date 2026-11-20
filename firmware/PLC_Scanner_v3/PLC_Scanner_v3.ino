@@ -31,6 +31,11 @@
 
 #include "Types.h"
 #include "OutboxStorage.h"
+#include "FactoryDefaults.h"
+#include "FactoryRestore.h"
+#include "TcpMonitor.h"
+#include "DiagnosticHistory.h"
+#include "TcpTrace.h"
 
 // ================= CONFIGURACION DEL PIN POR EL INSTALADOR ==================
 // Cambia este valor ANTES de compilar. Exactamente 6 cifras, entre comillas.
@@ -142,7 +147,7 @@ const uint8_t CMD_O[4] = {0x1B, 0x4F, 0x0D, 0x0A};  // Apagar relé motor
 // ============================================================================
 void sendFrame(const uint8_t *data, size_t len);
 static bool queueTargetFrame(const uint8_t *data, size_t len, const HeightTiming *timing,
-                             TxTarget target, uint32_t session);
+                             TxTarget target, uint32_t session, bool heartbeat = false);
 static void sendCommandReply(const uint8_t *data, size_t len);
 static void sendBleReply(const uint8_t *data, size_t len);
 static ReplyContext gReplyContext{TX_BOTH, 0};
@@ -198,6 +203,15 @@ static inline BleCmdType cmdFromBinary4(const uint8_t rx[4]) {
   return BLECMD_NONE;
 }
 
+// Accept only exact operator commands on FFE1.
+static char autoReadAction(const uint8_t *data, size_t length) {
+  if (length >= 2 && data[length - 2] == '\r' && data[length - 1] == '\n') length -= 2;
+  if (length == 9 && !memcmp(data, "AUTOREAD?", 9)) return '?';
+  if (length == 10 && !memcmp(data, "AUTOREAD=", 9) && (data[9] == '0' || data[9] == '1'))
+    return char(data[9]);
+  return 0;
+}
+
 static bool isClientReading(BleCmdType type) {
   return type == BLECMD_L || type == BLECMD_B || type == BLECMD_A ||
          type == BLECMD_P || type == BLECMD_D || type == BLECMD_I;
@@ -222,25 +236,41 @@ static NetMode gNetMode = NETMODE_DHCP;
 static String gNetSsid = "";
 static String gNetPwd = "";
 
-static String gNetIp = "192.168.0.213";
-static String gNetGw = "192.168.0.1";
-static String gNetMask = "255.255.255.0";
+static String gNetIp = factoryDefaults::ip;
+static String gNetGw = factoryDefaults::gateway;
+static String gNetMask = factoryDefaults::mask;
 
-static String gNetHost = "192.168.0.10";
-static uint16_t gNetPort = 9000;
+static String gNetHost = factoryDefaults::tcpHost;
+static uint16_t gNetPort = factoryDefaults::tcpPort;
 
 static bool gWifiEnabled = false;
 
 static bool gWifiConnected = false;
 static bool gTcpConnected = false;
+static TcpMonitor gTcpMonitor;
+static TcpTraceBuffer<6> gTcpTraffic;
+static TcpTraceBuffer<2> gTcpHeartbeatTrace;
+static uint32_t gTcpTraceSequence = 0;
+static void recordTcpTrace(char direction, const char *detail, bool heartbeat = false);
+static DiagnosticHistory gDiagnosticHistory;
+
+static void recordDiagnostic(const char *reason);
+
+static void recordTcpDown(const char *reason) {
+  if (gTcpMonitor.disconnected(millis(), reason)) {
+    recordDiagnostic(reason);
+    recordTcpTrace('D', reason);
+  }
+}
 
 static bool gTcpConnectedPrev = false;
 
 WiFiClient gTcpClient;
 static unsigned long gLastTcpAttempt = 0;
 static unsigned long gLastTcpActivity = 0;
-static const unsigned long TCP_HEARTBEAT_MS = 10000;  // 10s
-static const unsigned long TCP_TIMEOUT_MS = 20000;  // 20s sin actividad = caída
+static uint32_t gTcpPingSeconds = factoryDefaults::pingSeconds;
+static uint32_t gTcpTimeoutSeconds = factoryDefaults::timeoutSeconds;
+static HeartbeatMessages gHeartbeatMessages{"PING", "PONG"};
 static const unsigned long TCP_RETRY_MS = 3000;
 
 // -------------------------------
@@ -248,6 +278,7 @@ static const unsigned long TCP_RETRY_MS = 3000;
 // -------------------------------
 
 static TcpConnState gTcpState = TCP_IDLE;
+static bool gTcpConnectFailureReported = false;
 
 // Timeout corto para connect (evita congelar el loop)
 // Ajusta si quieres: 120–250ms suele ir bien en LAN
@@ -404,7 +435,7 @@ static bool gBat2PresentPrev = true;
 #define TXD1EN 21
 
 String gAltura = "-";               // "MM.CC"
-static bool gAlturaEnabled = true;  // ALT=1 habilita, ALT=0 deshabilita
+static bool gAlturaEnabled = false;  // ALT=1 habilita, ALT=0 deshabilita
 uint8_t tramaRS[5] = {0x40, 0x43, 0x00, 0x00, 0x01};
 HardwareSerial RS485(1);
 
@@ -426,8 +457,12 @@ int estadoSensorAnterior = LOW;
 
 static int lecturaAnteriorRaw = HIGH;  // SOLO para debounce (lectura cruda)
 
-const unsigned long FOTO_INACTIVIDAD_MS =
-    120UL * 60UL * 1000UL;  // 2h de inactividad hasta apagado
+static uint32_t gIdleMinutes = factoryDefaults::idleMinutes;
+static bool gAutomaticReading = true;
+static constexpr uint8_t BLE_FRAME_TIME = 1;
+static constexpr uint8_t TCP_FRAME_TIME = 2;
+static constexpr uint8_t ALL_FRAME_TIMES = BLE_FRAME_TIME | TCP_FRAME_TIME;
+static uint8_t gFrameTimes = factoryDefaults::frameTimes;
 bool armadoInactividad = false;
 unsigned long lastFotoActivaMs = 0;
 bool powerCutEjecutado = false;
@@ -445,7 +480,12 @@ static const unsigned long FOTO_STABLE_MS = 1500;  // 1.5 s
 #define TX0 43
 
 HardwareSerial PLCSerial(0);
-const uint32_t LECTOR_TIMEOUT_MS = 2000;
+static constexpr uint32_t DEFAULT_READER_TIMEOUT_MS = factoryDefaults::readerTimeoutMs;
+static uint32_t gReaderTimeoutMs = DEFAULT_READER_TIMEOUT_MS;
+
+static bool validReaderTimeout(uint32_t ms) {
+  return ms == 1000 || ms == 2000 || ms == 3000 || ms == 5000;
+}
 const char LECTOR_TERMINADOR =
     '\n';  // trama termina en CR LF (cortamos por LF)
 
@@ -465,6 +505,12 @@ portMUX_TYPE countersMux = portMUX_INITIALIZER_UNLOCKED;
 
 static bool gRtcOk = false;
 static String gRtcIso = "0000-00-00T00:00:00";
+
+static void recordDiagnostic(const char *reason) {
+  auto &event = gDiagnosticHistory.add(gBootCount, millis() / 1000U, reason);
+  if (gRtcIso.length() == 19 && !gRtcIso.startsWith("0000-"))
+    strlcpy(event.time, gRtcIso.c_str(), sizeof(event.time));
+}
 static unsigned long gRtcLastReadMs = 0;
 
 // ============================================================================
@@ -515,11 +561,22 @@ static String gMaintenancePin;
 static bool gPinChangedOnBoot = false;
 static uint32_t gWifiStartMs = 0, gLastTcpRxMs = 0, gLastTcpPingMs = 0;
 static bool gHeartbeatEnabled = false, gAckMode = false;
+static bool gTcpPongSeen = false;
+
+static bool validTcpTiming(uint32_t interval, uint32_t timeout) {
+  return interval >= 5 && interval <= 120 && timeout > interval && timeout <= 300;
+}
+
+static String tcpAdvancedValues() {
+  return String(gHeartbeatEnabled ? 1 : 0) + "," + String(gAckMode ? 1 : 0) +
+         "," + String(gTcpPingSeconds) + "," + String(gTcpTimeoutSeconds);
+}
 static std::atomic<bool> gNetworkRestorePending{false};
 static std::atomic<bool> gCutRequested{false};
 static bool gCutConfirmed = false;
 static uint32_t gCutRequestedMs = 0, gLastCutAttemptMs = 0;
 static char gCutReason[96] = "";
+static String gLastCutReason;
 static PersistentOutbox gOutbox = {};
 // Static storage avoids putting another 3.9 kB on the loop task stack.
 static uint8_t gOutboxEncoded[plcOutboxStorage::maxBytes] = {};
@@ -983,6 +1040,8 @@ static void netSave() {
 }
 
 static void wifiStartFromConfig() {
+  gTcpConnectFailureReported = false;
+  recordTcpDown("CONFIG_CHANGED");
   gTcpClient.stop();
   gTcpConnected = false;
   gTcpState = TCP_IDLE;
@@ -1015,6 +1074,7 @@ static void wifiStartFromConfig() {
 static void tcpConnectTick() {
   // Si WiFi no está realmente conectado, no hay nada que hacer
   if (!gWifiConnected) {
+    recordTcpDown("WIFI_LOST");
     if (gTcpClient.connected()) gTcpClient.stop();
     gTcpConnected = false;
     gTcpState = TCP_IDLE;
@@ -1030,6 +1090,7 @@ static void tcpConnectTick() {
 
   // Si creíamos que estaba conectado pero ya no, limpiamos
   if (gTcpConnected) {
+    recordTcpDown("SOCKET_CLOSED");
     gTcpConnected = false;
     gTcpState = TCP_WAIT_RETRY;
   }
@@ -1063,6 +1124,7 @@ static void tcpConnectTick() {
         gTcpConnected = true;
         gTcpState = TCP_CONNECTED;
         gLastTcpActivity = millis();
+        gTcpPongSeen = false;
         gLastTcpRxMs = millis();
         gLastTcpPingMs = millis();
         gTcpClient.setNoDelay(true);
@@ -1080,11 +1142,19 @@ static void tcpConnectTick() {
           gTcpState = TCP_WAIT_RETRY;
           logLine("TCP greeting queue full; reconnecting before sending data");
         } else {
+          gTcpConnectFailureReported = false;
+          gTcpMonitor.connected(millis());
+          recordDiagnostic("TCP_CONNECTED");
+          recordTcpTrace('U', "TCP_CONNECTED");
           logLine("TCP CONNECTED greeting queued");
         }
       } else {
         gTcpConnected = false;
         gTcpState = TCP_WAIT_RETRY;
+        if (!gTcpConnectFailureReported) {
+          recordTcpTrace('F', "CONNECT_FAILED");
+          gTcpConnectFailureReported = true;
+        }
         logLine("TCP conexión fallida.");
       }
 
@@ -1102,6 +1172,60 @@ static void tcpConnectTick() {
       gTcpState = TCP_WAIT_RETRY;
       break;
   }
+}
+
+static void recordTcpTrace(char direction, const char *detail, bool heartbeat) {
+  TcpTraceEntry entry{};
+  entry.sequence = ++gTcpTraceSequence;
+  entry.direction = direction;
+  if (gRtcIso.length() == 19 && !gRtcIso.startsWith("0000-"))
+    strlcpy(entry.time, gRtcIso.c_str(), sizeof(entry.time));
+  strlcpy(entry.detail, detail, sizeof(entry.detail));
+  if (heartbeat) gTcpHeartbeatTrace.add(entry);
+  else gTcpTraffic.add(entry);
+}
+
+static bool heartbeatReplyMatches(const char *line) {
+  const char *expected = gHeartbeatMessages.response;
+  return !strcmp(line, expected) ||
+         (!strcmp(expected, "PONG") && !strncmp(line, "PONG;", 5));
+}
+
+static void recordTcpReceived(const char *line, size_t size) {
+  if (heartbeatReplyMatches(line)) {
+    recordTcpTrace('R', !strcmp(gHeartbeatMessages.response, "PONG") ? "PONG" : "HEARTBEAT RX", true);
+    return;
+  }
+  uint32_t id;
+  if (!strncmp(line, "ACK=", 4) && parseU32(String(line + 4), id)) {
+    char detail[24];
+    snprintf(detail, sizeof(detail), "ACK=%lu", (unsigned long)id);
+    recordTcpTrace('R', detail);
+    return;
+  }
+  char detail[24];
+  snprintf(detail, sizeof(detail), "TEXT %u B", (unsigned)size);
+  recordTcpTrace('R', detail);
+}
+
+static void recordTcpSent(const uint8_t *data, size_t size, uint32_t eventId, bool heartbeat) {
+  if (heartbeat) {
+    recordTcpTrace('T', size == 6 && !memcmp(data, "PING\r\n", 6) ? "PING" : "HEARTBEAT TX", true);
+    return;
+  }
+  if (size >= 10 && !memcmp(data, "CONNECTED;", 10)) {
+    recordTcpTrace('T', "CONNECTED");
+    return;
+  }
+  char detail[24];
+  if (eventId)
+    snprintf(detail, sizeof(detail), "EVT=%lu %u B", (unsigned long)eventId, (unsigned)size);
+  else if (size > 2 && data[0] == 0x06 && data[size - 1] == 0x03 &&
+           (data[1] == 0x02 || (size > 20 && data[20] == 0x02)))
+    snprintf(detail, sizeof(detail), "READING %u B", (unsigned)size);
+  else
+    snprintf(detail, sizeof(detail), "MESSAGE %u B", (unsigned)size);
+  recordTcpTrace('T', detail);
 }
 
 static void tcpPollRx() {
@@ -1139,6 +1263,7 @@ static void tcpPollRx() {
       binary[n++] = c;
       if (n == 4) {
         n = 0;
+        recordTcpTrace('R', "BINARY 4 B");
         BleCmd cmd = {};
         cmd.type = cmdFromBinary4(binary);
         cmd.receivedMs = millis();
@@ -1156,9 +1281,12 @@ static void tcpPollRx() {
     if (c == '\n') {
       if (used && !overflow) {
         line[used] = 0;
-        if (!strcmp(line, "PONG") || !strncmp(line, "PONG;", 5))
+        gTcpMonitor.receive(millis(), line, used);
+        recordTcpReceived(line, used);
+        if (heartbeatReplyMatches(line)) {
           gLastTcpRxMs = millis();
-        else {
+          gTcpPongSeen = true;
+        } else {
           BleCmd cmd = {};
           cmd.type = tcpTextCommandType(String(line));
           cmd.source = 1;
@@ -1187,16 +1315,20 @@ static void tcpPollRx() {
 static void tcpWatchdog() {
   if (!gTcpConnected) return;
   if (!gTcpClient.connected()) {
+    recordTcpDown("SOCKET_CLOSED");
     gTcpConnected = false;
     return;
   }
   // Optional application heartbeat, disabled until the server implements PONG.
   if (!gHeartbeatEnabled) return;
-  if (millis() - gLastTcpPingMs >= TCP_HEARTBEAT_MS) {
+  if (millis() - gLastTcpPingMs >= gTcpPingSeconds * 1000U) {
     gLastTcpPingMs = millis();
-    tcpWriteAvailable((const uint8_t *)"PING\r\n", 6);
+    char request[sizeof(gHeartbeatMessages.request) + 2];
+    const int len = snprintf(request, sizeof(request), "%s\r\n", gHeartbeatMessages.request);
+    queueTargetFrame((const uint8_t *)request, size_t(len), nullptr, TX_TCP_ONLY, gTcpSession.load(), true);
   }
-  if (millis() - gLastTcpRxMs > TCP_TIMEOUT_MS) {
+  if (millis() - gLastTcpRxMs > gTcpTimeoutSeconds * 1000U) {
+    recordTcpDown("PONG_TIMEOUT");
     gTcpClient.stop();
     gTcpConnected = false;
     logLine("TCP: timeout PONG");
@@ -1516,11 +1648,12 @@ static void logHeightRejected(const BleCmd &cmd, const char *reason) {
 
 static bool queueTargetFrame(const uint8_t *data, size_t len,
                              const HeightTiming *heightTiming, TxTarget target,
-                             uint32_t session) {
+                             uint32_t session, bool heartbeat) {
   if (!gTxQueue || !data || !len || len > MAX_FRAME_BYTES) return false;
   TxPacket p = {};
   p.len = len;
   p.target = target;
+  p.heartbeat = heartbeat;
   p.session = target == TX_BLE_ONLY ? session : gBleSession.load();
   p.tcpSession = target == TX_TCP_ONLY ? session : gTcpSession.load();
   memcpy(p.data, data, len);
@@ -1559,8 +1692,8 @@ static void sendBleReply(const uint8_t *data, size_t len) {
 // CFG (PREFIJOS LECTOR) - (Opción B) debajo de sendFrame()
 // ============================================================================
 static const char *NVS_NS_CFG = "cfg";
-static String gPfxPalet = "]d1";
-static String gPfxUbic = "]Q1";
+static String gPfxPalet = factoryDefaults::palletPrefix;
+static String gPfxUbic = factoryDefaults::locationPrefix;
 
 static bool isValidPrefix(const String &pfx) {
   if (pfx.length() == 0 || pfx.length() > 12) return false;
@@ -1658,6 +1791,19 @@ static void cfgSendCurrent() {
 // RESPUESTAS NET
 // ============================================================================
 
+static String heartbeatValues() {
+  String value;
+  static constexpr char hex[] = "0123456789ABCDEF";
+  for (const char *message : {gHeartbeatMessages.request, gHeartbeatMessages.response}) {
+    if (value.length()) value += ',';
+    for (const char *c = message; *c; ++c) {
+      value += hex[uint8_t(*c) >> 4];
+      value += hex[uint8_t(*c) & 15];
+    }
+  }
+  return value;
+}
+
 static void netSendCurrent() {
   String s;
   s.reserve(160);
@@ -1672,9 +1818,35 @@ static void netSendCurrent() {
   s += ";MASK=" + gNetMask;
   s += ";HOST=" + gNetHost;
   s += ";PORT=" + String(gNetPort);
+  if (gReplyContext.target == TX_BLE_ONLY)
+    s += ";TCPADV=" + tcpAdvancedValues() + ";HBMSG=" + heartbeatValues();
   s += "\r\n";
 
   sendCommandReply((const uint8_t *)s.c_str(), s.length());
+}
+
+static void appendTcpMonitor(String &status, uint32_t now) {
+  status += ";TCPMON=1";
+  if (gTcpMonitor.hasConnected) status += ";TCPUP=" + String((now - gTcpMonitor.connectedAt) / 1000U);
+  if (gTcpMonitor.disconnectReason) {
+    status += ";TCPDOWN=" + String(gTcpMonitor.disconnectReason) + "," +
+              String((now - gTcpMonitor.disconnectedAt) / 1000U);
+  }
+  if (!gTcpMonitor.count) return;
+  status += ";TCPRX=";
+  static constexpr char hex[] = "0123456789ABCDEF";
+  for (uint8_t i = 0; i < gTcpMonitor.count; ++i) {
+    if (i) status += '|';
+    const auto &reply = gTcpMonitor.newest(i);
+    status += String((now - reply.at) / 1000U);
+    status += ',';
+    for (uint8_t j = 0; j < reply.length; ++j) {
+      const uint8_t value = reply.text[j];
+      status += hex[value >> 4];
+      status += hex[value & 0x0F];
+    }
+    if (reply.truncated) status += '+';
+  }
 }
 
 static void netSendStatus(bool unsolicited) {
@@ -1690,6 +1862,14 @@ static void netSendStatus(bool unsolicited) {
 
   s += ";LINK=" + String(realLink ? "UP" : "DOWN");
   s += ";TCP=" + String(realTcp ? "UP" : "DOWN");
+
+  if (unsolicited || gReplyContext.target == TX_BLE_ONLY) {
+    s += ";PONGAGE=";
+    if (realTcp && gHeartbeatEnabled && gTcpPongSeen) s += String((millis() - gLastTcpRxMs) / 1000U);
+    else s += "-";
+    s += ";EVT_PENDING=" + String(gOutbox.count);
+    appendTcpMonitor(s, millis());
+  }
 
   if (gWifiConnected) {
     s += ";IP=" + WiFi.localIP().toString();
@@ -1904,7 +2084,21 @@ void powerCut(const char *reason) {
   gCutRequested = true;
   gCutRequestedMs = millis();
   gLastCutAttemptMs = 0;
-  // Legacy OFF preserved; detailed reason is available in DIAG and serial.
+  recordDiagnostic(reason);
+  Preferences preferences;
+  if (preferences.begin("runtime3", false)) {
+    if (preferences.putString("last_cut", gCutReason) != strlen(gCutReason))
+      logLine("POWER CUT: no se pudo guardar el motivo");
+    preferences.end();
+  } else {
+    logLine("POWER CUT: no se pudo abrir el almacenamiento");
+  }
+  const String notice = "OFFREASON=" + String(gCutReason) + "\r\n";
+  const String bleNotice = String((char)0x06) + notice;
+  sendBleReply((const uint8_t *)bleNotice.c_str(), bleNotice.length());
+  if (gTcpConnected)
+    queueTargetFrame((const uint8_t *)notice.c_str(), notice.length(), nullptr, TX_TCP_ONLY, gTcpSession);
+  // Preserve the legacy OFF frame for existing receivers.
   bleSendOff();
 }
 
@@ -2095,7 +2289,11 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
   // --------------------------
   // 1) TEXTO (RTC/CFG) -> se difiere, NO se ejecuta aquí
   // --------------------------
-  if (rxTrim.startsWith("RTC=")) {
+  const char autoAction = autoReadAction(reinterpret_cast<const uint8_t *>(rxTrim.c_str()), rxTrim.length());
+  if (autoAction) {
+    cmd.type = BLECMD_AUTOREAD;
+    cmd.payload[0] = autoAction;
+  } else if (rxTrim.startsWith("RTC=")) {
     cmd.type = BLECMD_RTC_SET;
     strncpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload) - 1);
     cmd.payload[sizeof(cmd.payload) - 1] = '\0';
@@ -2134,10 +2332,10 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
   } else if (rxTrim == "OTA!") {
     cmd.type = BLECMD_OTA_ABORT;
   } else if (rxTrim.startsWith("AUTH=") || rxTrim.startsWith("ACK=") ||
-             rxTrim.startsWith("ACKMODE=") ||
-             rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" ||
+             rxTrim.startsWith("ACKMODE=") || rxTrim.startsWith("TCPADV=") ||
+             rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" || rxTrim == "HISTORY?" || rxTrim.startsWith("HISTORY?=") || rxTrim.startsWith("HISTORYTIME?=") || rxTrim == "TCPTRACE?" ||
              rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
-             rxTrim.startsWith("ID=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
+             rxTrim == "RESTOREDEFAULTS" || rxTrim.startsWith("RTCFRAME=") || rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("IDLEMIN=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
     cmd.type = BLECMD_TEXT;
     strlcpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload));
   } else {
@@ -2176,6 +2374,35 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
 }
 
 static void applyConfiguredPin();
+// Keep the existing NVS keys and types, and report which step failed.
+static bool saveNvsSetting(const char *nameSpace, const char *key, const void *data,
+                           size_t size, bool scalar, const char *operation) {
+  const char *stage = "open";
+  nvs_handle_t handle;
+  esp_err_t error = nvs_open(nameSpace, NVS_READWRITE, &handle);
+  if (error == ESP_OK) {
+    stage = "write";
+    error = scalar ? nvs_set_u32(handle, key, *static_cast<const uint32_t *>(data))
+                   : nvs_set_blob(handle, key, data, size);
+    if (error == ESP_OK) {
+      stage = "commit";
+      error = nvs_commit(handle);
+    }
+    nvs_close(handle);
+  }
+  if (error == ESP_OK) return true;
+
+  nvs_stats_t stats = {};
+  const esp_err_t statsError = nvs_get_stats("nvs", &stats);
+  Serial.printf("NVS ERROR %s/%s stage=%s error=%s (0x%X) "
+                "bytes=%u free=%u used=%u total=%u stats=%s operation=%s uptime_ms=%lu\n",
+                nameSpace, key, stage, esp_err_to_name(error), unsigned(error), unsigned(size),
+                unsigned(stats.free_entries), unsigned(stats.used_entries),
+                unsigned(stats.total_entries), esp_err_to_name(statsError), operation,
+                (unsigned long)millis());
+  return false;
+}
+
 #include "PlcHid.h"
 
 void ensureAdvertising() { plcHid::advertise(); }
@@ -2187,7 +2414,8 @@ static void bleProcessPendingOnce() {
   BleCmd cmd = {};
   if (xQueueReceive(gCommandQueue, &cmd, 0) != pdTRUE) return;
   if (cmd.source == CMD_SOURCE_CLIENT &&
-      (!isClientReading(cmd.type) || !cmd.session || cmd.session != plcHid::clientSession())) {
+      ((!isClientReading(cmd.type) && cmd.type != BLECMD_AUTOREAD) ||
+       !cmd.session || cmd.session != plcHid::clientSession())) {
     logHeightRejected(cmd, "SESSION_EXPIRED");
     return;
   }
@@ -2205,6 +2433,10 @@ static void bleProcessPendingOnce() {
   if (cmd.source == CMD_SOURCE_HID) {
     const auto receiver = plcHid::shortcutReceiver();
     if (!receiver.generation || receiver.generation != cmd.session) return;
+    if (cmd.type == BLECMD_AUTOREAD) {
+      handleAutoRead(cmd);
+      return;
+    }
     if (cmd.type == BLECMD_TEXT) {
       plcHid::sendHotkey(receiver);
       return;
@@ -2212,6 +2444,10 @@ static void bleProcessPendingOnce() {
     if (cmd.type != BLECMD_L) return;
     if (!plcHid::shortcutEnabled(cmd.session)) { replyLine(false, "ERR=HIDREAD_DISABLED"); return; }
     if (gCutRequested || gScanActive || gScanCount) { replyLine(false, "ERR=HIDREAD_BUSY"); return; }
+  }
+  if (cmd.type == BLECMD_AUTOREAD) {
+    handleAutoRead(cmd);
+    return;
   }
   if (cmd.type == BLECMD_TEXT) {
     handleTextCommand(cmd);
@@ -2350,14 +2586,17 @@ static void bleProcessPendingOnce() {
           msg += "ID=" + gId + ";";
           msg += "REASON=WIFI_DISABLED\r\n";
 
-          tcpWriteAvailable((const uint8_t *)msg.c_str(), msg.length());
+          if (tcpWriteAvailable((const uint8_t *)msg.c_str(), msg.length()) == (int)msg.length())
+            recordTcpTrace('T', "DISCONNECTED");
 
           gTcpClient.stop();
         }
 
+        recordTcpDown("WIFI_DISABLED");
         // Limpiamos flags en orden correcto
         gTcpConnected = false;
         gTcpConnectedPrev = false;
+        gTcpConnectFailureReported = false;
         gTcpState = TCP_IDLE;
         gWifiConnected = false;
 
@@ -2489,6 +2728,7 @@ static void bleProcessPendingOnce() {
           break;
         }
 
+        recordTcpDown("OTA");
         uint8_t okFrame[] = {0x06, 'O', 'K', 0x0D, 0x0A};
         sendCommandReply(okFrame, sizeof(okFrame));
         break;
@@ -2600,8 +2840,8 @@ static inline void updateLedMode() {
     const bool ready = gWifiEnabled
                            ? (gTcpConnected && gTcpClient.connected())
                            : (bleCanNotify() || plcHid::keyboardReady());
-    gLedMode = ready ? LED_READY : LED_DISCONNECTED;
-    gLedReason = ready ? "LINK_READY"
+    gLedMode = ready ? (gAutomaticReading ? LED_READY : LED_MANOEUVRE) : LED_DISCONNECTED;
+    gLedReason = ready ? (gAutomaticReading ? "LINK_READY" : "AUTOREAD_PAUSED")
                        : (gWifiEnabled ? "TCP_REQUIRED" : "BLE_REQUIRED");
   }
 }
@@ -2611,6 +2851,8 @@ static bool ledPatternOn(LedMode mode, uint32_t dt) {
   switch (mode) {
     case LED_READY:
       return dt % 3000 < 100;  // READY: 100 ms ON, 2900 ms OFF.
+    case LED_MANOEUVRE:
+      return dt % 3000 < 1000;
     case LED_DISCONNECTED:
       return dt % 1000 < 500;
     case LED_BAT_LOW: {
@@ -2915,6 +3157,9 @@ void setup() {
     Serial.println("FATAL: RAM/colas");
     while (true) delay(1000);
   }
+  const esp_err_t restoreError = factoryRestore::run(false);
+  if (restoreError != ESP_OK)
+    Serial.printf("FACTORY RESTORE recovery failed: %s\n", esp_err_to_name(restoreError));
   runtimeLoad();
 
   // CFG + contadores
@@ -3080,6 +3325,8 @@ void loop() {
         tcpPollRx();
         tcpWatchdog();
       } else {
+        gTcpConnectFailureReported = false;
+        recordTcpDown("WIFI_LOST");
         if (gTcpClient.connected()) gTcpClient.stop();
         gTcpConnected = false;
         gTcpState = TCP_IDLE;
@@ -3147,6 +3394,34 @@ static BleCmdType tcpTextCommandType(const String &s) {
   return BLECMD_NONE;
 }
 
+static bool validHeartbeatMessages(const HeartbeatMessages &messages) {
+  for (const char *message : {messages.request, messages.response}) {
+    const char *end = static_cast<const char *>(memchr(message, 0, sizeof(messages.request)));
+    if (!end || end == message) return false;
+    for (const char *c = message; c < end; ++c)
+      if (*c < 32 || *c > 126) return false;
+  }
+  return tcpTextCommandType(String(messages.response)) == BLECMD_NONE;
+}
+
+static bool decodeHeartbeatMessage(const String &hex, char (&out)[17]) {
+  if (!hex.length() || hex.length() > 32 || hex.length() % 2) return false;
+  auto nibble = [](char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  for (size_t i = 0; i < hex.length(); i += 2) {
+    const int high = nibble(hex[i]), low = nibble(hex[i + 1]);
+    if (high < 0 || low < 0) return false;
+    const int value = high * 16 + low;
+    if (value < 32 || value > 126) return false;
+    out[i / 2] = char(value);
+  }
+  out[hex.length() / 2] = 0;
+  return true;
+}
+
 static bool maintenanceAuthorized() {
 #if REQUIRE_MAINT_AUTH
   return plcHid::authorized(gReplyContext.session);
@@ -3160,7 +3435,29 @@ static void otaUpdateApSsid() {
   gOtaApSsid += gId;
 }
 
+// Old firmware persisted a large diagnostic history in the shared NVS.
+static void releaseLegacyDiagnosticStorage() {
+  nvs_handle_t handle;
+  esp_err_t error = nvs_open("runtime3", NVS_READWRITE, &handle);
+  if (error == ESP_OK) {
+    error = nvs_erase_key(handle, "diag_history");
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+      nvs_close(handle);
+      return;
+    }
+    if (error == ESP_OK) error = nvs_commit(handle);
+    nvs_close(handle);
+  }
+  if (error == ESP_OK) {
+    Serial.println("NVS: released legacy diagnostic history; history is now RAM-only");
+  } else {
+    Serial.printf("NVS ERROR runtime3/diag_history operation=release error=%s (0x%X)\n",
+                  esp_err_to_name(error), unsigned(error));
+  }
+}
+
 static void runtimeLoad() {
+  releaseLegacyDiagnosticStorage();
   Preferences p;
   p.begin("runtime3", false);
   // El codigo es la fuente de verdad. NVS solo recuerda el ultimo PIN aplicado
@@ -3170,8 +3467,36 @@ static void runtimeLoad() {
   // La clave del codigo es la fuente de verdad. Se ignora apkey de versiones anteriores.
   gOtaApPass = PLC_OTA_WIFI_PASSWORD;
   OTA_AP_PASS = PLC_OTA_WIFI_PASSWORD;
+  gAutomaticReading = p.getUInt("auto_read", 1) != 0;
   gAckMode = p.getBool("ack", false);
   gHeartbeatEnabled = p.getBool("heartbeat", false);
+  const uint32_t frameTimes = p.getUInt("frame_times", factoryDefaults::frameTimes);
+  gFrameTimes = frameTimes <= ALL_FRAME_TIMES ? frameTimes : factoryDefaults::frameTimes;
+  const uint32_t idle = p.getUInt("idle_min", factoryDefaults::idleMinutes);
+  gIdleMinutes = idle >= 1 && idle <= 1440 ? idle : factoryDefaults::idleMinutes;
+  gLastCutReason = p.getString("last_cut", "");
+  uint32_t tcpAdvanced = p.getUInt("tcp_adv", 0);
+  gHeartbeatMessages = HeartbeatMessages{"PING", "PONG"};
+  StoredTcpAdvanced storedTcp{};
+  if (p.getBytes("tcp_adv2", &storedTcp, sizeof(storedTcp)) == sizeof(storedTcp) &&
+      validTcpTiming((storedTcp.packed >> 2) & 0x7F, storedTcp.packed >> 9) &&
+      validHeartbeatMessages(storedTcp.messages)) {
+    tcpAdvanced = storedTcp.packed;
+    gHeartbeatMessages = storedTcp.messages;
+  }
+  const uint32_t pingSeconds = (tcpAdvanced >> 2) & 0x7F;
+  const uint32_t timeoutSeconds = tcpAdvanced >> 9;
+  if (validTcpTiming(pingSeconds, timeoutSeconds)) {
+    gHeartbeatEnabled = (tcpAdvanced & 1U) != 0;
+    gAckMode = (tcpAdvanced & 2U) != 0;
+    gTcpPingSeconds = pingSeconds;
+    gTcpTimeoutSeconds = timeoutSeconds;
+  } else {
+    gTcpPingSeconds = factoryDefaults::pingSeconds;
+    gTcpTimeoutSeconds = factoryDefaults::timeoutSeconds;
+  }
+  const auto readerTimeout = p.getUInt("reader_ms", DEFAULT_READER_TIMEOUT_MS);
+  gReaderTimeoutMs = validReaderTimeout(readerTimeout) ? readerTimeout : DEFAULT_READER_TIMEOUT_MS;
   size_t stored = p.getBytesLength("outbox");
   bool valid = false;
   if (stored == sizeof(gOutbox)) {
@@ -3221,7 +3546,7 @@ static void sendDeviceStatus() {
   updateLedMode();  // Same decision as the physical LED, including hysteresis.
   const uint32_t now = millis();
   const char *modes[] = {"READY", "DISCONNECTED", "BAT_LOW",
-                         "BAT_CRITICAL", "ERROR", "OTA"};
+                         "BAT_CRITICAL", "ERROR", "OTA", "MANOEUVRE"};
   String d;
   d.reserve(460);
   d = "STATUS=1;FW=" FIRMWARE_VERSION ";ID=" + gId;
@@ -3257,6 +3582,7 @@ static void sendDeviceStatus() {
   d += ";CUT=" +
        String(gCutConfirmed ? "CONFIRMED" : (gCutRequested ? "PENDING" : "NO"));
   d += ";REASON=" + String(gCutReason);
+  d += gAutomaticReading ? ";AUTOREAD=1" : ";AUTOREAD=0";
   d += ";COUNTERS=1";  // Capability only; counters use a separate bounded reply.
   replyLine(true, d);
 }
@@ -3285,9 +3611,209 @@ static void sendCounters() {
   else replyLine(false, "ERR=COUNTERS_TOO_LONG");
 }
 
+static void setReaderTimeout(const String &value, uint8_t source) {
+  if (source != 0 || !maintenanceAuthorized()) {
+    replyLine(false, "ERR=READER_AUTH");
+    return;
+  }
+  if (gScanActive || gScanCount || gOtaTaskHandle || gCutRequested) {
+    replyLine(false, "ERR=READER_BUSY");
+    return;
+  }
+  uint32_t ms;
+  if (!parseU32(value, ms) || !validReaderTimeout(ms)) {
+    replyLine(false, "ERR=READER_TIMEOUT_INVALID");
+    return;
+  }
+  if (ms != gReaderTimeoutMs) {
+    Preferences preferences;
+    if (!preferences.begin("runtime3", false) || preferences.putUInt("reader_ms", ms) != sizeof(ms)) {
+      replyLine(false, "ERR=READER_STORAGE");
+      return;
+    }
+    preferences.end();
+    gReaderTimeoutMs = ms;
+  }
+  replyLine(true, "READERTIMEOUT=" + String(gReaderTimeoutMs));
+}
+
+static bool saveTcpAdvanced(bool heartbeat, bool ack, uint32_t interval, uint32_t timeout,
+                            const HeartbeatMessages &messages) {
+  const bool messagesChanged = strcmp(messages.request, gHeartbeatMessages.request) ||
+                               strcmp(messages.response, gHeartbeatMessages.response);
+  if (heartbeat == gHeartbeatEnabled && ack == gAckMode &&
+      interval == gTcpPingSeconds && timeout == gTcpTimeoutSeconds && !messagesChanged) return true;
+  const uint32_t packed = (timeout << 9) | (interval << 2) |
+                          (ack ? 2U : 0U) | (heartbeat ? 1U : 0U);
+  const StoredTcpAdvanced stored{packed, messages};
+  if (!saveNvsSetting("runtime3", "tcp_adv2", &stored, sizeof(stored), false, "tcp_advanced")) return false;
+  if (heartbeat != gHeartbeatEnabled || interval != gTcpPingSeconds || timeout != gTcpTimeoutSeconds || messagesChanged) {
+    gTcpPongSeen = false;
+    gLastTcpRxMs = millis();
+    gLastTcpPingMs = gLastTcpRxMs;
+  }
+  gHeartbeatEnabled = heartbeat;
+  gAckMode = ack;
+  gTcpPingSeconds = interval;
+  gTcpTimeoutSeconds = timeout;
+  gHeartbeatMessages = messages;
+  return true;
+}
+
+static void setIdleMinutes(const String &value, uint8_t source) {
+  if (source != 0 || !maintenanceAuthorized()) {
+    replyLine(false, "ERR=IDLE_AUTH");
+    return;
+  }
+  if (gCutRequested || gOtaTaskHandle || gOtaState != OTA_IDLE) {
+    replyLine(false, "ERR=IDLE_BUSY");
+    return;
+  }
+  uint32_t minutes;
+  if (!parseU32(value, minutes) || minutes < 1 || minutes > 1440) {
+    replyLine(false, "ERR=IDLE_INVALID");
+    return;
+  }
+  if (minutes != gIdleMinutes) {
+    Preferences preferences;
+    if (!preferences.begin("runtime3", false)) {
+      replyLine(false, "ERR=IDLE_STORAGE");
+      return;
+    }
+    const bool saved = preferences.putUInt("idle_min", minutes) == sizeof(minutes);
+    preferences.end();
+    if (!saved) {
+      replyLine(false, "ERR=IDLE_STORAGE");
+      return;
+    }
+    gIdleMinutes = minutes;
+    lastFotoActivaMs = millis();
+  }
+  replyLine(true, "IDLEMIN=" + String(gIdleMinutes));
+}
+
+static void handleAutoRead(const BleCmd &cmd) {
+  if (cmd.source != 0 && cmd.source != CMD_SOURCE_CLIENT && cmd.source != CMD_SOURCE_HID) return;
+  const char action = cmd.payload[0];
+  if (action != '?') {
+    if (cmd.source == 0 && !maintenanceAuthorized()) {
+      replyLine(false, "ERR=AUTOREAD_AUTH");
+      return;
+    }
+    if (action != '0' && action != '1') return;
+    const bool enabled = action == '1';
+    if (enabled != gAutomaticReading) {
+      if (gScanActive || gScanCount || gCutRequested || gOtaTaskHandle || gOtaState != OTA_IDLE) {
+        replyLine(false, "ERR=AUTOREAD_BUSY");
+        return;
+      }
+      const uint32_t stored = enabled ? 1 : 0;
+      if (!saveNvsSetting("runtime3", "auto_read", &stored, sizeof(stored), true, "auto_read")) {
+        replyLine(false, "ERR=AUTOREAD_STORAGE");
+        return;
+      }
+      gAutomaticReading = enabled;
+      logLine(enabled ? "AUTOREAD RESUMED" : "AUTOREAD PAUSED");
+    }
+  }
+  replyLine(true, gAutomaticReading ? "AUTOREAD=1" : "AUTOREAD=0");
+}
+
+static void handleRestoreDefaults(uint8_t source) {
+  if (source != 0 || !maintenanceAuthorized()) {
+    replyLine(false, "ERR=RESTORE_AUTH");
+    return;
+  }
+  if (gOutbox.count || gEventInFlight || gOutboxDirty) {
+    replyLine(false, "ERR=RESTORE_PENDING");
+    return;
+  }
+  if (gScanActive || gScanCount || gCutRequested || gOtaTaskHandle ||
+      gOtaState != OTA_IDLE || gNetworkRestorePending || plcHid::outputBusyForRestore()) {
+    replyLine(false, "ERR=RESTORE_BUSY");
+    return;
+  }
+  const esp_err_t error = factoryRestore::run(true);
+  if (error != ESP_OK) {
+    Serial.printf("FACTORY RESTORE failed: %s\n", esp_err_to_name(error));
+    replyLine(false, "ERR=RESTORE_STORAGE");
+    return;
+  }
+
+  gPfxPalet = factoryDefaults::palletPrefix;
+  gPfxUbic = factoryDefaults::locationPrefix;
+  gReaderTimeoutMs = DEFAULT_READER_TIMEOUT_MS;
+  gAutomaticReading = true;
+  gAlturaEnabled = false;
+  gAltura = "-";
+  gIdleMinutes = factoryDefaults::idleMinutes;
+  lastFotoActivaMs = millis();
+  gNetMode = NETMODE_DHCP;
+  gNetIp = factoryDefaults::ip;
+  gNetGw = factoryDefaults::gateway;
+  gNetMask = factoryDefaults::mask;
+  gNetHost = factoryDefaults::tcpHost;
+  gNetPort = factoryDefaults::tcpPort;
+  gAckMode = false;
+  gHeartbeatEnabled = false;
+  gTcpPingSeconds = factoryDefaults::pingSeconds;
+  gTcpTimeoutSeconds = factoryDefaults::timeoutSeconds;
+  gHeartbeatMessages = HeartbeatMessages{"PING", "PONG"};
+  gFrameTimes = factoryDefaults::frameTimes;
+
+  const bool wifiWasEnabled = gWifiEnabled;
+  gWifiEnabled = false;
+  wifiStartFromConfig();
+  gTcpConnectedPrev = false;
+  if (wifiWasEnabled) WiFi.disconnect(true);
+  plcHid::applyFactoryOutput();
+  logLine("FACTORY RESTORE OK");
+  recordDiagnostic("FACTORY_RESTORE");
+  replyLine(true, "RESTOREDEFAULTS=OK");
+}
+
 static void handleTextCommand(const BleCmd &cmd) {
   String s(cmd.payload);
+  if (s == "RESTOREDEFAULTS") {
+    handleRestoreDefaults(cmd.source);
+    return;
+  }
   if (plcHid::handle(s, cmd.source)) return;
+  if (s.startsWith("RTCFRAME=")) {
+    if (cmd.source != 0 || !maintenanceAuthorized()) {
+      replyLine(false, "ERR=RTCFRAME_AUTH");
+      return;
+    }
+    const String value = s.substring(sizeof("RTCFRAME=") - 1);
+    if (value.length() != 1 || value[0] < '0' || value[0] > '3') {
+      replyLine(false, "ERR=RTCFRAME_INVALID");
+      return;
+    }
+    const uint8_t flags = value[0] - '0';
+    // Keep the TCP payload identical for every retry of an acknowledged event.
+    if (gAckMode && (gOutbox.count || gEventInFlight) && ((flags ^ gFrameTimes) & TCP_FRAME_TIME)) {
+      replyLine(false, "ERR=RTCFRAME_PENDING");
+      return;
+    }
+    if (flags != gFrameTimes) {
+      const uint32_t stored = flags;
+      if (!saveNvsSetting("runtime3", "frame_times", &stored, sizeof(stored), true, "frame_times")) {
+        replyLine(false, "ERR=RTCFRAME_STORAGE");
+        return;
+      }
+      gFrameTimes = flags;
+    }
+    replyLine(true, "RTCFRAME=" + String(gFrameTimes));
+    return;
+  }
+  if (s.startsWith("IDLEMIN=")) {
+    setIdleMinutes(s.substring(sizeof("IDLEMIN=") - 1), cmd.source);
+    return;
+  }
+  if (s.startsWith("READERTIMEOUT=")) {
+    setReaderTimeout(s.substring(sizeof("READERTIMEOUT=") - 1), cmd.source);
+    return;
+  }
   if (s == "ID?" || s.startsWith("ID=")) {
     handleIdentityCommand(s, cmd.source);
     return;
@@ -3302,11 +3828,56 @@ static void handleTextCommand(const BleCmd &cmd) {
     if (gOutbox.count && gOutbox.items[0].id == id) outboxPop();
     return;
   }
+  if (s == "TCPTRACE?") {
+    if (cmd.source != 0) return;
+    String line = "TCPTRACE=";
+    auto append = [&](const TcpTraceEntry &entry) {
+      if (line.length() > sizeof("TCPTRACE=") - 1) line += '|';
+      line += String(entry.sequence) + "," + entry.time + "," + entry.direction + "," + entry.detail;
+    };
+    for (size_t i = 0; i < gTcpTraffic.count; ++i) append(gTcpTraffic.newest(i));
+    for (size_t i = 0; i < gTcpHeartbeatTrace.count; ++i) append(gTcpHeartbeatTrace.newest(i));
+    replyLine(true, line);
+    return;
+  }
+  if (s == "HISTORY?" || s.startsWith("HISTORY?=") || s.startsWith("HISTORYTIME?=")) {
+    if (cmd.source != 0) return;
+    const bool paged = s != "HISTORY?";
+    const bool timed = s.startsWith("HISTORYTIME?=");
+    uint32_t before = 0;
+    if (paged && !parseU32(s.substring(timed ? sizeof("HISTORYTIME?=") - 1 : sizeof("HISTORY?=") - 1), before)) {
+      replyLine(false, "ERR=HISTORY_CURSOR");
+      return;
+    }
+    size_t offset = 0;
+    if (before) {
+      offset = gDiagnosticHistory.count;
+      if (before <= gDiagnosticHistory.sequence &&
+          gDiagnosticHistory.sequence - before < gDiagnosticHistory.count)
+        offset = size_t(gDiagnosticHistory.sequence - before) + 1;
+    }
+    const size_t end = min(offset + (timed ? 6 : 8), size_t(gDiagnosticHistory.count));
+    const uint32_t next = end < gDiagnosticHistory.count ? gDiagnosticHistory.sequence - (end - 1) : 0;
+    String line = paged ? "HISTORYPAGE=" + String(next) + "|" : String("HISTORY=");
+    for (size_t i = offset; i < end; ++i) {
+      if (i != offset) line += '|';
+      const auto &event = gDiagnosticHistory.newest(i);
+      line += String(gDiagnosticHistory.sequence - uint32_t(i)) + "," + String(event.boot) +
+              "," + String(event.seconds) + "," + event.reason;
+      if (timed) {
+        line += ',';
+        if (event.time[0] && memchr(event.time, 0, sizeof(event.time))) line += event.time;
+      }
+    }
+    replyLine(true, line);
+    return;
+  }
   if (s == "INFO?") {
     replyLine(true, "FW=" FIRMWARE_VERSION ";PROTO=V2;ACKMODE=" +
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
-                        (cmd.source == 0 ? ";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1" : ""));
+                        (cmd.source == 0 ? String(";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1;RESTOREDEFAULTS=1;READERTIMEOUT=") + String(gReaderTimeoutMs) +
+                         ";RTCFRAME=" + String(gFrameTimes) + ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1;HISTORYPAGE=1;HISTORYTIME=1;TCPTRACE=1" : String()));
     return;
   }
   if (s == "STATUS?") {
@@ -3344,6 +3915,31 @@ static void handleTextCommand(const BleCmd &cmd) {
     replyLine(false, "ERR=BUSY");
     return;
   }
+  if (s.startsWith("TCPADV=")) {
+    const int comma = s.indexOf(',', 11);
+    const int messagesAt = comma < 0 ? -1 : s.indexOf(',', comma + 1);
+    const int responseAt = messagesAt < 0 ? -1 : s.indexOf(',', messagesAt + 1);
+    HeartbeatMessages messages = gHeartbeatMessages;
+    uint32_t interval, timeout;
+    if (s.length() < 13 || s[8] != ',' || s[10] != ',' ||
+        (s[7] != '0' && s[7] != '1') || (s[9] != '0' && s[9] != '1') ||
+        comma < 0 || !parseU32(s.substring(11, comma), interval) ||
+        !parseU32(s.substring(comma + 1, messagesAt < 0 ? s.length() : size_t(messagesAt)), timeout) ||
+        !validTcpTiming(interval, timeout) ||
+        (messagesAt >= 0 && (responseAt < 0 ||
+          !decodeHeartbeatMessage(s.substring(messagesAt + 1, responseAt), messages.request) ||
+          !decodeHeartbeatMessage(s.substring(responseAt + 1), messages.response) ||
+          !validHeartbeatMessages(messages)))) {
+      replyLine(false, "ERR=TCPADV_INVALID");
+      return;
+    }
+    if (!saveTcpAdvanced(s[7] == '1', s[9] == '1', interval, timeout, messages)) {
+      replyLine(false, "ERR=TCPADV_STORAGE");
+      return;
+    }
+    replyLine(true, "TCPADV=" + tcpAdvancedValues() + (messagesAt >= 0 ? "," + heartbeatValues() : String()));
+    return;
+  }
   bool ack = s.startsWith("ACKMODE="), heartbeat = s.startsWith("HEARTBEAT=");
   if (!ack && !heartbeat) {
     cfgSendErr();
@@ -3354,18 +3950,11 @@ static void handleTextCommand(const BleCmd &cmd) {
     cfgSendErr();
     return;
   }
-  Preferences p;
-  p.begin("runtime3", false);
-  if (ack) {
-    gAckMode = value == "1";
-    p.putBool("ack", gAckMode);
-  } else {
-    gHeartbeatEnabled = value == "1";
-    p.putBool("heartbeat", gHeartbeatEnabled);
-    gLastTcpRxMs = millis();
-    gLastTcpPingMs = millis();
+  if (!saveTcpAdvanced(heartbeat ? value == "1" : gHeartbeatEnabled,
+                       ack ? value == "1" : gAckMode, gTcpPingSeconds, gTcpTimeoutSeconds, gHeartbeatMessages)) {
+    replyLine(false, "ERR=TCPADV_STORAGE");
+    return;
   }
-  p.end();
   cfgSendOk();
 }
 // ------------------------ Persistent event outbox ---------------------------
@@ -3433,6 +4022,9 @@ static void outboxPush(const String &frame) {
     ++gEventOverflow;
     replyLine(false, "ERR=EVENT_QUEUE_FULL");
     logLine("ERROR TRAZABILIDAD: cola eventos llena");
+    if (!gDiagnosticHistory.count ||
+        strcmp(gDiagnosticHistory.newest(0).reason, "EVENT_QUEUE_FULL") != 0)
+      recordDiagnostic("EVENT_QUEUE_FULL");
     return;
   }
   if (gOutbox.nextId == UINT32_MAX) {
@@ -3485,8 +4077,28 @@ static int tcpWriteAvailable(const uint8_t *data, size_t len) {
     return -2;
   return -1;
 }
+// Remove only the timestamp in a complete V2 data packet, preserving any EVT line.
+static size_t omitFrameTime(const uint8_t *data, size_t len, bool event, uint8_t *output) {
+  size_t start = 0;
+  if (event && len && data[0] == 'E') {
+    const auto *end = static_cast<const uint8_t *>(memchr(data, '\n', len));
+    if (!end) return 0;
+    start = size_t(end - data) + 1;
+  }
+  constexpr size_t stxOffset = 20;
+  constexpr size_t timeLength = stxOffset - 1;
+  if (len <= start + stxOffset || data[start] != 0x06 ||
+      data[start + stxOffset] != 0x02 || data[len - 1] != 0x03)
+    return 0;
+  memcpy(output, data, start + 1);
+  memcpy(output + start + 1, data + start + stxOffset, len - start - stxOffset);
+  return len - timeLength;
+}
 static void txTick() {
   static TxPacket p;
+  static uint8_t shortFrame[sizeof(p.data)];
+  static bool shortBle = false, shortTcp = false;
+  static size_t shortLen = 0;
   static bool active = false, tcpDone = false, bleDone = false,
               clientDone = false, accepted = false;
   static size_t offset = 0, tcpOffset = 0, clientOffset = 0;
@@ -3508,20 +4120,30 @@ static void txTick() {
     tcpOffset = 0;
     clientOffset = 0;
     started = millis();
+    shortLen = gFrameTimes == ALL_FRAME_TIMES ? 0 :
+        omitFrameTime(p.data, p.len, p.eventId != 0, shortFrame);
+    shortBle = shortLen && !(gFrameTimes & BLE_FRAME_TIME);
+    shortTcp = shortLen && !(gFrameTimes & TCP_FRAME_TIME);
   }
+  uint8_t *bleData = shortBle ? shortFrame : p.data;
+  const size_t bleLen = shortBle ? shortLen : p.len;
+  const uint8_t *tcpData = shortTcp ? shortFrame : p.data;
+  const size_t tcpLen = shortTcp ? shortLen : p.len;
   if (!tcpDone) {
     if (gOtaTaskHandle || gOtaState != OTA_IDLE || !gTcpConnected ||
         !gTcpClient.connected() || p.tcpSession != gTcpSession)
       tcpDone = true;
     else {
-      int n = tcpWriteAvailable(p.data + tcpOffset, p.len - tcpOffset);
+      int n = tcpWriteAvailable(tcpData + tcpOffset, tcpLen - tcpOffset);
       if (n > 0) {
         tcpOffset += (size_t)n;
-        if (tcpOffset == p.len) {
+        if (tcpOffset == tcpLen) {
           tcpDone = true;
           accepted = true;
+          recordTcpSent(tcpData, tcpLen, p.eventId, p.heartbeat);
         }
       } else if (n == -1) {
+        recordTcpDown("WRITE_FAILED");
         gTcpClient.stop();
         gTcpConnected = false;
         tcpDone = true;
@@ -3529,6 +4151,7 @@ static void txTick() {
       // Backpressure never blocks IO. Drop this connection after 2 s without
       // completing.
       if (!tcpDone && millis() - started > 2000) {
+        recordTcpDown("WRITE_TIMEOUT");
         gTcpClient.stop();
         gTcpConnected = false;
         tcpDone = true;
@@ -3538,17 +4161,17 @@ static void txTick() {
   if (p.heightTiming.active && p.heightTiming.source == 1 && tcpDone &&
       !heightTimingReported) {
     logHeightTiming(p.heightTiming,
-                    tcpOffset == p.len ? "TCP_SUBMITTED" : "TCP_NOT_SENT", started);
+                    tcpOffset == tcpLen ? "TCP_SUBMITTED" : "TCP_NOT_SENT", started);
     heightTimingReported = true;
   }
   if (!bleDone) {
     if (millis() - lastChunk >= 15) {
       lastChunk = millis();
-      const int submitted = plcHid::notify(p.session, p.data + offset, p.len - offset);
+      const int submitted = plcHid::notify(p.session, bleData + offset, bleLen - offset);
       if (submitted < 0) bleDone = true;
       else if (submitted > 0) {
         offset += size_t(submitted);
-        if (offset == p.len) {
+        if (offset == bleLen) {
           bleDone = true;
           accepted = true;
         }
@@ -3557,11 +4180,11 @@ static void txTick() {
   }
   if (!clientDone && millis() - clientLastChunk >= 15) {
     clientLastChunk = millis();
-    const int submitted = plcHid::notify(clientSession, p.data + clientOffset, p.len - clientOffset);
+    const int submitted = plcHid::notify(clientSession, bleData + clientOffset, bleLen - clientOffset);
     if (submitted < 0) clientDone = true;
     else if (submitted > 0) {
       clientOffset += size_t(submitted);
-      if (clientOffset == p.len) {
+      if (clientOffset == bleLen) {
         clientDone = true;
         accepted = true;
       }
@@ -3574,13 +4197,13 @@ static void txTick() {
   if (p.heightTiming.active && p.heightTiming.source == 0 && bleDone &&
       !heightTimingReported) {
     logHeightTiming(p.heightTiming,
-                    offset == p.len ? "BLE_SUBMITTED" : "BLE_NOT_SENT", started);
+                    offset == bleLen ? "BLE_SUBMITTED" : "BLE_NOT_SENT", started);
     heightTimingReported = true;
   }
   if (p.heightTiming.active && p.heightTiming.source == CMD_SOURCE_CLIENT && clientDone &&
       !heightTimingReported) {
     logHeightTiming(p.heightTiming,
-                    clientOffset == p.len ? "BLE_SUBMITTED" : "BLE_NOT_SENT", started);
+                    clientOffset == bleLen ? "BLE_SUBMITTED" : "BLE_NOT_SENT", started);
     heightTimingReported = true;
   }
   if (tcpDone && bleDone && clientDone) {
@@ -3749,7 +4372,7 @@ static void scanTick() {
       else
         gReaderOverflow = true;
     }
-    if (complete || millis() - gScanStarted >= LECTOR_TIMEOUT_MS) {
+    if (complete || millis() - gScanStarted >= gReaderTimeoutMs) {
       if (!complete || gReaderOverflow || !parseReaderFrame(gReaderBuffer)) {
         gCodPalet = "-";
         gCodUbic = "-";
@@ -3826,14 +4449,18 @@ static void photoTick() {
       j.event = true;
       j.photo = gFotoEstado;
       strlcpy(j.iso, gRtcIso.c_str(), sizeof(j.iso));
-      outboxPush(frameForScan(j));
+      if (gAutomaticReading) outboxPush(frameForScan(j));
       replyLine(false, "ERR=MOVEMENT_DURING_OTA");
-    } else
+    } else if (gAutomaticReading) {
       enqueueScan(BLECMD_L, true);
+    }
   }
   if (!gOtaTaskHandle && armadoInactividad && !PaletCargado &&
-      now - lastFotoActivaMs >= FOTO_INACTIVIDAD_MS)
-    powerCut("INACTIVITY_120_MIN");
+      now - lastFotoActivaMs >= gIdleMinutes * 60000UL) {
+    char reason[32];
+    snprintf(reason, sizeof(reason), "INACTIVITY_%lu_MIN", (unsigned long)gIdleMinutes);
+    powerCut(reason);
+  }
 }
 // ---------------------------- Battery supervision ---------------------------
 static void batteryTick() {

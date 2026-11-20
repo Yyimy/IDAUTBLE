@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,6 +20,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -224,13 +227,11 @@ private fun NetworkInput(
 @Composable
 private fun NetworkPanel(
     modifier: Modifier = Modifier,
-    scrollable: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     MaintenanceCard(modifier = modifier) {
         Column(
             Modifier.fillMaxWidth()
-                .then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier)
                 .padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
             content = content,
@@ -239,7 +240,7 @@ private fun NetworkPanel(
 }
 
 @Composable
-fun NetworkScreen(session: NetworkSession) {
+internal fun NetworkScreen(session: NetworkSession, textSize: TerminalTextSize, logColors: LogColors, trace: List<TcpTraceEntry>?) {
     val state = session.state
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     DisposableEffect(session) {
@@ -260,29 +261,28 @@ fun NetworkScreen(session: NetworkSession) {
         },
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (!state.ready || state.paused)
-            Text(
-                if (state.paused) "Network controls are paused during OTA."
-                else "Connect Bluetooth and wait for the PLC to be ready.",
-                fontSize = 12.sp,
-                color = Color(0xFFB66A00),
-            )
+        if (!state.ready || state.paused) {
+            MaintenanceCard(Modifier.fillMaxWidth()) {
+                Text(
+                    if (state.paused) "Network controls are paused during OTA."
+                    else "Connect Bluetooth and wait for the PLC to be ready.",
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             if (landscape && maxWidth >= 700.dp) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    LiveConnectionPanel(
-                        state,
-                        session,
-                        now,
-                        Modifier.weight(0.4f).fillMaxHeight(),
-                        scrollable = true,
-                    )
-                    NetworkConfigurationPanel(
-                        state,
-                        session,
-                        Modifier.weight(0.6f).fillMaxHeight(),
-                        scrollable = true,
-                    )
+                    Column(
+                        Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        LiveConnectionPanel(state, session, now, Modifier.fillMaxWidth())
+                        NetworkConfigurationPanel(state, session, Modifier.fillMaxWidth())
+                    }
+                    TcpMonitorPanel(state, now, textSize, logColors, trace, Modifier.weight(1f).fillMaxHeight())
                 }
             } else {
                 Column(
@@ -291,6 +291,7 @@ fun NetworkScreen(session: NetworkSession) {
                 ) {
                     LiveConnectionPanel(state, session, now, Modifier.fillMaxWidth())
                     NetworkConfigurationPanel(state, session, Modifier.fillMaxWidth())
+                    TcpMonitorPanel(state, now, textSize, logColors, trace, Modifier.fillMaxWidth().height(320.dp))
                 }
             }
         }
@@ -303,7 +304,6 @@ private fun LiveConnectionPanel(
     session: NetworkSession,
     now: Long,
     modifier: Modifier = Modifier,
-    scrollable: Boolean = false,
 ) {
     val status = state.status
     val good = Color(0xFF2E7D32)
@@ -311,8 +311,14 @@ private fun LiveConnectionPanel(
     val age = state.statusReceivedAt?.let { ((now - it).coerceAtLeast(0) / 1000) }
     val stale = !state.available || age == null || age > 15
     val controls = state.available && !state.controlsBusy
-    NetworkPanel(modifier, scrollable) {
+    NetworkPanel(modifier) {
         NetworkHeading("LIVE CONNECTION")
+        if (!stale && state.tcpAdvanced != null && status != null) {
+            if (state.tcpAdvanced.heartbeat) {
+                NetworkValue("Last heartbeat reply", status.pongAgeSeconds?.let { "${it + (age ?: 0)} s ago" } ?: "—")
+            }
+            NetworkValue("Pending events", status.pendingEvents?.toString() ?: "—")
+        }
         NetworkValue(
             "WiFi",
             when (status?.wifiEnabled) {
@@ -409,172 +415,383 @@ private fun LiveConnectionPanel(
     }
 }
 
+private data class TcpMonitorEntry(val time: String, val label: String, val message: String, val color: Color)
+
+@Composable
+private fun TcpMonitorPanel(
+    state: NetworkUiState,
+    now: Long,
+    textSize: TerminalTextSize,
+    colors: LogColors,
+    trace: List<TcpTraceEntry>?,
+    modifier: Modifier,
+) {
+    val snapshot = state.status?.tcpMonitor
+    val snapshotAge = state.statusReceivedAt?.let { (now - it).coerceAtLeast(0) / 1000 } ?: 0
+    var showTx by rememberSaveable { mutableStateOf(true) }
+    var showRx by rememberSaveable { mutableStateOf(true) }
+    var showHeartbeat by rememberSaveable { mutableStateOf(false) }
+    var showConnections by rememberSaveable { mutableStateOf(true) }
+    var filterOpen by remember { mutableStateOf(false) }
+    val entries = if (trace != null) {
+        trace.filter { entry ->
+            (!entry.heartbeat || showHeartbeat) && when (entry.direction) {
+                "T" -> showTx
+                "R" -> showRx
+                else -> showConnections
+            }
+        }.map { entry ->
+            when (entry.direction) {
+                "T" -> TcpMonitorEntry(entry.time, "↑ TX", entry.detail, colors.txBlue)
+                "R" -> TcpMonitorEntry(entry.time, "↓ RX", entry.detail, colors.rxGreen)
+                "U" -> TcpMonitorEntry(entry.time, "TCP UP", "Connected to server", colors.txBlue)
+                "F" -> TcpMonitorEntry(entry.time, "TCP CONNECT FAILED", "The connection attempt failed.", colors.errRed)
+                else -> TcpMonitorEntry(entry.time, "TCP DOWN", tcpDisconnectLabel(entry.detail), colors.errRed)
+            }
+        }
+    } else {
+        buildList {
+            if (showRx) snapshot?.replies?.forEach { reply ->
+                val heartbeat = reply.text == "PONG" || reply.text.startsWith("PONG;")
+                if (!heartbeat || showHeartbeat) {
+                    add(TcpMonitorEntry("Time unavailable", "↓ RX", reply.text + if (reply.truncated) "…" else "", colors.rxGreen))
+                }
+            }
+            if (showConnections && snapshot?.connectionAgeSeconds != null)
+                add(TcpMonitorEntry("Time unavailable", "TCP UP", "Connected to server", colors.txBlue))
+            if (showConnections) snapshot?.disconnection?.let {
+                add(TcpMonitorEntry("Time unavailable", "TCP DOWN", tcpDisconnectLabel(it.reason), colors.errRed))
+            }
+        }
+    }
+    MaintenanceCard(modifier) {
+        Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                NetworkHeading("TCP MONITOR")
+                Box {
+                    val filtered = !showTx || !showRx || !showHeartbeat || !showConnections
+                    TextButton(onClick = { filterOpen = true }) { Text(if (filtered) "Filter •" else "Filter") }
+                    DropdownMenu(expanded = filterOpen, onDismissRequest = { filterOpen = false }) {
+                        listOf(
+                            Triple("Show TX", showTx, { showTx = !showTx }),
+                            Triple("Show RX", showRx, { showRx = !showRx }),
+                            Triple("Show heartbeat", showHeartbeat, { showHeartbeat = !showHeartbeat }),
+                            Triple("Show connection events", showConnections, { showConnections = !showConnections }),
+                        ).forEach { (label, checked, toggle) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = toggle,
+                                leadingIcon = { Checkbox(checked = checked, onCheckedChange = null) },
+                            )
+                        }
+                    }
+                }
+            }
+            val status = when {
+                state.status == null -> "Waiting for network status."
+                snapshot == null -> "TCP monitoring requires compatible PLC firmware."
+                !state.available || snapshotAge > 15 -> "Last available snapshot"
+                trace == null -> "Server replies and connection events"
+                else -> "TCP traffic and connection events"
+            }
+            Text(status, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            HorizontalDivider()
+            if ((trace != null || snapshot != null) && entries.isEmpty()) Text("No TCP activity matches the filters.")
+            LazyColumn(
+                Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(entries) { entry ->
+                    MaintenanceCard(Modifier.fillMaxWidth(), containerColor = entry.color.copy(alpha = 0.06f)) {
+                        Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                            Text(
+                                "${entry.time}  ${entry.label}",
+                                color = entry.color,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = textSize.fontSizeSp.sp,
+                                lineHeight = textSize.lineHeightSp.sp,
+                            )
+                            Text(
+                                entry.message,
+                                color = colors.neutralText,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = textSize.fontSizeSp.sp,
+                                lineHeight = textSize.lineHeightSp.sp,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun tcpDisconnectLabel(reason: String) = when (reason) {
+    "PONG_TIMEOUT" -> "PONG timeout"
+    "WIFI_LOST" -> "Wi-Fi link lost"
+    "WIFI_DISABLED" -> "Wi-Fi disabled"
+    "SOCKET_CLOSED" -> "Socket closed"
+    "CONFIG_CHANGED" -> "Network restarted"
+    "OTA" -> "Firmware update"
+    "WRITE_FAILED" -> "Write failed"
+    "WRITE_TIMEOUT" -> "Write timeout"
+    else -> "Unknown reason"
+}
+
 @Composable
 private fun NetworkConfigurationPanel(
     state: NetworkUiState,
     session: NetworkSession,
     modifier: Modifier = Modifier,
-    scrollable: Boolean = false,
 ) {
     val draft = state.draft
     val errors = remember(draft) { networkDraftErrors(draft) }
     val focus = LocalFocusManager.current
-    val good = Color(0xFF2E7D32)
-    val warning = Color(0xFFB66A00)
     val controls = state.available && !state.controlsBusy
-    NetworkPanel(modifier, scrollable) {
-        NetworkHeading("PLC CONFIGURATION")
-        Text(
-            when {
-                state.config == null ->
-                    "Reading saved settings over Bluetooth works with WiFi disabled."
-                state.dirty -> "Unsaved edits · connection indicators still show the PLC state."
-                state.saved -> "Saved and confirmed by PLC."
-                else -> "Saved settings loaded from PLC."
-            },
-            fontSize = 11.sp,
-            color = if (state.dirty) warning else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    val editable = state.canEdit && state.config != null
+    var wifiExpanded by rememberSaveable { mutableStateOf(false) }
+    var ipExpanded by rememberSaveable { mutableStateOf(false) }
+    var serverExpanded by rememberSaveable { mutableStateOf(false) }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            for (mode in listOf("DHCP", "STATIC")) {
-                FilterChip(
-                    selected = draft.mode == mode,
-                    onClick = { session.edit { it.copy(mode = mode) } },
-                    enabled = state.canEdit && state.config != null,
-                    label = { Text(mode, fontFamily = FontFamily.Monospace, fontSize = 11.sp) },
+            MaintenanceActionButton(
+                text = if (state.pending?.operation == NetworkOperation.READ_CONFIG) "Reading…"
+                    else "Read configuration",
+                onClick = session::readConfiguration,
+                tone = MaintenanceActionTone.INFO,
+                modifier = Modifier.weight(1f),
+                enabled = controls,
+            )
+            MaintenanceActionButton(
+                text = if (state.pending?.operation == NetworkOperation.SAVE) "Saving…"
+                    else "Save configuration",
+                onClick = {
+                    focus.clearFocus()
+                    session.save()
+                },
+                tone = MaintenanceActionTone.SUCCESS,
+                modifier = Modifier.weight(1f),
+                enabled = controls && state.dirty && errors.isEmpty(),
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (state.dirty && state.pending == null && state.error == null) "Unsaved edits."
+                else state.notice,
+                modifier = Modifier.weight(1f),
+                fontSize = 11.sp,
+            )
+            if (state.dirty) {
+                Button(
+                    onClick = {
+                        focus.clearFocus()
+                        session.discardEdits()
+                    },
+                    enabled = controls,
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF505761),
+                        contentColor = Color.White,
+                        disabledContainerColor = Color(0xFF42464D),
+                        disabledContentColor = Color(0xFFC5C9CF),
+                    ),
+                ) {
+                    Text("Discard", fontSize = 11.sp)
+                }
+            }
+        }
+        state.error?.let { Text(it, fontSize = 12.sp) }
+        if (state.dirty) {
+            errors.filterNot { it == state.error }.forEach { Text(it, fontSize = 11.sp) }
+        }
+        CollapsibleSettingsSection(
+            "WI-FI", draft.ssid.ifBlank { "Network name and password" },
+            wifiExpanded, { wifiExpanded = !wifiExpanded },
+        ) {
+            NetworkInput("WiFi network (SSID)", draft.ssid, editable) { value ->
+                session.edit { it.copy(ssid = value) }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "WiFi password",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                CompactPasswordField(
+                    draft.pwd,
+                    { value -> session.edit { it.copy(pwd = value) } },
+                    "Password",
+                    state.showPassword,
+                    { session.showPassword(!state.showPassword) },
+                    Modifier.fillMaxWidth(),
+                    enabled = editable,
                 )
             }
-        }
-        val editable = state.canEdit && state.config != null
-        NetworkInput("WiFi network (SSID)", draft.ssid, editable) { value ->
-            session.edit { it.copy(ssid = value) }
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                "WiFi password",
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            CompactPasswordField(
-                draft.pwd,
-                { value -> session.edit { it.copy(pwd = value) } },
-                "Password",
-                state.showPassword,
-                { session.showPassword(!state.showPassword) },
-                Modifier.fillMaxWidth(),
-                enabled = editable,
-            )
-        }
-        Text(
-            if (draft.pwd == "***")
-                "Stored password is hidden and will be kept. Type a new value to replace it."
-            else if (draft.pwd.isEmpty()) "An empty password will be saved as empty."
-            else "New password · not saved yet",
-            fontSize = 10.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (draft.mode == "STATIC") {
-            NetworkInput("Static PLC IP", draft.ip, editable, keyboard = KeyboardType.Decimal) {
-                value ->
-                session.edit { it.copy(ip = value) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                NetworkInput(
-                    "Gateway",
-                    draft.gw,
-                    editable,
-                    Modifier.weight(1f),
-                    KeyboardType.Decimal,
-                ) { value ->
-                    session.edit { it.copy(gw = value) }
-                }
-                NetworkInput(
-                    "Subnet mask",
-                    draft.mask,
-                    editable,
-                    Modifier.weight(1f),
-                    KeyboardType.Decimal,
-                ) { value ->
-                    session.edit { it.copy(mask = value) }
-                }
-            }
-        } else
-            Text(
-                "DHCP assigns the actual PLC IP shown in LIVE CONNECTION.",
+                if (draft.pwd == "***")
+                    "Stored password is hidden and will be kept. Type a new value to replace it."
+                else if (draft.pwd.isEmpty()) "An empty password will be saved as empty."
+                else "New password · not saved yet",
                 fontSize = 10.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            NetworkInput("Server IP / hostname", draft.host, editable, Modifier.weight(1f)) { value
-                ->
-                session.edit { it.copy(host = value) }
-            }
-            NetworkInput(
-                "Port",
-                draft.port,
-                editable,
-                Modifier.width(80.dp),
-                KeyboardType.Number,
-            ) { value ->
-                session.edit { it.copy(port = value) }
-            }
         }
-        if (state.dirty)
-            errors.forEach { Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.error) }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+        CollapsibleSettingsSection(
+            "IP CONFIGURATION", draft.mode,
+            ipExpanded, { ipExpanded = !ipExpanded },
         ) {
-            Button(
-                onClick = session::readConfiguration,
-                enabled = controls,
-                shape = RoundedCornerShape(6.dp),
-                contentPadding = PaddingValues(10.dp, 4.dp),
-                colors =
-                    ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFFFC107),
-                        contentColor = Color(0xFF212121),
-                    ),
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
             ) {
-                Text(
-                    if (state.pending?.operation == NetworkOperation.READ_CONFIG) "Reading…"
-                    else "Read configuration",
-                    fontSize = 11.sp,
-                )
-            }
-            if (state.dirty)
-                OutlinedButton(
-                    onClick = session::discardEdits,
-                    enabled = controls,
-                    shape = RoundedCornerShape(6.dp),
-                    contentPadding = PaddingValues(10.dp, 4.dp),
-                ) {
-                    Text("Discard edits", fontSize = 11.sp)
+                for (mode in listOf("DHCP", "STATIC")) {
+                    FilterChip(
+                        selected = draft.mode == mode,
+                        onClick = { session.edit { it.copy(mode = mode) } },
+                        enabled = state.canEdit && state.config != null,
+                        label = { Text(mode, fontFamily = FontFamily.Monospace, fontSize = 11.sp) },
+                    )
                 }
+            }
+            if (draft.mode == "STATIC") {
+                NetworkInput("Static PLC IP", draft.ip, editable, keyboard = KeyboardType.Decimal) {
+                    value ->
+                    session.edit { it.copy(ip = value) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    NetworkInput(
+                        "Gateway",
+                        draft.gw,
+                        editable,
+                        Modifier.weight(1f),
+                        KeyboardType.Decimal,
+                    ) { value ->
+                        session.edit { it.copy(gw = value) }
+                    }
+                    NetworkInput(
+                        "Subnet mask",
+                        draft.mask,
+                        editable,
+                        Modifier.weight(1f),
+                        KeyboardType.Decimal,
+                    ) { value ->
+                        session.edit { it.copy(mask = value) }
+                    }
+                }
+            } else
+                Text(
+                    "DHCP assigns the actual PLC IP shown in LIVE CONNECTION.",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
         }
-        Button(
-            onClick = {
-                focus.clearFocus()
-                session.save()
-            },
-            enabled = controls && state.dirty && errors.isEmpty(),
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(6.dp),
-            colors =
-                ButtonDefaults.buttonColors(
-                    containerColor = if (state.dirty) Color(0xFFF57C00) else good
-                ),
+        CollapsibleSettingsSection(
+            "TCP SERVER", if (draft.host.isBlank()) "Address and port" else "${draft.host} · ${draft.port}",
+            serverExpanded, { serverExpanded = !serverExpanded },
         ) {
-            Text(
-                if (state.pending?.operation == NetworkOperation.SAVE) "Waiting for confirmation…"
-                else "Save configuration",
-                fontSize = 12.sp,
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                NetworkInput("Server IP / hostname", draft.host, editable, Modifier.weight(1f)) { value
+                    ->
+                    session.edit { it.copy(host = value) }
+                }
+                NetworkInput(
+                    "Port",
+                    draft.port,
+                    editable,
+                    Modifier.width(80.dp),
+                    KeyboardType.Number,
+                ) { value ->
+                    session.edit { it.copy(port = value) }
+                }
+            }
+        }
+        state.tcpAdvanced?.let {
+            TcpAdvancedSettings(it, state.configReceivedAt, controls, session::saveTcpAdvanced)
+        }
+    }
+}
+
+@Composable
+private fun TcpAdvancedSettings(
+    config: TcpAdvancedConfig,
+    configReceivedAt: Long?,
+    enabled: Boolean,
+    onSave: (TcpAdvancedConfig) -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    var heartbeat by rememberSaveable(config, configReceivedAt) { mutableStateOf(config.heartbeat) }
+    var acknowledgements by rememberSaveable(config, configReceivedAt) { mutableStateOf(config.acknowledgements) }
+    var interval by rememberSaveable(config, configReceivedAt) { mutableStateOf(config.intervalSeconds.toString()) }
+    var timeout by rememberSaveable(config, configReceivedAt) { mutableStateOf(config.timeoutSeconds.toString()) }
+    val savedMessages = config.heartbeatMessages
+    var request by rememberSaveable(config, configReceivedAt) { mutableStateOf(savedMessages?.request.orEmpty()) }
+    var response by rememberSaveable(config, configReceivedAt) { mutableStateOf(savedMessages?.response.orEmpty()) }
+    val draft = TcpAdvancedConfig(
+        heartbeat, acknowledgements, interval.toIntOrNull() ?: 0, timeout.toIntOrNull() ?: 0,
+        savedMessages?.let { HeartbeatMessages(request, response) },
+    )
+    val focus = LocalFocusManager.current
+    CollapsibleSettingsSection(
+        "ADVANCED NETWORK SETTINGS",
+        if (config.heartbeat) "Heartbeat saved on PLC: on" else "Heartbeat saved on PLC: off",
+        expanded, { expanded = !expanded },
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Enable heartbeat", Modifier.weight(1f))
+            Switch(checked = heartbeat, onCheckedChange = { heartbeat = it }, enabled = enabled)
+        }
+        if (draft != config) Text("Unsaved changes. Use Save advanced settings to apply.", fontSize = 12.sp)
+        if (savedMessages == null) {
+            Text("The server must reply PONG to PING.", fontSize = 12.sp)
+        } else {
+            NetworkInput("Heartbeat request", request, enabled) { request = it.take(16) }
+            NetworkInput("Expected heartbeat reply", response, enabled) { response = it.take(16) }
+            Text("1–16 printable ASCII characters. The PLC adds CRLF to each request.", fontSize = 12.sp)
+            if (draft.heartbeatMessages?.valid == false) Text(
+                "Use printable text and choose a reply distinct from PLC commands.",
+                color = MaterialTheme.colorScheme.error, fontSize = 12.sp,
             )
         }
-        Text(state.notice, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        state.error?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
+        NetworkInput("Heartbeat interval (s)", interval, enabled, keyboard = KeyboardType.Number) {
+            interval = it.filter { c -> c in '0'..'9' }.take(3)
+        }
+        NetworkInput("Response timeout (s)", timeout, enabled, keyboard = KeyboardType.Number) {
+            timeout = it.filter { c -> c in '0'..'9' }.take(3)
+        }
+        if (draft.intervalSeconds !in 5..120 || draft.timeoutSeconds <= draft.intervalSeconds || draft.timeoutSeconds > 300) Text(
+            "Interval must be 5–120 s. Timeout must exceed the interval and be at most 300 s.",
+            color = MaterialTheme.colorScheme.error, fontSize = 12.sp,
+        )
+        HorizontalDivider()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Require event acknowledgement", Modifier.weight(1f))
+            Switch(
+                checked = acknowledgements,
+                onCheckedChange = { acknowledgements = it },
+                enabled = enabled,
+            )
+        }
+        Text("Enable only if the server stores and deduplicates events and replies with ACK=<id>.", fontSize = 12.sp)
+        MaintenanceActionButton(
+            text = "Save advanced settings",
+            onClick = {
+                focus.clearFocus()
+                onSave(draft)
+            },
+            tone = MaintenanceActionTone.SUCCESS,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = enabled && draft.valid && draft != config,
+        )
     }
 }

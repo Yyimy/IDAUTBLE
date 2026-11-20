@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SystemUpdateAlt
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Wifi
@@ -35,7 +36,7 @@ fun MaintenanceCard(
 }
 
 @Composable
-fun MaintenanceTabs(selectedIndex: Int, otaLabel: String, onSelect: (Int) -> Unit) {
+fun MaintenanceTabs(selectedIndex: Int, otaLabel: String, onSelect: (Int) -> Unit, onOpenSettings: () -> Unit) {
     val labels = listOf("TERMINAL", "NETWORK", otaLabel)
     val icons = listOf(Icons.Outlined.Terminal, Icons.Outlined.Wifi, Icons.Outlined.SystemUpdateAlt)
     Surface(
@@ -89,6 +90,10 @@ fun MaintenanceTabs(selectedIndex: Int, otaLabel: String, onSelect: (Int) -> Uni
                         }
                     }
                 }
+            }
+            IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Outlined.Settings, contentDescription = "App settings",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

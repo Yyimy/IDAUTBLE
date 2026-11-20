@@ -5,7 +5,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
@@ -89,14 +88,15 @@ internal fun ManualTerminalSection(
     connected: Boolean,
     onSendText: (String) -> Unit,
     onSendHex: (String) -> Unit,
+    expanded: Boolean,
+    onToggle: () -> Unit,
 ) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
     var active by remember { mutableIntStateOf(0) }
     var showCommands by remember { mutableStateOf(false) }
     var showTokens by remember { mutableStateOf(false) }
     val selected = active.coerceIn(lines.indices)
 
-    CollapsibleSettingsSection("MANUAL TERMINAL", "Prepare and send TXT / HEX commands", expanded, { expanded = !expanded }) {
+    CollapsibleSettingsSection("MANUAL TERMINAL", "Prepare and send TXT / HEX commands", expanded, onToggle) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { showCommands = true }) { Text("Commands", fontSize = 11.sp) }
             Box {

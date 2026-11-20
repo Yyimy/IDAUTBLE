@@ -43,6 +43,8 @@ bool gWifiEnabled=true,gTcpConnected=true,gWifiConnected=true;
 String gNetSsid="TEST-NET",gNetPwd="public-fixture",gNetIp="192.168.0.213",gNetGw="192.168.0.1",gNetMask="255.255.255.0";
 uint32_t now=1000,gWifiStartMs=0;
 uint32_t millis(){return now;}
+void recordTcpDown(const char*){}
+bool gTcpConnectFailureReported=false;
 std::vector<std::string> events;
 void logLine(const String&){}
 struct TcpMock {int stops=0;void stop(){stops++;events.push_back("tcp.stop");}}gTcpClient;

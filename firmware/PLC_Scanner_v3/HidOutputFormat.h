@@ -4,6 +4,14 @@
 #include <string>
 namespace probe {
 enum class KeyLayout : uint8_t { US, ES };
+struct TypingTiming {
+  uint16_t reportMs = 30;
+  uint16_t navigationPauseMs = 0;
+};
+inline bool validTypingTiming(TypingTiming timing) {
+  return (timing.reportMs == 20 || timing.reportMs == 30 || timing.reportMs == 50) &&
+      (timing.navigationPauseMs == 0 || timing.navigationPauseMs == 100 || timing.navigationPauseMs == 250);
+}
 struct OutputFormat {
   uint8_t fields=3; // 1 pallet, 2 location, 3 both
   uint8_t separator[32]={'\t'};
@@ -14,6 +22,8 @@ struct OutputFormat {
   uint8_t prefix[32]={};
   uint8_t prefixLength=0;
   std::string hotkey="NONE";
+  bool locationFirst = false;
+  TypingTiming timing;
 };
 inline bool validOutputByte(unsigned char c) {return c=='\t'||c=='\n'||(c>=32&&c<=126);}
 // The first four SEPHEX values remain compatible with older HID configurations.
@@ -114,7 +124,8 @@ inline bool validHotkey(const std::string &shortcut) {
       (key.size() == 2 && key[0] == 'F' && key[1] >= '1' && key[1] <= '9') ||
       key == "F10" || key == "F11" || key == "F12";
 }
-inline std::string outputWire(const OutputFormat &f, bool includePrefix = false, bool includeHotkey = false, bool includeEndingSequence = false) {
+inline std::string outputWire(const OutputFormat &f, bool includePrefix = false, bool includeHotkey = false, bool includeEndingSequence = false,
+    bool includeOutputOptions = false) {
   std::string s="HIDCFG=1;FIELDS=";s+=f.fields==1?"P":f.fields==2?"U":"PU";s+=";SEPHEX=";
   appendOutputHex(s, f.separator, f.separatorLength);
   if (includeEndingSequence) {
@@ -130,10 +141,15 @@ inline std::string outputWire(const OutputFormat &f, bool includePrefix = false,
     appendOutputHex(s, f.prefix, f.prefixLength);
   }
   if (includeHotkey) s += ";HOTKEY=" + f.hotkey;
+  if (includeOutputOptions) {
+    s += f.locationFirst ? ";ORDER=UP" : ";ORDER=PU";
+    s += ";TIMING=" + std::to_string(f.timing.reportMs) + "," + std::to_string(f.timing.navigationPauseMs);
+  }
   return s;
 }
-inline bool parseOutputFormat(const std::string &s,OutputFormat &out, bool *prefixPresent = nullptr, bool *hotkeyPresent = nullptr, bool *endingSequencePresent = nullptr) {
-  if(s.size()>288||s.rfind("HIDCFG=1;",0)!=0)return false;
+inline bool parseOutputFormat(const std::string &s,OutputFormat &out, bool *prefixPresent = nullptr, bool *hotkeyPresent = nullptr, bool *endingSequencePresent = nullptr,
+    bool *outputOptionsPresent = nullptr) {
+  if(s.size()>320||s.rfind("HIDCFG=1;",0)!=0)return false;
   OutputFormat f;unsigned seen=0;size_t start=9;
   bool endingSequence = false;
   while(start<s.size()) {
@@ -157,16 +173,35 @@ inline bool parseOutputFormat(const std::string &s,OutputFormat &out, bool *pref
     else if(key=="LAYOUT") {bit=8;if(value=="US")f.layout=KeyLayout::US;else if(value=="ES")f.layout=KeyLayout::ES;else return false;}
     else if(key=="PREHEX") {bit=16;if(!parseOutputHex(value,f.prefix,f.prefixLength))return false;}
     else if(key=="HOTKEY") {bit=32;if(!validHotkey(value))return false;f.hotkey=value;}
+    else if(key=="ORDER") {
+      bit=64;
+      if(value!="PU" && value!="UP")return false;
+      f.locationFirst = value=="UP";
+    }
+    else if(key=="TIMING") {
+      bit=128;
+      const auto split = value.find(',');
+      if(split==std::string::npos)return false;
+      const auto rate = value.substr(0,split), pause = value.substr(split+1);
+      if(rate=="20") f.timing.reportMs=20;
+      else if(rate=="50") f.timing.reportMs=50;
+      else if(rate!="30") return false;
+      if(pause=="100") f.timing.navigationPauseMs=100;
+      else if(pause=="250") f.timing.navigationPauseMs=250;
+      else if(pause!="0") return false;
+    }
     else return false;
     if(seen&bit)return false;
     seen|=bit;
     if(end==s.size())break;
     start=end+1;if(start==s.size())return false;
   }
-  if((seen&15)!=15)return false;
+  const auto options = seen & (64 | 128);
+  if((seen&15)!=15 || (options && options != (64 | 128)))return false;
   if(prefixPresent)*prefixPresent=(seen&16)!=0;
   if(hotkeyPresent)*hotkeyPresent=(seen&32)!=0;
   if(endingSequencePresent)*endingSequencePresent=endingSequence;
+  if(outputOptionsPresent)*outputOptionsPresent=options!=0;
   out=f;return true;
 }
 // A missing selected field rejects the whole reading; never substitute stale data.
@@ -187,9 +222,13 @@ inline bool formatReading(const OutputFormat &f,const char *pallet,const char *l
   };
   if (((f.fields & 1) && !validCode(pallet)) || ((f.fields & 2) && !validCode(location))) return false;
   std::string text(reinterpret_cast<const char *>(f.prefix), f.prefixLength);
-  if(f.fields&1)text+=pallet;
-  if(f.fields==3)text.append((const char*)f.separator,f.separatorLength);
-  if(f.fields&2)text+=location;
+  if (f.fields == 3) {
+    text += f.locationFirst ? location : pallet;
+    text.append(reinterpret_cast<const char *>(f.separator), f.separatorLength);
+    text += f.locationFirst ? pallet : location;
+  } else {
+    text += f.fields == 1 ? pallet : location;
+  }
   text.append(reinterpret_cast<const char *>(f.ending), f.endingLength);
   if(text.size()>512)return false;
   out=text;return true;

@@ -17,9 +17,10 @@ FFE0 = "0000ffe0-0000-1000-8000-00805f9b34fb"
 FFE1 = "0000ffe1-0000-1000-8000-00805f9b34fb"
 QUERY = b"HIDHOTKEY?\r\n"
 READ = b"HIDREAD\r\n"
+MANOEUVRE_HOTKEY = "CTRL+ALT+SHIFT+L"
 HOTKEY = re.compile(r"(?:(CTRL\+)(ALT\+)?|(ALT\+))(SHIFT\+)?([A-Z0-9]|F(?:[1-9]|1[0-2]))")
 WM_HOTKEY = 0x0312
-APP_NAME = "IS-P Shortcut"
+APP_NAME = "IDAUT Lectura"
 RECOVERY_FLAGS = ("--recover-visible", "--recover-hidden")
 
 
@@ -33,8 +34,9 @@ def hotkey_codes(value):
 
 
 class Hotkey:
-    def __init__(self, user32):
+    def __init__(self, user32, first_id=1):
         self.user32 = user32
+        self.first_id = first_id
         self.active = "NONE"
         self.id = None
 
@@ -45,7 +47,7 @@ class Hotkey:
         new = None
         if value != "NONE":
             flags, key = hotkey_codes(value)
-            new = 2 if old == 1 else 1
+            new = self.first_id + 1 if old == self.first_id else self.first_id
             if not self.user32.RegisterHotKey(None, new, flags, key):
                 return False
         if old is not None:
@@ -53,11 +55,11 @@ class Hotkey:
         self.id, self.active = new, value
         return True
 
-    def pressed(self):
+    def pressed_ids(self):
         message = wintypes.MSG()
-        pressed = False
+        pressed = set()
         while self.user32.PeekMessageW(ctypes.byref(message), None, WM_HOTKEY, WM_HOTKEY, 1):
-            pressed = pressed or message.wParam == self.id
+            pressed.add(message.wParam)
         return pressed
 
 
@@ -67,6 +69,10 @@ class Connection:
         self.last_device = last_device
         self.transition = asyncio.Lock()
         self.hotkey = Hotkey(ctypes.windll.user32)
+        self.manoeuvre_hotkey = Hotkey(ctypes.windll.user32, first_id=3)
+        self.auto_reply = asyncio.Event()
+        self.auto_lock = asyncio.Lock()
+        self.automatic_reading = None
         self.client = None
         self.sync = None
         self.received = asyncio.Event()
@@ -211,6 +217,10 @@ class Connection:
         self.received.clear()
         self.buffer.clear()
         self.hotkey.apply("NONE")
+        self.manoeuvre_hotkey.apply("NONE")
+        self.automatic_reading = None
+        self.auto_reply.set()
+        self.emit("manoeuvre", (None, False))
         self.emit("hotkey", "—")
 
     async def disconnect(self):
@@ -244,6 +254,32 @@ class Connection:
             await asyncio.wait_for(self.received.wait(), timeout=5)
         except TimeoutError as exc:
             raise RuntimeError("el PLC no confirmó el atajo") from exc
+        await self.exchange_automatic_reading(client)
+
+    async def exchange_automatic_reading(self, client, enabled=None):
+        async with self.auto_lock:
+            if self.client is not client:
+                return
+            if enabled is not None and self.automatic_reading is None:
+                return
+            self.auto_reply.clear()
+            command = b"AUTOREAD?\r\n" if enabled is None else (
+                b"AUTOREAD=1\r\n" if enabled else b"AUTOREAD=0\r\n"
+            )
+            try:
+                await client.write_gatt_char(FFE1, command, response=True)
+                await asyncio.wait_for(self.auto_reply.wait(), timeout=3)
+            except Exception:
+                if self.client is client:
+                    self.automatic_reading = None
+                    self.emit("manoeuvre", (None, False))
+                    if enabled is not None:
+                        self.emit("status", "El PLC no confirmó el cambio. Comprueba el estado antes de mover el palet.")
+
+    async def set_automatic_reading(self, enabled):
+        client = self.client
+        if client is not None:
+            await self.exchange_automatic_reading(client, enabled)
 
     async def keep_in_sync(self, client):
         while self.client is client:
@@ -268,6 +304,9 @@ class Connection:
             if line.startswith(b"\x06HIDHOTKEY="):
                 try:
                     value = line.split(b"=", 1)[1].decode("ascii")
+                    if value == MANOEUVRE_HOTKEY:
+                        self.manoeuvre_hotkey.apply("NONE")
+                        self.emit("manoeuvre", (self.automatic_reading, False))
                     applied = self.hotkey.apply(value)
                 except ValueError:
                     continue
@@ -275,6 +314,15 @@ class Connection:
                 self.emit("hotkey", self.hotkey.active if self.hotkey.active != "NONE" else "Desactivado")
                 if not applied:
                     self.emit("status", f"{value} está ocupado en Windows. Se conserva el atajo anterior.")
+            elif line in (b"\x06AUTOREAD=0", b"\x06AUTOREAD=1"):
+                self.automatic_reading = line.endswith(b"1")
+                hotkey_active = self.manoeuvre_hotkey.apply(MANOEUVRE_HOTKEY)
+                self.emit("manoeuvre", (self.automatic_reading, hotkey_active))
+                self.auto_reply.set()
+            elif line in (b"\x15ERR=AUTOREAD_BUSY", b"\x15ERR=AUTOREAD_STORAGE"):
+                self.auto_reply.set()
+                self.emit("status", "El PLC está ocupado. Vuelve a intentarlo." if line.endswith(b"_BUSY")
+                          else "El PLC no pudo guardar el modo maniobra.")
             elif line == b"\x06HIDREAD=QUEUED":
                 self.emit("status", "Lectura solicitada.")
             elif line.startswith(b"\x15"):
@@ -284,8 +332,12 @@ class Connection:
 
     async def poll_keys(self):
         while True:
-            if self.hotkey.pressed() and self.client and self.received.is_set() and not self.reading:
-                asyncio.create_task(self.request_read(self.client))
+            pressed = self.hotkey.pressed_ids()
+            if self.client and self.received.is_set():
+                if self.manoeuvre_hotkey.id in pressed and self.automatic_reading is not None:
+                    asyncio.create_task(self.set_automatic_reading(not self.automatic_reading))
+                elif self.hotkey.id in pressed and not self.reading:
+                    asyncio.create_task(self.request_read(self.client))
             await asyncio.sleep(0.05)
 
     async def request_read(self, client):
@@ -457,6 +509,8 @@ def main():
     reload_button = ttk.Button(actions, text="Emparejados", style="Control.TButton",
                                command=lambda: run(connection.paired()))
     reload_button.pack(side="left")
+    manoeuvre = tk.StringVar()
+    automatic_reading = None
     link = "idle"
     pending_connection = None
 
@@ -478,7 +532,18 @@ def main():
     ttk.Button(actions, text="Ocultar", command=root.withdraw,
                style="Control.TButton").pack(side="left", padx=(6, 0))
 
-    tray = pystray.Icon("is-p-shortcut", image, APP_NAME, pystray.Menu(
+    tk.Label(frame, textvariable=manoeuvre, bg=frame["bg"], fg=muted, wraplength=370,
+             justify="left", font=("Segoe UI", 10)).grid(row=5, column=0, sticky="w", pady=(7, 0))
+
+    def toggle_manoeuvre():
+        if automatic_reading is not None:
+            run(connection.set_automatic_reading(not automatic_reading))
+
+    manoeuvre_button = ttk.Button(frame, text="Pausar lecturas", command=toggle_manoeuvre,
+                                 style="Control.TButton", state="disabled")
+    manoeuvre_button.grid(row=6, column=0, sticky="ew", pady=(6, 0))
+
+    tray = pystray.Icon("idaut-lectura", image, APP_NAME, pystray.Menu(
         pystray.MenuItem("Abrir", lambda: emit("show"), default=True),
         pystray.MenuItem("Salir", lambda: emit("quit")),
     ))
@@ -488,7 +553,7 @@ def main():
     restart_mode = None
 
     def update():
-        nonlocal devices, link, restart_mode
+        nonlocal devices, link, restart_mode, automatic_reading
         while not events.empty():
             kind, value = events.get()
             if kind == "devices":
@@ -515,6 +580,17 @@ def main():
                 show_hotkey(value)
             elif kind == "device":
                 device_name.set(value)
+            elif kind == "manoeuvre":
+                automatic_reading, shortcut = value
+                paused = automatic_reading is False
+                label = ("Lecturas pausadas" if paused else "Lecturas automáticas activas"
+                         if automatic_reading is True else "Estado del modo maniobra sin confirmar")
+                if shortcut:
+                    label += " · Ctrl+Alt+Mayús+L"
+                manoeuvre.set(label)
+                manoeuvre_button.configure(text="Reanudar lecturas" if paused else "Pausar lecturas",
+                                            state="normal" if automatic_reading is not None else "disabled")
+                tray.title = f"{APP_NAME} · Pausada" if paused else APP_NAME
             elif kind == "link":
                 link = value
                 if link == "idle":

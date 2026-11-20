@@ -7,7 +7,8 @@ enum LedMode : uint8_t {
   LED_BAT_LOW,
   LED_BAT_CRITICAL,
   LED_ERROR,
-  LED_OTA
+  LED_OTA,
+  LED_MANOEUVRE
 };
 
 enum BleCmdType : uint8_t {
@@ -37,7 +38,8 @@ enum BleCmdType : uint8_t {
   BLECMD_OTA_START,
   BLECMD_OTA_STATUS,
   BLECMD_OTA_ABORT,
-  BLECMD_TEXT
+  BLECMD_TEXT,
+  BLECMD_AUTOREAD
 
 };
 
@@ -117,11 +119,22 @@ struct CommandReplyScope {
   ~CommandReplyScope() { current = previous; }
 };
 
+struct HeartbeatMessages {
+  char request[17];
+  char response[17];
+};
+
+struct StoredTcpAdvanced {
+  uint32_t packed;
+  HeartbeatMessages messages;
+};
+
 struct TxPacket {
   uint16_t len;
   uint32_t session;
   uint32_t tcpSession;
   TxTarget target;
+  bool heartbeat;
   uint32_t eventId;
   uint8_t data[512];
   HeightTiming heightTiming;

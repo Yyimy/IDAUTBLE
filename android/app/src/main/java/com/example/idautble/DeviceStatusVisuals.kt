@@ -18,7 +18,7 @@ fun ledStatusTone(mode: String, fresh: Boolean): StatusTone =
             "BAT_LOW" -> StatusTone.WARNING
             "BAT_CRITICAL",
             "ERROR" -> StatusTone.FAULT
-            "OTA" -> StatusTone.INFO
+            "OTA", "MANOEUVRE" -> StatusTone.INFO
             else -> StatusTone.NEUTRAL
         }
 
@@ -46,6 +46,7 @@ fun ledPreviewOn(mode: String, elapsedMs: Long, fresh: Boolean, firmware: String
         "BAT_CRITICAL" -> (elapsed % 2000).let { it < 200 || it in 400..599 || it in 800..999 }
         "ERROR" -> elapsed % 400 < 200
         "OTA" -> elapsed % 1000 < 800
+        "MANOEUVRE" -> elapsed % 3000 < 1000
         else -> false
     }
 }

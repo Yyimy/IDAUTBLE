@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 private val hidFields = mapOf("P" to "Pallet", "U" to "Location", "PU" to "Both")
+private val hidFieldOrders = mapOf(false to "Pallet → Location", true to "Location → Pallet")
 private val hidLayouts = mapOf("US" to "US", "ES" to "Spanish")
 private enum class HidSequence(val title: String) {
     Prefix("Keys before the first code"), Separator("Separator between fields"), Ending("Keys after the last code"),
@@ -29,10 +30,12 @@ private val shortcutKeys = mapOf(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Boolean, onAction: (HidOutputConfig?) -> Unit) {
+fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Boolean, onAction: (HidOutputConfig?) -> Unit, expanded: Boolean, onToggle: () -> Unit) {
     if (!state.supported) return
-    var expanded by rememberSaveable { mutableStateOf(false) }
     var fields by remember { mutableStateOf("PU") }
+    var locationFirst by remember { mutableStateOf(false) }
+    var reportMs by remember { mutableIntStateOf(30) }
+    var navigationPauseMs by remember { mutableIntStateOf(0) }
     var prefixPattern by remember { mutableStateOf("") }
     var shortcut by remember { mutableStateOf("NONE") }
     var pattern by remember { mutableStateOf("{TAB}") }
@@ -43,6 +46,9 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
     LaunchedEffect(state.revision) {
         state.config?.let {
             fields = it.fields
+            locationFirst = it.locationFirst
+            reportMs = it.reportMs
+            navigationPauseMs = it.navigationPauseMs
             prefixPattern = hidSeparatorPattern(it.prefix)
             shortcut = it.hotkey
             pattern = hidSeparatorPattern(it.separator)
@@ -57,11 +63,14 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
     val endingValid = ending != null && (state.endingSequence || legacyHidEnding(ending, state.extendedKeys) != null)
     val hotkey = if (state.readHotkey) shortcut else "NONE"
     val draft = if (prefix != null && separator != null && ending != null && endingValid && validHidHotkey(hotkey))
-        HidOutputConfig(fields, separator, ending, layout, prefix, hotkey) else null
+        HidOutputConfig(fields, separator, ending, layout, prefix, hotkey,
+            state.outputOptions && locationFirst,
+            if (state.outputOptions) reportMs else 30,
+            if (state.outputOptions) navigationPauseMs else 0) else null
     val enabled = connected && !state.busy
     CollapsibleSettingsSection(
         if (production) "HID OUTPUT" else "HID OUTPUT · PROTOTYPE",
-        "Pallet / location · keyboard format", expanded, { expanded = !expanded },
+        "Pallet / location · keyboard format", expanded, onToggle,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             HidSettingsGroup("Fields") {
@@ -69,6 +78,9 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
                     hidFields.forEach { (value, label) ->
                         FilterChip(fields == value, { fields = value }, { Text(label) }, enabled = enabled)
                     }
+                }
+                if (state.outputOptions && fields == "PU") HidSettingRow("Field order") {
+                    HidValueMenu(hidFieldOrders, locationFirst, enabled) { locationFirst = it }
                 }
             }
             HidSettingsGroup("Prefixes, separators and suffixes") {
@@ -88,6 +100,14 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
             HidSettingsGroup("Language") {
                 HidSettingRow("Keyboard layout") { HidValueMenu(hidLayouts, layout, enabled) { layout = it } }
                 Text("Match the receiver keyboard layout.", style = MaterialTheme.typography.bodySmall)
+            }
+            if (state.outputOptions) HidSettingsGroup("Typing") {
+                HidSettingRow("Typing speed") {
+                    HidValueMenu(hidTypingSpeeds, reportMs, enabled) { reportMs = it }
+                }
+                HidSettingRow("Pause after Tab / Enter") {
+                    HidValueMenu(hidNavigationPauses, navigationPauseMs, enabled) { navigationPauseMs = it }
+                }
             }
             if (state.readHotkey) HidSettingsGroup("Shortcuts") {
                 HidSettingRow("Read shortcut (Windows)") {
@@ -208,10 +228,10 @@ private fun HidPickerButton(label: String, enabled: Boolean, onClick: () -> Unit
 }
 
 @Composable
-private fun HidValueMenu(options: Map<String, String>, value: String, enabled: Boolean, onSelect: (String) -> Unit) {
+private fun <T> HidValueMenu(options: Map<T, String>, value: T, enabled: Boolean, onSelect: (T) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
-        HidPickerButton(options[value] ?: value, enabled) { open = true }
+        HidPickerButton(options[value] ?: value.toString(), enabled) { open = true }
         DropdownMenu(expanded = open && enabled, onDismissRequest = { open = false }, modifier = Modifier.heightIn(max = 280.dp)) {
             options.forEach { (key, label) ->
                 DropdownMenuItem(text = { Text(label) }, onClick = { onSelect(key); open = false })

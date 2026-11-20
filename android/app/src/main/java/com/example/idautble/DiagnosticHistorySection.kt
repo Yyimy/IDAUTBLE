@@ -1,0 +1,92 @@
+package com.example.idautble
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.unit.dp
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+
+internal data class DiagnosticEvent(val sequence: Long, val boot: Long, val seconds: Long, val reason: String, val dateTime: String = "")
+
+private val diagnosticReason = Regex("[A-Z0-9_]{1,23}")
+
+internal fun parseDiagnosticHistory(text: String): List<DiagnosticEvent>? {
+    val payload = text.removePrefix("HISTORY=")
+    if (payload == text) return null
+    if (payload.isEmpty()) return emptyList()
+    val rows = payload.split('|', limit = 9)
+    if (rows.size > 8) return null
+    return rows.map { row ->
+        val fields = row.split(',', limit = 5)
+        if (fields.size !in 4..5 || !diagnosticReason.matches(fields[3])) return null
+        val sequence = fields[0].toLongOrNull()?.takeIf { it in 0..0xFFFFFFFFL } ?: return null
+        val boot = fields[1].toLongOrNull()?.takeIf { it in 0..0xFFFFFFFFL } ?: return null
+        val seconds = fields[2].toLongOrNull()?.takeIf { it in 0..4_294_967L } ?: return null
+        val dateTime = fields.getOrElse(4) { "" }
+        if (dateTime.isNotEmpty() && !plcTimestampPattern.matches(dateTime)) return null
+        DiagnosticEvent(sequence, boot, seconds, fields[3], dateTime)
+    }
+}
+
+private fun diagnosticLabel(reason: String) = when (reason) {
+    "TCP_CONNECTED" -> "TCP connected"
+    "PONG_TIMEOUT" -> "TCP disconnected · PONG timeout"
+    "SOCKET_CLOSED" -> "TCP disconnected · Socket closed"
+    "WIFI_LOST" -> "TCP disconnected · Wi-Fi link lost"
+    "WIFI_DISABLED" -> "TCP disconnected · Wi-Fi disabled"
+    "CONFIG_CHANGED" -> "TCP disconnected · Network restarted"
+    "OTA" -> "TCP disconnected · Firmware update"
+    "WRITE_FAILED" -> "TCP disconnected · Write failed"
+    "WRITE_TIMEOUT" -> "TCP disconnected · Write timeout"
+    "EVENT_QUEUE_FULL" -> "Reading event queue full"
+    else -> "Shutdown requested · ${shutdownReasonLabel(reason)}"
+}
+
+@Composable
+internal fun DiagnosticHistorySection(
+    events: List<DiagnosticEvent>?,
+    supported: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onRefresh: () -> Unit,
+    loading: Boolean,
+    onExport: () -> Unit,
+) {
+    CollapsibleSettingsSection(
+        "PLC HISTORY", events?.let { "${it.size} recent events" } ?: "Critical events from the PLC",
+        expanded, onToggle,
+    ) {
+        Text("Newest first · PLC local time")
+        if (!supported) Text("Connect to a PLC with compatible firmware to retrieve its history.")
+        else if (events == null) Text("Waiting for PLC history.")
+        else if (events.isEmpty()) Text("No events recorded.")
+        if (!events.isNullOrEmpty()) {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
+                items(events, key = { it.sequence }) { event ->
+                    HorizontalDivider()
+                    val time = event.dateTime.replace('T', ' ').ifEmpty { "Time unavailable" }
+                    Text("#${event.sequence} · $time", fontFamily = FontFamily.Monospace)
+                    Text(diagnosticLabel(event.reason))
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            MaintenanceActionButton(
+                if (loading) "Loading history…" else "Refresh history",
+                onRefresh, MaintenanceActionTone.INFO, Modifier.weight(1f),
+                enabled = supported && !loading,
+            )
+            MaintenanceActionButton(
+                "Export diagnostics", onExport, MaintenanceActionTone.SUCCESS, Modifier.weight(1f),
+                enabled = events != null && !loading,
+            )
+        }
+    }
+}

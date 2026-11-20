@@ -5,6 +5,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,9 +51,16 @@ fun DeviceStatusSection(
     onRefreshAfterReadsChange: (Boolean) -> Unit,
     autoRefreshEnabled: Boolean,
     onAutoRefreshChange: (Boolean) -> Unit,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    maintenanceAuthorised: Boolean,
+    manoeuvrePending: Boolean,
+    manoeuvreMessage: String?,
+    onAutomaticReading: (Boolean) -> Unit,
 ) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
+    var ledGuideOpen by rememberSaveable { mutableStateOf(false) }
+    if (ledGuideOpen) LedPatternGuide(status?.firmware) { ledGuideOpen = false }
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     LaunchedEffect(receivedMs) {
         while (isActive) {
@@ -68,12 +77,32 @@ fun DeviceStatusSection(
             else ->
                 "${ledDescription(status.led, status.firmware).substringBefore(" — ")} • ${age}s ago"
         }
+    if (status?.automaticReading == false) {
+        Text(
+            "Automatic readings paused",
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
     CollapsibleSettingsSection(
         title = "DEVICE STATUS",
         summary = summary,
         expanded = expanded,
-        onToggle = { expanded = !expanded },
+        onToggle = onToggle,
     ) {
+        status?.automaticReading?.let { enabled ->
+            Column(Modifier.fillMaxWidth()) {
+                Text("Manoeuvre mode · ${if (enabled) "Off" else "On"}")
+                MaintenanceActionButton(
+                    text = if (enabled) "Pause automatic readings" else "Resume automatic readings",
+                    onClick = { onAutomaticReading(!enabled) },
+                    tone = if (enabled) MaintenanceActionTone.WARNING else MaintenanceActionTone.SUCCESS,
+                    enabled = ready && maintenanceAuthorised && !manoeuvrePending,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                manoeuvreMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            }
+        }
         ProvideTextStyle(
             MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 13.sp)
         ) {
@@ -166,6 +195,9 @@ fun DeviceStatusSection(
                 }
                 if (!ready) {
                     Text("Connect and wait for BLE to be ready.", fontSize = 11.sp)
+                }
+                TextButton(onClick = { ledGuideOpen = true }, modifier = Modifier.align(Alignment.End)) {
+                    Text("LED patterns", fontSize = 11.sp)
                 }
                 status?.let { s ->
                     if (!fresh) {
@@ -667,4 +699,35 @@ private fun CountersTable(snapshot: CountersSnapshot, ready: Boolean, nowMs: Lon
             }
         }
     }
+}
+
+@Composable
+private fun LedPatternGuide(firmware: String?, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("PLC LED patterns") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                val modes = listOf("READY", "DISCONNECTED", "BAT_LOW", "BAT_CRITICAL", "ERROR", "OTA", "MANOEUVRE")
+                modes.forEach { mode ->
+                    val description = if (mode == "READY" && firmware == null)
+                        "Ready — 1 short flash / 3 s" else ledDescription(mode, firmware)
+                    val detail = when (mode) {
+                        "READY" -> "TCP is connected when Wi-Fi is enabled. In BLE mode, a maintenance subscriber or HID receiver is ready."
+                        "DISCONNECTED" -> "0.5 s on / 0.5 s off. Waiting for the required TCP or BLE link."
+                        "ERROR" -> "0.2 s on / 0.2 s off. Check the LED reason in Device Status."
+                        else -> null
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(description, fontWeight = FontWeight.SemiBold)
+                        detail?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }

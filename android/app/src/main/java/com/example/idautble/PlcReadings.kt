@@ -6,7 +6,7 @@ import java.time.LocalDateTime
 
 /** A single complete V2 response. Null fields were not supplied in that response. */
 data class PlcReading(
-    val plcTime: String,
+    val plcTime: String?,
     val clockValid: Boolean,
     val deviceId: String,
     val pallet: String?,
@@ -29,11 +29,17 @@ fun parsePlcReading(message: PlcMessage): PlcReading? {
         } catch (_: java.nio.charset.CharacterCodingException) {
             return null
         }
-    if (text.getOrNull(20) != '\u0002' || text.lastOrNull() != '\u0003') return null
-    val timestamp = text.substring(1, 20)
-    if (!Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}").matches(timestamp))
-        return null
-    val fields = text.substring(21, text.lastIndex).split('\u001b')
+    if (text.lastOrNull() != '\u0003') return null
+    val stx = text.indexOf('\u0002', startIndex = 1)
+    val timestamp = when (stx) {
+        1 -> null
+        20 -> text.substring(1, stx).also {
+            if (!Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}").matches(it))
+                return null
+        }
+        else -> return null
+    }
+    val fields = text.substring(stx + 1, text.lastIndex).split('\u001b')
     if (fields.size != 7 || fields.last() != "" || !validEquipmentId(fields[0])) return null
     val battery = fields[1]
     if (battery != "-" && !Regex("[0-9]{4}").matches(battery)) return null
@@ -44,7 +50,7 @@ fun parsePlcReading(message: PlcMessage): PlcReading? {
     fun code(value: String): String? = value.takeUnless { it == "-" || it.isEmpty() }
     return PlcReading(
         timestamp,
-        runCatching { LocalDateTime.parse(timestamp) }.isSuccess,
+        timestamp != null && runCatching { LocalDateTime.parse(timestamp) }.isSuccess,
         fields[0],
         code(fields[4]),
         code(fields[5]),

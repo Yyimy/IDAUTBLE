@@ -11,13 +11,50 @@ data class NetConfig(
     val port: Int,
 )
 
+data class HeartbeatMessages(val request: String, val response: String) {
+    val valid get() = listOf(request, response).all { it.length in 1..16 && it.all { ch -> ch in ' '..'~' } } &&
+        !response.startsWith("ACK=") && response !in
+            setOf("NET?", "NETSTAT?", "CFG?", "WIFI?", "ALT?", "OTA?", "INFO?", "STATUS?", "COUNTERS?", "DIAG?", "ID?")
+
+    internal fun wire() = listOf(request, response).joinToString(",") { value ->
+        value.map { it.code.toString(16).uppercase().padStart(2, '0') }.joinToString("")
+    }
+}
+
+data class TcpAdvancedConfig(
+    val heartbeat: Boolean,
+    val acknowledgements: Boolean,
+    val intervalSeconds: Int,
+    val timeoutSeconds: Int,
+    val heartbeatMessages: HeartbeatMessages? = null,
+) {
+    val valid get() = intervalSeconds in 5..120 && timeoutSeconds > intervalSeconds && timeoutSeconds <= 300 && heartbeatMessages?.valid != false
+
+    fun command() =
+        "TCPADV=${if (heartbeat) 1 else 0},${if (acknowledgements) 1 else 0},$intervalSeconds,$timeoutSeconds" +
+            (heartbeatMessages?.let { ",${it.wire()}" } ?: "")
+}
+
 data class NetStatus(
     val wifiEnabled: Boolean,
     val linkUp: Boolean,
     val tcpUp: Boolean,
     val ip: String?,
     val rssi: Int?,
+    val pongAgeSeconds: Long? = null,
+    val pendingEvents: Int? = null,
+    val tcpMonitor: TcpMonitorSnapshot? = null,
 )
+
+data class TcpServerReply(val ageSeconds: Long, val text: String, val truncated: Boolean)
+
+data class TcpMonitorSnapshot(
+    val connectionAgeSeconds: Long?,
+    val disconnection: TcpDisconnection?,
+    val replies: List<TcpServerReply>,
+)
+
+data class TcpDisconnection(val reason: String, val ageSeconds: Long)
 
 /** Independent revisions prevent Compose from losing NET when NETSTAT arrives in the same burst. */
 data class NetworkSnapshot(

@@ -38,6 +38,7 @@ int gOtaState = OTA_IDLE;
 bool gWifiEnabled = false, gTcpConnected = false;
 struct Tcp { bool up = false; bool connected() { return up; } } gTcpClient;
 bool bleReady = false;
+bool gAutomaticReading = true;
 bool bleCanNotify() { return bleReady; }
 namespace plcHid { bool ready = false; bool keyboardReady() { return ready; } }
 bool output = false;
@@ -119,6 +120,7 @@ int main() {
   tick(1999); CHECK(gLedMode == LED_BAT_CRITICAL);
   // Every millisecond across complete cycles: pulse count, width, dark intervals.
   for (uint32_t t = 0; t < 8000; ++t) {
+    CHECK(ledPatternOn(LED_MANOEUVRE,t) == (t % 3000 < 1000));
     CHECK(ledPatternOn(LED_READY,t) == (t % 3000 < 100));
     CHECK(ledPatternOn(LED_DISCONNECTED,t) == ((t/500)%2 == 0));
     CHECK(ledPatternOn(LED_ERROR,t) == ((t/200)%2 == 0));

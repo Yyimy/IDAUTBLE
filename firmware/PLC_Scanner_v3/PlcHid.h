@@ -8,6 +8,7 @@
 #include <mbedtls/aes.h>
 #include "ProbeKeyboard.h"
 #include "HidEarlyAuth.h"
+#include "FactoryDefaults.h"
 
 static void replyLine(bool ok, const String &text);
 static bool maintenanceAuthorized();
@@ -27,7 +28,14 @@ static probe::ReceiverIdentity savedReceiver;
 static probe::ReceiverIdentity receiverToRemove;
 static probe::Token receiverRemovalOwner;
 static uint32_t nextReceiverRemovalAttempt;
-static probe::OutputFormat outputFormat;
+static probe::OutputFormat factoryOutputFormat() {
+  probe::OutputFormat format;
+  format.separator[0] = '\n';
+  format.layout = probe::KeyLayout::ES;
+  format.hotkey = factoryDefaults::hotkey;
+  return format;
+}
+static probe::OutputFormat outputFormat = factoryOutputFormat();
 static bool receiverStorageReady, unbindAfterRelease;
 static std::atomic<bool> pairWindow{false};
 static uint32_t pairStarted, lastIdentityCheck;
@@ -239,14 +247,15 @@ static probe::ReceiverIdentity authenticatedIdentity(const probe::Peer &peer) {
   return found;
 }
 static void loadOutputFormat() {
-  outputFormat = {};
+  outputFormat = factoryOutputFormat();
   if (!receiverStorageReady || !receiverPreferences.isKey("format")) return;
   const String stored = receiverPreferences.getString("format", "");
   if (!probe::parseOutputFormat(stored.c_str(), outputFormat)) Serial.println("HID FORMAT invalid; defaults active");
 }
 static bool saveOutputFormat(const probe::OutputFormat &candidate) {
   const std::string canonical = probe::outputWire(candidate, candidate.prefixLength != 0, candidate.hotkey != "NONE",
-      probe::needsEndingSequence(candidate));
+      probe::needsEndingSequence(candidate),
+      candidate.locationFirst || candidate.timing.reportMs != 30 || candidate.timing.navigationPauseMs != 0);
   if (!receiverStorageReady || receiverPreferences.putString("format", canonical.c_str()) != canonical.size()) return false;
   outputFormat = candidate;
   return true;
@@ -273,20 +282,28 @@ static void loadReceiver() {
   if (savedReceiver.valid && !savedReceiver.subscriptionsKnown) Serial.println("HID RECEIVER legacy subscriptions unknown; fresh HID subscription required");
   Serial.println(savedReceiver.valid ? "HID RECEIVER loaded" : "HID STORAGE invalid record; assign again or forget");
 }
-static bool saveReceiver(const probe::ReceiverIdentity &identity) {
+static bool receiverRecordError(const char *operation, const char *stage) {
+  Serial.printf("HID STORAGE ERROR operation=%s stage=%s uptime_ms=%lu\n",
+                operation, stage, (unsigned long)millis());
+  return false;
+}
+
+static bool saveReceiver(const probe::ReceiverIdentity &identity, const char *operation) {
   uint8_t record[probe::receiverRecordSize];
-  if (!receiverStorageReady || !probe::encodeReceiver(identity, record)) return false;
-  if (receiverPreferences.putBytes("receiver", record, sizeof(record)) != sizeof(record)) return false;
+  if (!receiverStorageReady) return receiverRecordError(operation, "unavailable");
+  if (!probe::encodeReceiver(identity, record)) return receiverRecordError(operation, "encode");
+  if (!saveNvsSetting("plc_hid", "receiver", record, sizeof(record), false, operation)) return false;
   savedReceiver = identity;
   return true;
 }
 static bool writeReceiverRemoval(const probe::ReceiverIdentity &identity = {}) {
-  if (!receiverStorageReady) return false;
+  const char *operation = identity.valid ? "hid_forget_begin" : "hid_forget_finish";
+  if (!receiverStorageReady) return receiverRecordError(operation, "unavailable");
   uint8_t record[probe::receiverRecordSize];
   if (identity.valid) {
-    if (!probe::encodeReceiver(identity, record, true)) return false;
+    if (!probe::encodeReceiver(identity, record, true)) return receiverRecordError(operation, "encode");
   } else probe::clearReceiverRecord(record);
-  return receiverPreferences.putBytes("receiver", record, sizeof(record)) == sizeof(record);
+  return saveNvsSetting("plc_hid", "receiver", record, sizeof(record), false, operation);
 }
 static String receiverText(bool extended = false) {
   auto s = snapshot();
@@ -354,7 +371,7 @@ static void receiverTick() {
     if (p.reportSeen) { updated.subscriptionsKnown = true; updated.subscriptions = (updated.subscriptions & ~1u) | (p.reportNotify ? 1 : 0); }
     if (p.bootSeen) { updated.subscriptionsKnown = true; updated.subscriptions = (updated.subscriptions & ~2u) | (p.bootNotify ? 2 : 0); }
     if (updated.subscriptionsKnown && (!savedReceiver.subscriptionsKnown || updated.subscriptions != savedReceiver.subscriptions)) {
-      if (!saveReceiver(updated)) { Serial.println("HID CCCD storage failed; recovery deferred"); continue; }
+      if (!saveReceiver(updated, "hid_subscription_update")) { Serial.println("HID CCCD storage failed; recovery deferred"); continue; }
     }
     portENTER_CRITICAL(&peerMux);
     peers.restoreSubscriptions(p.token, savedReceiver);
@@ -654,7 +671,7 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
     if (handle == controlHandle && data[0] <= 1) p->suspended = data[0] == 0;
     if (handle == outputHandle || handle == bootOutputHandle) p->capsLock = data[0] & 0x02;
   }
-  // Registered CLIENT writes are limited to the binary reading commands.
+  // Registered CLIENT writes are limited to reading and manoeuvre commands.
   constexpr char clientHello[] = "CLIENT\r\n";
   const bool uartWrite = pCharacteristic && handle == pCharacteristic->getHandle();
   if (uartWrite && !write.is_prep && !write.offset) {
@@ -662,6 +679,19 @@ static void gattEvent(esp_gatts_cb_event_t event, esp_gatt_if_t iface, esp_ble_g
     constexpr char trigger[] = "HIDREAD\r\n";
     const bool getHotkey = length == sizeof(query) - 1 && !memcmp(data, query, length);
     const bool read = length == sizeof(trigger) - 1 && !memcmp(data, trigger, length);
+    const char autoAction = autoReadAction(data, length);
+    const bool operationalPeer = peers.clientReady(p->token) || peers.shortcutReady(p->token);
+    if (autoAction && operationalPeer) {
+      BleCmd cmd = {};
+      cmd.type = BLECMD_AUTOREAD;
+      cmd.source = peers.clientReady(p->token) ? CMD_SOURCE_CLIENT : CMD_SOURCE_HID;
+      cmd.session = p->token.generation;
+      cmd.receivedMs = millis();
+      cmd.payload[0] = autoAction;
+      portEXIT_CRITICAL(&peerMux);
+      queueBleCommand(cmd);
+      return;
+    }
     if (getHotkey || read) {
       if (!peers.shortcutReady(p->token)) { portEXIT_CRITICAL(&peerMux); return; }
       BleCmd cmd = {};
@@ -927,7 +957,7 @@ static void pairTick() {
   }
   portEXIT_CRITICAL(&peerMux);
   if (!bound) return;
-  if (!saveReceiver(selectedIdentity)) {
+  if (!saveReceiver(selectedIdentity, "hid_assign")) {
     portENTER_CRITICAL(&peerMux);
     peers.unbindKeyboard();
     portEXIT_CRITICAL(&peerMux);
@@ -1001,6 +1031,16 @@ static void sendHotkey(probe::Token receiver) {
   peerReply(receiver, true, "HIDHOTKEY=" + String(outputFormat.hotkey.c_str()));
 }
 
+static bool outputBusyForRestore() {
+  return keyboard.busy() || pendingCount || pairWindow || receiverToRemove.valid;
+}
+
+static void applyFactoryOutput() {
+  outputFormat = factoryOutputFormat();
+  const auto receiver = shortcutReceiver();
+  if (receiver.generation) sendHotkey(receiver);
+}
+
 static bool shortcutEnabled(uint32_t session) {
   return session && shortcutReceiver().generation == session && outputFormat.hotkey != "NONE";
 }
@@ -1011,7 +1051,8 @@ static bool handle(const String &text, uint8_t source) {
     if (error) replyLine(false, error);
     return true;
   }
-  const bool endingSequenceQuery = text == "HIDCFG4?";
+  const bool outputOptionsQuery = text == "HIDCFG5?";
+  const bool endingSequenceQuery = outputOptionsQuery || text == "HIDCFG4?";
   const bool hotkeyQuery = endingSequenceQuery || text == "HIDCFG3?";
   const bool formatQuery = hotkeyQuery || text == "HIDCFG2?" || text == "HIDCFG?";
   const bool getter = text == "HIDRECEIVER?" || text == "HIDRECEIVER2?" || formatQuery;
@@ -1028,15 +1069,16 @@ static bool handle(const String &text, uint8_t source) {
   if (text == "HIDRECEIVER?" || text == "HIDRECEIVER2?")
     replyLine(true, receiverText(text == "HIDRECEIVER2?"));
   else if (formatQuery)
-    replyLine(true, probe::outputWire(outputFormat, text != "HIDCFG?", hotkeyQuery, endingSequenceQuery).c_str());
+    replyLine(true, probe::outputWire(outputFormat, text != "HIDCFG?", hotkeyQuery, endingSequenceQuery, outputOptionsQuery).c_str());
   else if (blocked()) replyLine(false, "ERR=BUSY");
   else if (text.startsWith("HIDCFG=")) {
     probe::OutputFormat candidate;
     bool prefixPresent = false;
     bool hotkeyPresent = false;
     bool endingSequencePresent = false;
+    bool outputOptionsPresent = false;
     if (keyboard.busy() || pendingCount) replyLine(false, "ERR=HIDCFG_BUSY");
-    else if (!probe::parseOutputFormat(text.c_str(), candidate, &prefixPresent, &hotkeyPresent, &endingSequencePresent))
+    else if (!probe::parseOutputFormat(text.c_str(), candidate, &prefixPresent, &hotkeyPresent, &endingSequencePresent, &outputOptionsPresent))
       replyLine(false, "ERR=HIDCFG_INVALID");
     else {
       // An older app can edit its fields without discarding an existing prefix.
@@ -1050,10 +1092,14 @@ static bool handle(const String &text, uint8_t source) {
         candidate.endingLength = outputFormat.endingLength;
         memcpy(candidate.ending, outputFormat.ending, candidate.endingLength);
       }
+      if (!outputOptionsPresent) {
+        candidate.locationFirst = outputFormat.locationFirst;
+        candidate.timing = outputFormat.timing;
+      }
       const bool hotkeyChanged = candidate.hotkey != outputFormat.hotkey;
       if (!saveOutputFormat(candidate)) replyLine(false, "ERR=HIDCFG_STORAGE");
       else {
-        replyLine(true, probe::outputWire(outputFormat, prefixPresent, hotkeyPresent, endingSequencePresent).c_str());
+        replyLine(true, probe::outputWire(outputFormat, prefixPresent, hotkeyPresent, endingSequencePresent, outputOptionsPresent).c_str());
         if (hotkeyChanged) {
           const auto receiver = shortcutReceiver();
           if (receiver.generation) sendHotkey(receiver);
@@ -1149,7 +1195,7 @@ static bool handle(const String &text, uint8_t source) {
     std::string formatted;
     if (!pendingCount && probe::formatReading(outputFormat, "PALLET123", "LOC01", formatted) &&
         keyboard.startText(state.role(probe::Role::Keyboard), owner, false, millis(), state,
-                           formatted.c_str(), outputFormat.layout)) {
+                           formatted.c_str(), outputFormat.layout, outputFormat.timing)) {
       testActive = true;
       replyLine(true, "HIDTEST=QUEUED");
     } else replyLine(false, "ERR=HID_NOT_READY_OR_BUSY");
@@ -1302,7 +1348,7 @@ static void tick() {
     if (pendingCount && !keyboard.busy()) {
       auto &job = pending[pendingHead];
       if (!keyboard.startText(job.receiver, {}, true, millis(), state,
-                              job.text.c_str(), outputFormat.layout))
+                              job.text.c_str(), outputFormat.layout, outputFormat.timing))
         Serial.println("HID READING skipped: invalid keyboard payload");
       job.text.clear();
       pendingHead = (pendingHead + 1) % pendingCapacity;

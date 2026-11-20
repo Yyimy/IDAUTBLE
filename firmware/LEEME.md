@@ -66,7 +66,7 @@ Los flags `REQUIRE_BLE_PAIRING` y `REQUIRE_MAINT_AUTH`, ambos a 1, controlan est
 - Solo se acepta lectura de códigos terminada por LF. Límite de 320 caracteres; se rechazan controles, exceso de campos y prefijos desconocidos. Se mantiene la lectura parcial de palet o ubicación cuando el otro campo falta.
 - Timeout de altura de 250 ms, limpieza previa de recepción y comprobación de rango de 0,2 a 20 m. Esta validación no sustituye comprobar el protocolo exacto del sensor.
 - Filtrado de fotocélula de 250 ms y armado inicial estable de 1,5 segundos.
-- Autoapagado a los **120 minutos de permanecer vacío**, desde la descarga o desde el arranque estable si ya estaba vacío. Mantener un palet cargado no consume ese plazo. No se autoapaga por inactividad durante OTA.
+- Autoapagado a los **60 minutos de permanecer vacío**, desde la descarga o desde el arranque estable si ya estaba vacío. Mantener un palet cargado no consume ese plazo. No se autoapaga por inactividad durante OTA.
 - El evento conserva el estado de fotocélula y la fecha/hora de su detección filtrada. La resolución temporal sigue siendo de un segundo; no se trata de una captura hardware con precisión de milisegundos.
 - Supervisión de batería cada segundo, validez por canal y recuperación del ADC. Un error de medida no se interpreta como una batería retirada. La última medida queda en caché y DIAG indica si es válida.
 - El 5 % queda como aviso. El corte utiliza tensión confirmada, evitando dos umbrales de corte contradictorios.
@@ -503,3 +503,44 @@ La cadencia es no bloqueante y mantiene la aritmética de millis() ante desborda
 El ciclo de trabajo del LED es 3,33 %; esto reduce el tiempo encendido del LED, no implica
 esa misma mejora de autonomía del conjunto. La app 1.3.21 muestra el nuevo patrón
 para firmware 3.0.12 o posterior y mantiene la luz fija para las versiones anteriores.
+
+## Restaurar la configuración de fábrica
+
+En la app de mantenimiento, abre **TERMINAL → PIN / ACCESS**, autoriza el PIN y pulsa
+**Restore factory defaults**. El PLC solo acepta esta operación por la conexión BLE
+de mantenimiento autorizada cuando está en reposo y la cola de lecturas está vacía.
+
+| Ajuste | Estándar IDAUT |
+|---|---|
+| Lector | Prefijos `P` (palet) y `U` (ubicación), espera de 2 s |
+| Altura y apagado | Altura desactivada y apagado por inactividad a los 60 min |
+| Red | Wi-Fi desactivado y DHCP. Valores para modo estático: IP `192.168.0.213`, puerta de enlace `192.168.0.1` y máscara `255.255.255.0` |
+| TCP | Servidor `192.168.0.118:51236`, ACK y heartbeat desactivados, intervalo de 10 s, timeout de 20 s y mensajes `PING` / `PONG` |
+| Tramas | Sin marca de tiempo en BLE ni TCP |
+| HID | Palet → Enter → Ubicación → Enter, teclado ES, sin teclas iniciales, atajo Ctrl + Alt + L, velocidad Normal y pausa Off |
+
+Se conservan las credenciales Wi-Fi, el ID, el reloj, los vínculos Bluetooth, el receptor HID
+y los contadores. Las lecturas pendientes deben entregarse antes de restaurar. El monitor serie
+muestra `FACTORY RESTORE OK` al completar la operación desde la app.
+
+## Modo maniobra
+
+`AUTOREAD?` consulta el estado. `AUTOREAD=0` pausa la lectura automática
+y `AUTOREAD=1` la reanuda. Usa texto ASCII con CRLF por FFE1. Los CLIENT
+registrados y el receptor HID asignado pueden cambiarlo por su conexión
+segura. En BLE de mantenimiento el cambio requiere autorizar el PIN.
+La app muestra el estado y los controles en **Device status**.
+
+El PLC responde `<ACK>AUTOREAD=0<CR><LF>` o
+`<ACK>AUTOREAD=1<CR><LF>`. Con `ERR=AUTOREAD_BUSY`, espera a que
+termine la operación en curso y reintenta antes de mover el palet.
+La pausa mantiene la detección, los contadores y la inactividad de la
+fotocélula. Las lecturas manuales y la entrega de eventos anteriores
+siguen disponibles. La siguiente transición de fotocélula tras reanudar
+dispara la lectura. El estado se conserva al reiniciar y la restauración
+de fábrica vuelve a activar la lectura automática.
+
+Con el enlace requerido disponible, el LED en pausa hace un destello largo
+de **1 s encendido y 2 s apagado**. Fallo, batería, OTA y falta de enlace
+tienen prioridad. El monitor serie indica `AUTOREAD PAUSED` y
+`AUTOREAD RESUMED` al confirmar cada cambio.

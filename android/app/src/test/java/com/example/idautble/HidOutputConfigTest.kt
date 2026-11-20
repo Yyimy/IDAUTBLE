@@ -4,6 +4,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HidOutputConfigTest {
+    @Test fun orderAndTimingRoundTripAndPreviewMatchesOutput() {
+        val config = HidOutputConfig(locationFirst = true, reportMs = 20, navigationPauseMs = 100)
+        assertTrue(config.wire().endsWith(";ORDER=UP;TIMING=20,100"))
+        assertEquals(config, parseHidOutputConfig(config.wire()))
+        assertEquals("LOC01{TAB}PALLET123{ENTER}", config.preview())
+        assertEquals("PALLET123{ENTER}", config.copy(fields = "P").preview())
+        assertEquals(HidOutputConfig(), parseHidOutputConfig(config.wire(includeOutputOptions = false)))
+        val longest = config.copy(prefix = "\t".repeat(32), separator = "\n".repeat(32),
+            ending = "\t".repeat(32), hotkey = "CTRL+ALT+SHIFT+F12")
+        assertEquals(longest, parseHidOutputConfig(longest.wire()))
+        for (invalid in listOf(";ORDER=UP", ";TIMING=20,100", ";ORDER=U;TIMING=20,100",
+            ";ORDER=UP;TIMING=0,100", ";ORDER=UP;TIMING=20,99", ";ORDER=UP;TIMING=20,100,0")) {
+            assertNull(parseHidOutputConfig(HidOutputConfig().wire() + invalid))
+        }
+    }
+
     @Test fun finalSequenceRoundTripsAndFollowsLastField() {
         val config = HidOutputConfig(ending = "\t\n\n")
         assertEquals("PALLET123{TAB}LOC01{TAB}{ENTER}{ENTER}", config.preview())

@@ -10,6 +10,10 @@ base = runpy.run_path(str(here/'test_logic.py'))
 source = base['source']
 body = base['body'].split('int main(){', 1)[0]
 body = body.replace('bool gOtaAbort=false,gOtaTaskHandle=false;', 'bool gOtaAbort=false;void *gOtaTaskHandle=nullptr;')
+body = body.replace(
+    'void powerCut(const char* reason){gCutRequested=true;cutReason=reason;}',
+    'void powerCut(const char*);',
+)
 version = re.search(r'#define FIRMWARE_VERSION "[^"\n]+"', source).group()
 body = re.sub(r'#define FIRMWARE_VERSION "[^"\n]+"', version, body)
 body = body.replace('String authReply;bool authReplyOk=false;void replyLine(bool ok,const String&text){authReplyOk=ok;authReply=text;}', 'String authReply;bool authReplyOk=false;static void replyLine(bool,const String&);')
@@ -27,7 +31,8 @@ int xQueueReceive(int,BleCmd*c,int){if(commands.empty())return 0;*c=commands.fro
 int xQueueSend(int,const BleCmd*c,int){if(commands.size()>=8)return 0;commands.push_back(*c);return 1;}
 bool gWifiEnabled=true,gWifiConnected=true,gTcpConnectedPrev=false;
 TcpConnState gTcpState=TCP_IDLE;
-uint32_t gLastTcpAttempt=0,gLastTcpActivity=0,gLastTcpRxMs=0,gLastTcpPingMs=0;
+bool gTcpConnectFailureReported=false;
+uint32_t gLastTcpAttempt=0,gLastTcpActivity=0;
 constexpr uint32_t TCP_RETRY_MS=3000;constexpr uint16_t TCP_CONNECT_TIMEOUT_MS=200;
 constexpr int WL_CONNECTED=3;const char*NVS_NS_NET="net3";
 bool cfgParseSet(const String&,String&a,String&b){a="]d1";b="]Q1";return true;}bool cfgSave(const String&,const String&){return true;}
@@ -36,8 +41,9 @@ struct IpMock{String toString(){return "192.0.2.22";}};
 struct WifiMock{bool linked=true;int status(){return linked?WL_CONNECTED:0;}IpMock localIP(){return{};}int RSSI(){return -45;}void disconnect(bool) {linked=false;}}WiFi;
 std::atomic<uint8_t> gOtaPct{0};bool gOtaParamsReady=false;
 bool gCutConfirmed=false;uint32_t gEventLastAttempt=0,gEventOverflow=0;
-char gCutReason[40]="";
-uint32_t gBootCount=12,gPonTotal=1540,gPalCargado=320,gPalDescargado=319,gLecturasFallidas=8;
+char gCutReason[96]="";
+uint32_t gCutRequestedMs=0,gLastCutAttemptMs=0;
+uint32_t gPonTotal=1540,gPalCargado=320,gPalDescargado=319,gLecturasFallidas=8;
 int countersMux=0,locks=0;void portENTER_CRITICAL(int*){++locks;}void portEXIT_CRITICAL(int*){--locks;}
 void rtcUpdateCacheIfNeeded(){}
 void netSave(){}void wifiStartFromConfig(){}
@@ -51,10 +57,19 @@ uint32_t hidGeneration=0;
 ShortcutPeer shortcutReceiver(){return {hidGeneration};}
 void sendHotkey(ShortcutPeer){replyLine(true,"HIDHOTKEY=CTRL+ALT+L");}
 }
+namespace factoryRestore {
+int calls=0;
+esp_err_t run(bool){++calls;return ESP_OK;}
+}
+namespace plcHid {
+bool outputBusyForRestore(){return false;}
+void applyFactoryOutput(){}
+}
+bool gNetworkRestorePending=false;
 void sendDeviceStatus(){replyLine(true,"STATUS=1;FW=TEST;ID=TRUCK-1");}
 void handleIdentityCommand(const String&,uint8_t){replyLine(true,"ID=TRUCK-1;HWID=AABBCCDDEEFF;NAME=TRUCK-1");}
 '''
-names = ['sendCounters','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','tcpTextCommandType','cfgSendOk','cfgSendErr','cfgSendCurrent','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','eventTick']
+names = ['sendCounters','handleAutoRead','handleRestoreDefaults','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','cfgSendOk','cfgSendErr','cfgSendCurrent','tcpAdvancedValues','setReaderTimeout','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendOff','powerCut','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','tcpWatchdog','eventTick']
 body += extra+'\n'+'\n'.join(base['function'](n).split('{',1)[0]+';' for n in names)+'\n'
 body += '\n'.join(base['function'](n) for n in names)
 body += r'''
@@ -71,12 +86,65 @@ void fresh(){drain();commands.clear();txQueue.clear();characteristic.notificatio
  gTcpClient.sent.clear();gTcpClient.rx.clear();gTcpClient.up=gTcpConnected=true;gTcpClient.limit=1000;gTcpClient.blockedCalls=0;
  deviceConnected=gBleSecure=true;gCccd->enabled=true;gBleSession=10;gTcpSession=20;gOtaBleSession=10;
  gOtaTaskHandle=nullptr;gOtaState=OTA_IDLE;gMaintenanceAuthorized=false;gMaintenancePin=PLC_MAINTENANCE_PIN;gAuthFails=0;gAuthBlockedUntil=0;gReplyContext={TX_BOTH,0};
- gWifiEnabled=gWifiConnected=true;gAckMode=false;gHeartbeatEnabled=false;gOutbox={};gOutbox.nextId=1;gOutboxDirty=false;gEventInFlight=false;gEventLastAttempt=0;
+ gWifiEnabled=gWifiConnected=true;gAckMode=false;gFrameTimes=ALL_FRAME_TIMES;gHeartbeatEnabled=false;gOutbox={};gOutbox.nextId=1;gOutboxDirty=false;gEventInFlight=false;gEventLastAttempt=0;
  resetScanner();gFotoLista=true;PaletCargado=false;gRtcIso="2026-11-03T10:43:38";gId="TRUCK-1";gNivelBat4="4647";nowMs+=1000;
 }
 BleCmd cmd(BleCmdType type,uint8_t origin,const char*text=""){BleCmd c={};c.type=type;c.source=origin;c.session=origin==CMD_SOURCE_CLIENT?plcHid::clientSession():origin?gTcpSession.load():gBleSession.load();c.receivedMs=nowMs;strlcpy(c.payload,text,sizeof(c.payload));return c;}
 void run(BleCmd c){commands.push_back(c);bleProcessPendingOnce();}
 int main(){
+ fresh();gAutomaticReading=true;
+ run(cmd(BLECMD_AUTOREAD,0,"0"));drain();
+ CHECK(gAutomaticReading&&bleBytes().find("ERR=AUTOREAD_AUTH")!=std::string::npos);
+ fresh();plcHid::clientGeneration=30;
+ run(cmd(BLECMD_AUTOREAD,CMD_SOURCE_CLIENT,"0"));drain();
+ CHECK(!gAutomaticReading&&clientBytes().find("AUTOREAD=0")!=std::string::npos&&bleBytes().empty());
+ runtimeLoad();CHECK(!gAutomaticReading);
+ fresh();plcHid::hidGeneration=10;
+ auto resume=cmd(BLECMD_AUTOREAD,CMD_SOURCE_HID,"1");resume.session=10;run(resume);drain();
+ CHECK(gAutomaticReading&&bleBytes().find("AUTOREAD=1")!=std::string::npos);
+ fresh();run(cmd(BLECMD_AUTOREAD,1,"0"));drain();
+ CHECK(gAutomaticReading&&gTcpClient.sent.empty());
+ storedUIntSettings.erase("auto_read");
+ fresh();
+ run(cmd(BLECMD_TEXT,0,"RESTOREDEFAULTS"));drain();
+ CHECK(factoryRestore::calls==0&&bleBytes().find("ERR=RESTORE_AUTH")!=std::string::npos);
+ fresh();
+ run(cmd(BLECMD_TEXT,0,"AUTH=123456"));drain();
+ gOutbox.count=1;
+ run(cmd(BLECMD_TEXT,0,"RESTOREDEFAULTS"));drain();
+ CHECK(factoryRestore::calls==0&&gOutbox.count==1&&bleBytes().find("ERR=RESTORE_PENDING")!=std::string::npos);
+ gOutbox.count=0;
+ run(cmd(BLECMD_TEXT,0,"RESTOREDEFAULTS"));drain();
+ CHECK(factoryRestore::calls==1&&bleBytes().find("RESTOREDEFAULTS=OK")!=std::string::npos);
+ CHECK(!gWifiEnabled&&gNetMode==NETMODE_DHCP&&gNetPort==51236&&gNetHost=="192.168.0.118");
+ CHECK(gPfxPalet=="P"&&gPfxUbic=="U"&&gIdleMinutes==60&&gFrameTimes==0);
+ gPfxPalet="]d1";gPfxUbic="]Q1";
+ // BLE and TCP select independently, including simultaneous client notifications.
+ for (uint8_t flags : {0, 1, 2, 3}) {
+  fresh();gFrameTimes=flags;plcHid::clientGeneration=30;gTcpClient.limit=2;
+  const std::string full="\x06" "2026-11-03T10:43:38" "\x02" "TRUCK-1\x1b-\x1b-\x1b-\x1bP\x1bU\x1b\x03";
+  const std::string shortFrame=full.substr(0,1)+full.substr(20);
+  queueFrame((const uint8_t*)full.data(),full.size(),nullptr);drain();
+  CHECK(gTcpClient.sent==((flags&TCP_FRAME_TIME)?full:shortFrame));
+  CHECK(bleBytes()==((flags&BLE_FRAME_TIME)?full:shortFrame));
+  CHECK(clientBytes()==bleBytes());
+  gTcpClient.sent.clear();characteristic.notifications.clear();
+  gAckMode=true;gOutbox.count=1;auto &event=gOutbox.items[0];
+  event.id=42;event.len=full.size();memcpy(event.frame,full.data(),event.len);
+  eventTick();drain();
+  const std::string expected="EVT=42\r\n"+((flags&TCP_FRAME_TIME)?full:shortFrame);
+  CHECK(gTcpClient.sent==expected&&gOutbox.count==1);
+  gTcpClient.sent.clear();eventTick();drain();CHECK(gTcpClient.sent==expected);
+  gMaintenanceAuthorized=true;
+  const std::string changeTcp="RTCFRAME="+std::to_string(flags^TCP_FRAME_TIME);
+  run(cmd(BLECMD_TEXT,0,changeTcp.c_str()));drain();
+  CHECK(bleBytes().find("ERR=RTCFRAME_PENDING")!=std::string::npos&&gFrameTimes==flags);
+ }
+ fresh();run(cmd(BLECMD_TEXT,0,"RTCFRAME=1"));drain();
+ CHECK(bleBytes().find("ERR=RTCFRAME_AUTH")!=std::string::npos&&gFrameTimes==ALL_FRAME_TIMES);
+ fresh();gMaintenanceAuthorized=true;run(cmd(BLECMD_TEXT,0,"RTCFRAME=1"));drain();
+ CHECK(bleBytes().find("RTCFRAME=1")!=std::string::npos&&storedUIntSettings["frame_times"]==1);
+ runtimeLoad();CHECK(gFrameTimes==1);storedUIntSettings.erase("frame_times");
  // Both links are live: queries, handshakes and configuration ACKs stay with their requester.
  for(uint8_t origin:{0,1}){
   for(const char*q:{"INFO?","STATUS?","COUNTERS?","DIAG?","ID?"}){
@@ -93,6 +161,55 @@ int main(){
  fresh();run(cmd(BLECMD_TEXT,0,"AUTH=123456"));drain();CHECK(gTcpClient.sent.empty());CHECK(bleBytes().find("AUTH=OK")!=std::string::npos);
  fresh();gMaintenanceAuthorized=true;run(cmd(BLECMD_CFG_SET,0,"CFG=PFXP=PAL;PFXU=LOC"));drain();CHECK(gTcpClient.sent.empty());CHECK(bleBytes().find("OK")!=std::string::npos);
  fresh();run(cmd(BLECMD_NET_SET,1,"NET=PORT=9000"));drain();CHECK(bleBytes().empty());CHECK(gTcpClient.sent.find("ERR=AUTH_REQUIRED")!=std::string::npos);
+ // Settings are maintenance-only. A power-cut request reports its reason before legacy OFF.
+ fresh();gMaintenanceAuthorized=false;run(cmd(BLECMD_TEXT,0,"IDLEMIN=3"));drain();
+ CHECK(bleBytes().find("ERR=IDLE_AUTH")!=std::string::npos);
+ fresh();gMaintenanceAuthorized=true;run(cmd(BLECMD_TEXT,0,"IDLEMIN=0"));drain();
+ CHECK(bleBytes().find("ERR=IDLE_INVALID")!=std::string::npos);
+ fresh();gMaintenanceAuthorized=true;run(cmd(BLECMD_TEXT,0,"IDLEMIN=3"));drain();
+ CHECK(bleBytes().find("IDLEMIN=3")!=std::string::npos);
+ CHECK(storedUIntSettings["idle_min"]==3&&gIdleMinutes==3&&lastFotoActivaMs>0);
+ fresh();powerCut("INACTIVITY_3_MIN");drain();
+ CHECK(bleBytes().find("OFFREASON=INACTIVITY_3_MIN")<bleBytes().find("OFF\r\n"));
+ CHECK(gTcpClient.sent.find("OFFREASON=INACTIVITY_3_MIN")<gTcpClient.sent.find("OFF\r\n"));
+ CHECK(storedSettings["last_cut"]=="INACTIVITY_3_MIN");
+ gCutRequested=false;runtimeLoad();CHECK(gLastCutReason=="INACTIVITY_3_MIN");
+ storedUIntSettings.erase("idle_min");storedSettings.erase("last_cut");runtimeLoad();
+ // History is a maintenance-only response, including while a client and TCP are present.
+ fresh();plcHid::clientGeneration=31;run(cmd(BLECMD_TEXT,0,"HISTORY?"));drain();
+ CHECK(bleBytes().find("HISTORY=")!=std::string::npos);
+ CHECK(bleBytes().find("INACTIVITY_3_MIN")!=std::string::npos);
+ CHECK(clientBytes().empty()&&gTcpClient.sent.empty());
+ fresh();run(cmd(BLECMD_TEXT,1,"HISTORY?"));drain();
+ CHECK(tcpTextCommandType("HISTORY?")==BLECMD_NONE);
+ CHECK(gTcpClient.sent.empty()&&bleBytes().empty());
+ // Diagnostic pages and TCP snapshots are bounded and stay with maintenance.
+ fresh();gDiagnosticHistory=DiagnosticHistory{};
+ for(int i=0;i<12;++i)recordDiagnostic("TCP_CONNECTED");
+ run(cmd(BLECMD_TEXT,0,"HISTORY?=0"));drain();
+ CHECK(bleBytes().find("HISTORYPAGE=5|12,")!=std::string::npos);
+ fresh();recordDiagnostic("PONG_TIMEOUT");run(cmd(BLECMD_TEXT,0,"HISTORY?=5"));drain();
+ CHECK(bleBytes().find("HISTORYPAGE=0|4,")!=std::string::npos);
+ fresh();gTcpClient.rx="ACK=42\r\n";tcpPollRx();commands.clear();plcHid::clientGeneration=31;
+ run(cmd(BLECMD_TEXT,0,"TCPTRACE?"));drain();
+ CHECK(bleBytes().find("TCPTRACE=")!=std::string::npos&&bleBytes().find(",R,ACK=42")!=std::string::npos);
+ CHECK(clientBytes().empty()&&gTcpClient.sent.empty());
+ CHECK(tcpTextCommandType("TCPTRACE?")==BLECMD_NONE);
+ fresh();gDiagnosticHistory=DiagnosticHistory{};gRtcIso="2026-11-12T14:41:23";
+ for(int i=0;i<7;++i)recordDiagnostic("TCP_CONNECTED");
+ run(cmd(BLECMD_TEXT,0,"HISTORYTIME?=0"));drain();
+ CHECK(bleBytes().find("HISTORYPAGE=2|7,")!=std::string::npos);
+ CHECK(bleBytes().find(",TCP_CONNECTED,2026-11-12T14:41:23")!=std::string::npos);
+ // A custom heartbeat remains line-framed, and only the expected reply refreshes it.
+ fresh();gMaintenanceAuthorized=true;run(cmd(BLECMD_TEXT,0,"TCPADV=1,0,10,20,31,30"));drain();
+ CHECK(bleBytes().find("TCPADV=1,0,10,20,31,30")!=std::string::npos);
+ gLastTcpPingMs=nowMs-10001;gLastTcpRxMs=nowMs;gTcpClient.sent.clear();tcpWatchdog();drain();
+ CHECK(gTcpClient.sent=="1\r\n");
+ auto prior=gLastTcpRxMs;gTcpClient.rx="PONG\r\n";tcpPollRx();CHECK(gLastTcpRxMs==prior);
+ gTcpClient.rx="0\r\n";tcpPollRx();CHECK(gLastTcpRxMs>prior);
+ CHECK(gTcpHeartbeatTrace.newest(0).direction=='R');
+ gHeartbeatEnabled=false;gHeartbeatMessages=HeartbeatMessages{"PING","PONG"};
+ storedBlobs.erase("tcp_adv2");
  // Automatic NETSTAT remains useful to BLE but does not add traffic to the server.
  fresh();netSendStatus(true);drain();CHECK(gTcpClient.sent.empty());CHECK(bleBytes().find("NETSTAT=")!=std::string::npos);
  // Counter snapshots are read-only, bounded and unsigned, including a full outbox.
@@ -173,10 +290,30 @@ int main(){
  CHECK(commands[0].type==BLECMD_NETSTAT_GET&&commands[0].session==gTcpSession);bleProcessPendingOnce();bleProcessPendingOnce();drain();
  CHECK(bleBytes().empty());CHECK(gTcpClient.sent.find("NETSTAT=")!=std::string::npos);CHECK(gTcpClient.sent.find("FW=")!=std::string::npos);
  CHECK(tcpTextCommandType("STATUS?")==BLECMD_TEXT);CHECK(tcpTextCommandType("NET=PORT=1")==BLECMD_NONE);CHECK(tcpTextCommandType("WIFI=0")==BLECMD_NONE);CHECK(tcpTextCommandType("AUTH=123456")==BLECMD_NONE);
+ // Server replies and outage diagnostics stay on the BLE maintenance session.
+ fresh();gTcpMonitor=TcpMonitor{};gTcpMonitor.connected(nowMs);
+ plcHid::clientGeneration=31;gTcpClient.rx="PONG\r\nACK=42\r\n";tcpPollRx();commands.clear();
+ gHeartbeatEnabled=true;gLastTcpRxMs=nowMs-21000;tcpWatchdog();
+ CHECK(!gTcpClient.up);CHECK(std::string(gTcpMonitor.disconnectReason)=="PONG_TIMEOUT");
+ netSendStatus(true);drain();
+ CHECK(bleBytes().find("TCPMON=1")!=std::string::npos);
+ CHECK(bleBytes().find("TCPDOWN=PONG_TIMEOUT,")!=std::string::npos);
+ CHECK(bleBytes().find(",41434B3D3432|")!=std::string::npos);
+ CHECK(bleBytes().find(",504F4E47")!=std::string::npos);
+ CHECK(clientBytes().empty()&&gTcpClient.sent.empty());
+ gHeartbeatEnabled=false;
  // Neither partial text nor binary bytes from an old socket can become a new command.
  fresh();gTcpClient.rx="STA";tcpPollRx();++gTcpSession;gTcpClient.rx="TUS?\n";tcpPollRx();CHECK(commands.empty());
  gTcpClient.rx="INFO?\n";tcpPollRx();CHECK(commands.size()==1);commands.clear();
  gTcpClient.rx=std::string("\x1b\x42",2);tcpPollRx();++gTcpSession;gTcpClient.rx="\r\n";tcpPollRx();CHECK(commands.empty());
+ // Initial socket failures appear in the trace without flooding it on retries.
+ fresh();gTcpClient.up=gTcpConnected=false;gTcpState=TCP_IDLE;gTcpClient.connectOk=false;
+ gTcpConnectFailureReported=false;nowMs+=4000;tcpConnectTick();
+ CHECK(std::string(gTcpTraffic.newest(0).detail)=="CONNECT_FAILED");
+ auto failedSeq=gTcpTraceSequence;nowMs+=4000;tcpConnectTick();tcpConnectTick();
+ CHECK(gTcpTraceSequence==failedSeq);
+ gTcpClient.connectOk=true;nowMs+=4000;tcpConnectTick();tcpConnectTick();drain();
+ CHECK(!gTcpConnectFailureReported&&gTcpConnected);
  // Queue pressure cannot silently establish a connection without its greeting.
  fresh();gTcpClient.up=gTcpConnected=false;gTcpState=TCP_IDLE;gLastTcpAttempt=0;
  for(int i=0;i<24;++i){TxPacket p={};txQueue.push_back(p);}tcpConnectTick();CHECK(!gTcpConnected&&!gTcpClient.up);txQueue.clear();
