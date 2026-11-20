@@ -117,12 +117,12 @@ internal fun validHidHotkey(value: String) = value == "NONE" || hidHotkeyPattern
 
 private fun hidOutputCharacter(c: Char) = c == '\t' || c == '\n' || c.code in 32..126
 
-private fun encodeHidSequence(bytes: String): String {
+internal fun encodeHidSequence(bytes: String): String {
     require(bytes.length <= HID_SEPARATOR_LIMIT && bytes.all { hidOutputCharacter(it) || it in hidTokensByByte })
     return if (bytes.isEmpty()) "-" else bytes.map { "%02X".format(it.code) }.joinToString("")
 }
 
-private fun decodeHidSequence(hex: String): String? {
+internal fun decodeHidSequence(hex: String): String? {
     if (hex == "-") return ""
     if (hex.isEmpty() || hex.length > HID_SEPARATOR_LIMIT * 2 || hex.length % 2 != 0 ||
         !hex.all { it in '0'..'9' || it in 'A'..'F' }) return null
@@ -191,3 +191,4 @@ fun parseHidOutputConfig(text: String): HidOutputConfig? {
         prefix, hotkey, order == "UP", reportMs, pauseMs)
     return runCatching { result.wire(); result }.getOrNull()
 }
+

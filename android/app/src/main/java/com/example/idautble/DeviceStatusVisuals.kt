@@ -14,7 +14,7 @@ fun ledStatusTone(mode: String, fresh: Boolean): StatusTone =
     else
         when (mode) {
             "READY" -> StatusTone.GOOD
-            "DISCONNECTED",
+            "DISCONNECTED", "CC_INTERRUPTED",
             "BAT_LOW" -> StatusTone.WARNING
             "BAT_CRITICAL",
             "ERROR" -> StatusTone.FAULT
@@ -47,6 +47,8 @@ fun ledPreviewOn(mode: String, elapsedMs: Long, fresh: Boolean, firmware: String
         "ERROR" -> elapsed % 400 < 200
         "OTA" -> elapsed % 1000 < 800
         "MANOEUVRE" -> elapsed % 3000 < 1000
+        "CC_INTERRUPTED" -> elapsed % 2500 < 100 ||
+            elapsed % 2500 in 200..299 || elapsed % 2500 in 400..499
         else -> false
     }
 }

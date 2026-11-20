@@ -459,6 +459,8 @@ static int lecturaAnteriorRaw = HIGH;  // SOLO para debounce (lectura cruda)
 
 static uint32_t gIdleMinutes = factoryDefaults::idleMinutes;
 static bool gAutomaticReading = true;
+static bool gWorkCc = false;
+static bool gCcInterrupted = false;
 static constexpr uint8_t BLE_FRAME_TIME = 1;
 static constexpr uint8_t TCP_FRAME_TIME = 2;
 static constexpr uint8_t ALL_FRAME_TIMES = BLE_FRAME_TIME | TCP_FRAME_TIME;
@@ -551,7 +553,7 @@ static void handleIdentityCommand(const String &s, uint8_t source);
 #define BATTERY_CUT_ONLY_WHEN_ALL_LOW 0
 #define MAX_FRAME_BYTES 512
 #define OUTBOX_CAPACITY 8
-#define FIRMWARE_VERSION "3.0.26-rc1"
+#define FIRMWARE_VERSION "3.0.26-rc1-pcc-cc"
 
 static QueueHandle_t gTxQueue = nullptr;
 static uint32_t gTxDropped = 0, gEventOverflow = 0, gScanOverflow = 0;
@@ -2481,6 +2483,16 @@ static void bleProcessPendingOnce() {
     replyLine(false, "ERR=NOT_IDLE");
     return;
   }
+  if (gWorkCc && ((cmd.source == CMD_SOURCE_CLIENT && isClientReading(cmd.type)) ||
+      cmd.type == BLECMD_D || cmd.type == BLECMD_I ||
+      (cmd.type == BLECMD_L && cmd.source == 1))) {
+    replyLine(false, "ERR=CC_HID_ONLY");
+    return;
+  }
+  if (gWorkCc && cmd.type == BLECMD_L && (gScanActive || gScanCount || plcHid::ccBusy())) {
+    replyLine(false, cmd.source == CMD_SOURCE_HID ? "ERR=HIDREAD_BUSY" : "ERR=HIDCC_BUSY");
+    return;
+  }
   if (cmd.type == BLECMD_L || cmd.type == BLECMD_A || cmd.type == BLECMD_D ||
       cmd.type == BLECMD_I) {
     enqueueCommandScan(cmd);
@@ -2836,13 +2848,16 @@ static inline void updateLedMode() {
   } else if (gOtaTaskHandle || gOtaState != OTA_IDLE) {
     gLedMode = LED_OTA;
     gLedReason = "OTA_ACTIVE";
+  } else if (gWorkCc && gCcInterrupted) {
+    gLedMode = LED_CC_INTERRUPTED;
+    gLedReason = "CC_HID_INTERRUPTED";
   } else {
-    const bool ready = gWifiEnabled
+    const bool ready = gWorkCc ? plcHid::keyboardReady() : gWifiEnabled
                            ? (gTcpConnected && gTcpClient.connected())
                            : (bleCanNotify() || plcHid::keyboardReady());
     gLedMode = ready ? (gAutomaticReading ? LED_READY : LED_MANOEUVRE) : LED_DISCONNECTED;
     gLedReason = ready ? (gAutomaticReading ? "LINK_READY" : "AUTOREAD_PAUSED")
-                       : (gWifiEnabled ? "TCP_REQUIRED" : "BLE_REQUIRED");
+                       : (gWorkCc ? "HID_REQUIRED" : (gWifiEnabled ? "TCP_REQUIRED" : "BLE_REQUIRED"));
   }
 }
 
@@ -2853,6 +2868,10 @@ static bool ledPatternOn(LedMode mode, uint32_t dt) {
       return dt % 3000 < 100;  // READY: 100 ms ON, 2900 ms OFF.
     case LED_MANOEUVRE:
       return dt % 3000 < 1000;
+    case LED_CC_INTERRUPTED: {
+      const uint32_t t = dt % 2500;
+      return t < 100 || (t >= 200 && t < 300) || (t >= 400 && t < 500);
+    }
     case LED_DISCONNECTED:
       return dt % 1000 < 500;
     case LED_BAT_LOW: {
@@ -3468,6 +3487,11 @@ static void runtimeLoad() {
   gOtaApPass = PLC_OTA_WIFI_PASSWORD;
   OTA_AP_PASS = PLC_OTA_WIFI_PASSWORD;
   gAutomaticReading = p.getUInt("auto_read", 1) != 0;
+  gWorkCc = p.getUInt("work_cc", 0) == 1;
+  const size_t ccSize = p.getBytesLength("cc_format");
+  char ccText[384] = {};
+  if (ccSize && ccSize < sizeof(ccText) && p.getBytes("cc_format", ccText, ccSize) == ccSize)
+    cc::parseConfig(ccText, plcHid::ccFormat);
   gAckMode = p.getBool("ack", false);
   gHeartbeatEnabled = p.getBool("heartbeat", false);
   const uint32_t frameTimes = p.getUInt("frame_times", factoryDefaults::frameTimes);
@@ -3546,7 +3570,7 @@ static void sendDeviceStatus() {
   updateLedMode();  // Same decision as the physical LED, including hysteresis.
   const uint32_t now = millis();
   const char *modes[] = {"READY", "DISCONNECTED", "BAT_LOW",
-                         "BAT_CRITICAL", "ERROR", "OTA", "MANOEUVRE"};
+                         "BAT_CRITICAL", "ERROR", "OTA", "MANOEUVRE", "CC_INTERRUPTED"};
   String d;
   d.reserve(460);
   d = "STATUS=1;FW=" FIRMWARE_VERSION ";ID=" + gId;
@@ -3744,6 +3768,9 @@ static void handleRestoreDefaults(uint8_t source) {
   gPfxUbic = factoryDefaults::locationPrefix;
   gReaderTimeoutMs = DEFAULT_READER_TIMEOUT_MS;
   gAutomaticReading = true;
+  gWorkCc = false;
+  gCcInterrupted = false;
+  plcHid::ccFormat = {};
   gAlturaEnabled = false;
   gAltura = "-";
   gIdleMinutes = factoryDefaults::idleMinutes;
@@ -3772,8 +3799,60 @@ static void handleRestoreDefaults(uint8_t source) {
   replyLine(true, "RESTOREDEFAULTS=OK");
 }
 
+static bool handleCcSettings(const String &text, uint8_t source) {
+  const bool query = text == "HIDWORK?" || text == "HIDCCCFG?";
+  const bool modeWrite = text.startsWith("HIDWORK=");
+  const bool formatWrite = text.startsWith("HIDCCCFG=");
+  const bool acknowledge = text == "HIDCCALERT=0";
+  if (!query && !modeWrite && !formatWrite && !acknowledge) return false;
+  if (source != 0 || (!query && !maintenanceAuthorized())) {
+    replyLine(false, "ERR=HIDCC_AUTH");
+  } else if (text == "HIDWORK?") {
+    replyLine(true, String(gWorkCc ? "HIDWORK=CC" : "HIDWORK=PCC") +
+                    ";CCALERT=" + (gCcInterrupted ? "1" : "0"));
+  } else if (text == "HIDCCCFG?") {
+    replyLine(true, cc::wire(plcHid::ccFormat).c_str());
+  } else if (acknowledge) {
+    gCcInterrupted = false;
+    replyLine(true, "HIDCCALERT=0");
+  } else if (gCutRequested || gOtaTaskHandle || gOtaState != OTA_IDLE ||
+             gScanActive || gScanCount || plcHid::outputBusyForRestore() ||
+             (modeWrite && (gOutbox.count || gEventInFlight || gOutboxDirty))) {
+    replyLine(false, "ERR=HIDCC_BUSY");
+  } else if (modeWrite) {
+    if (text != "HIDWORK=CC" && text != "HIDWORK=PCC") {
+      replyLine(false, "ERR=HIDCC_INVALID");
+      return true;
+    }
+    const uint32_t value = text == "HIDWORK=CC" ? 1 : 0;
+    if (bool(value) != gWorkCc &&
+        !saveNvsSetting("runtime3", "work_cc", &value, sizeof(value), true, "work_cc")) {
+      replyLine(false, "ERR=HIDCC_STORAGE");
+      return true;
+    }
+    gWorkCc = value != 0;
+    replyLine(true, String(gWorkCc ? "HIDWORK=CC" : "HIDWORK=PCC") +
+                    ";CCALERT=" + (gCcInterrupted ? "1" : "0"));
+  } else {
+    cc::Config candidate;
+    if (!cc::parseConfig(text.c_str(), candidate)) {
+      replyLine(false, "ERR=HIDCC_INVALID");
+      return true;
+    }
+    const auto encoded = cc::wire(candidate);
+    if (!saveNvsSetting("runtime3", "cc_format", encoded.data(), encoded.size(), false, "cc_format")) {
+      replyLine(false, "ERR=HIDCC_STORAGE");
+      return true;
+    }
+    plcHid::ccFormat = candidate;
+    replyLine(true, encoded.c_str());
+  }
+  return true;
+}
+
 static void handleTextCommand(const BleCmd &cmd) {
   String s(cmd.payload);
+  if (handleCcSettings(s, cmd.source)) return;
   if (s == "RESTOREDEFAULTS") {
     handleRestoreDefaults(cmd.source);
     return;
@@ -3877,7 +3956,7 @@ static void handleTextCommand(const BleCmd &cmd) {
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
                         (cmd.source == 0 ? String(";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1;RESTOREDEFAULTS=1;READERTIMEOUT=") + String(gReaderTimeoutMs) +
-                         ";RTCFRAME=" + String(gFrameTimes) + ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1;HISTORYPAGE=1;HISTORYTIME=1;TCPTRACE=1" : String()));
+                         ";RTCFRAME=" + String(gFrameTimes) + ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1;HISTORYPAGE=1;HISTORYTIME=1;TCPTRACE=1;HIDCC=1" : String()));
     return;
   }
   if (s == "STATUS?") {
@@ -4373,6 +4452,17 @@ static void scanTick() {
         gReaderOverflow = true;
     }
     if (complete || millis() - gScanStarted >= gReaderTimeoutMs) {
+      if (gWorkCc && gCurrentScan.type == BLECMD_L) {
+        if (!complete || gReaderOverflow ||
+            !plcHid::startCc(gReaderBuffer.c_str(), gCurrentScan.hidSession)) {
+          countersIncLecturaFallida();
+          logLine("HID CC READING FAILED");
+          recordDiagnostic("HID_CC_READ_FAILED");
+        }
+        gScanActive = false;
+        gScanPhase = 0;
+        return;
+      }
       if (!complete || gReaderOverflow || !parseReaderFrame(gReaderBuffer)) {
         gCodPalet = "-";
         gCodUbic = "-";
@@ -4449,10 +4539,15 @@ static void photoTick() {
       j.event = true;
       j.photo = gFotoEstado;
       strlcpy(j.iso, gRtcIso.c_str(), sizeof(j.iso));
-      if (gAutomaticReading) outboxPush(frameForScan(j));
+      if (gAutomaticReading && !gWorkCc) outboxPush(frameForScan(j));
       replyLine(false, "ERR=MOVEMENT_DURING_OTA");
     } else if (gAutomaticReading) {
-      enqueueScan(BLECMD_L, true);
+      if (!gWorkCc || (!gScanActive && !gScanCount && !plcHid::ccBusy())) {
+        enqueueScan(BLECMD_L, true);
+      } else {
+        ++gScanOverflow;
+        logLine("HID CC BUSY: additional photocell event ignored");
+      }
     }
   }
   if (!gOtaTaskHandle && armadoInactividad && !PaletCargado &&
@@ -4739,3 +4834,4 @@ static void handleIdentityCommand(const String &s, uint8_t source) {
   // Se mantiene el enlace actual. Al volver a buscar se anuncia el nuevo ID.
   // PIN, bonds and HWID do not change. OTA SSID is refreshed at the next START.
 }
+

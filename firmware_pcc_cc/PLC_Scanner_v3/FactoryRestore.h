@@ -43,7 +43,7 @@ inline esp_err_t run(bool requested) {
   const char *const reader[] = {"pfxp", "pfxu"};
   const char *const network[] = {"mode", "ip", "gw", "mask", "host", "port", "wifi_en", "alt_en"};
   const char *const runtime[] = {"ack", "heartbeat", "tcp_adv", "tcp_adv2", "frame_times",
-                                "idle_min", "reader_ms", "auto_read"};
+                                "idle_min", "reader_ms", "auto_read", "work_cc", "cc_format"};
   const char *const hid[] = {"format"};
   const char *const journal[] = {journalKey};
   if ((error = eraseSettings("cfg", reader, sizeof(reader) / sizeof(reader[0]))) == ESP_OK &&
@@ -54,3 +54,4 @@ inline esp_err_t run(bool requested) {
   return error;
 }
 }
+
