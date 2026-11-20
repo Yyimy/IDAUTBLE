@@ -1,0 +1,39 @@
+IDAUT · Servidor TCP de pruebas para Windows
+=============================================
+
+Extrae el ZIP y abre Servidor_TCP_PLC.exe en Windows de 64 bits.
+
+1. Deja IP de escucha en 0.0.0.0 y pulsa Iniciar. El puerto por defecto
+   es 51236. Si Windows pide acceso de red, permite la red privada.
+2. En la app de mantenimiento, abre Network > TCP Server. Escribe la IPv4
+   del PC y el mismo puerto. 0.0.0.0 solo se usa en el PC para escuchar.
+   Ambos equipos deben poder comunicarse por la red local.
+3. Con el heartbeat del PLC activo, deja marcada Responder al heartbeat y
+   comprueba en el servidor RX PING / TX PONG. En TCP Monitor de la app
+   debería aparecer PONG.
+4. Desmarca Responder al heartbeat sin detener el servidor. Tras el timeout
+   configurado, la app debería mostrar PONG timeout. Vuelve a marcarlo
+   para comprobar la recuperación.
+5. Para probar ACK, marca Confirmar eventos en el servidor y activa
+   Event acknowledgement en el PLC. Ejecuta una lectura. El servidor
+   recibe EVT=<id> y después la trama binaria V2 completa. Tras guardarla
+   en SQLite, envía ACK=<id>. Comprueba que Pending events vuelve a 0.
+   Puedes pausar el ACK para probar un reenvío y después volver a marcarlo.
+
+Personalizar respuestas
+-----------------------
+Edita Mensaje recibido y Respuesta, y pulsa Aplicar respuestas. Los interruptores de pausa son
+inmediatos. El programa añade CRLF a las respuestas y al envío manual.
+El texto manual va al PLC conectado. El campo ACK usa {id} como marcador.
+El PLC reconoce PONG o PONG;<texto> y ACK=<id>. Otros valores permiten
+ensayar una respuesta inesperada. En el monitor del PLC las líneas largas
+se abrevian, mientras que el registro del servidor muestra el texto enviado.
+
+La base de datos se crea en %LOCALAPPDATA%\IDAUT\ServidorTCP\eventos.sqlite3.
+Un reenvío idéntico del mismo PLC e ID se confirma sin duplicar el registro.
+Si el mismo ID llega con una trama diferente, se registra un conflicto y se
+omite el ACK. El servidor atiende un PLC conectado cada vez. Una conexión nueva
+sustituye a la anterior, aunque el apagado del PLC la haya dejado abierta.
+
+Ejemplo de heartbeat personalizado: Mensaje recibido 1 y Respuesta 0.
+Usa los mismos valores en Network > Advanced Network Settings del PLC.
