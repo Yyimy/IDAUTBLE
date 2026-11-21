@@ -18,9 +18,6 @@ import androidx.compose.ui.unit.sp
 private val hidFields = mapOf("P" to "Pallet", "U" to "Location", "PU" to "Both")
 private val hidFieldOrders = mapOf(false to "Pallet → Location", true to "Location → Pallet")
 private val hidLayouts = mapOf("US" to "US", "ES" to "Spanish")
-private enum class HidSequence(val title: String) {
-    Prefix("Keys before the first code"), Separator("Separator between fields"), Ending("Keys after the last code"),
-}
 private val shortcutModifiers = listOf("CTRL" to "Ctrl", "ALT" to "Alt", "SHIFT" to "Shift")
 private val shortcutKeys = mapOf(
     "Letters" to ('A'..'Z').map(Char::toString),
@@ -30,8 +27,21 @@ private val shortcutKeys = mapOf(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Boolean, onAction: (HidOutputConfig?) -> Unit, expanded: Boolean, onToggle: () -> Unit, workModeControls: @Composable () -> Unit = {}) {
+internal fun HidOutputSection(
+    state: HidOutputState,
+    connected: Boolean,
+    production: Boolean,
+    onAction: (HidOutputConfig?) -> Unit,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    workMode: WorkModeState,
+    maintenanceAuthorised: Boolean,
+    onWorkModeAction: (String) -> Unit,
+) {
     if (!state.supported) return
+    val showPcc = !workMode.supported || workMode.mode == "PCC"
+    val showCc = workMode.mode == "CC"
+    val showKeyboardSettings = showPcc || showCc
     var fields by remember { mutableStateOf("PU") }
     var locationFirst by remember { mutableStateOf(false) }
     var reportMs by remember { mutableIntStateOf(30) }
@@ -41,9 +51,8 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
     var pattern by remember { mutableStateOf("{TAB}") }
     var endingPattern by remember { mutableStateOf("{ENTER}") }
     var layout by remember { mutableStateOf("US") }
-    var editingSequence by remember { mutableStateOf<HidSequence?>(null) }
     var editingShortcut by remember { mutableStateOf(false) }
-    LaunchedEffect(state.revision) {
+    LaunchedEffect(state.revision, showPcc) {
         state.config?.let {
             fields = it.fields
             locationFirst = it.locationFirst
@@ -62,19 +71,26 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
     val ending = decodeHidSeparator(endingPattern, allowArrows, state.extendedKeys)
     val endingValid = ending != null && (state.endingSequence || legacyHidEnding(ending, state.extendedKeys) != null)
     val hotkey = if (state.readHotkey) shortcut else "NONE"
-    val draft = if (prefix != null && separator != null && ending != null && endingValid && validHidHotkey(hotkey))
+    val draft = if (showCc) {
+        state.config?.copy(layout = layout, hotkey = hotkey, reportMs = reportMs)
+    } else if (prefix != null && separator != null && ending != null && endingValid && validHidHotkey(hotkey))
         HidOutputConfig(fields, separator, ending, layout, prefix, hotkey,
             state.outputOptions && locationFirst,
             if (state.outputOptions) reportMs else 30,
             if (state.outputOptions) navigationPauseMs else 0) else null
-    val enabled = connected && !state.busy
+    val enabled = connected && !state.busy && workMode.request == null
     CollapsibleSettingsSection(
         if (production) "HID OUTPUT" else "HID OUTPUT · PROTOTYPE",
-        "Pallet / location · keyboard format", expanded, onToggle,
+        when {
+            showCc -> "CC · Multiple codes"
+            workMode.supported -> workMode.mode ?: "Reading work mode"
+            else -> "Pallet / location · keyboard format"
+        }, expanded, onToggle,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            workModeControls()
-            HidSettingsGroup("Fields") {
+            WorkModeSection(workMode, connected && maintenanceAuthorised, onWorkModeAction)
+            if (!showKeyboardSettings) return@Column
+            if (showPcc) HidSettingsGroup("Fields") {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.selectableGroup()) {
                     hidFields.forEach { (value, label) ->
                         FilterChip(fields == value, { fields = value }, { Text(label) }, enabled = enabled)
@@ -84,16 +100,17 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
                     HidValueMenu(hidFieldOrders, locationFirst, enabled) { locationFirst = it }
                 }
             }
-            HidSettingsGroup("Prefixes, separators and suffixes") {
-                if (state.prefixKeys) HidSettingRow("Initial keys") {
-                    HidPickerButton(prefixPattern.ifEmpty { "None" }, enabled) { editingSequence = HidSequence.Prefix }
+            if (showPcc) HidSettingsGroup("Prefix, separator and suffix") {
+                if (state.prefixKeys) {
+                    HidSequenceField("Prefix", prefixPattern, enabled, allowArrows, state.extendedKeys) {
+                        prefixPattern = it
+                    }
                 }
-                HidSettingRow("Separator") {
-                    HidPickerButton(pattern.ifEmpty { "None" }, enabled && fields == "PU") { editingSequence = HidSequence.Separator }
+                HidSequenceField("Separator", pattern, enabled && fields == "PU", allowArrows, state.extendedKeys) {
+                    pattern = it
                 }
-                HidSettingRow("Final keys") {
-                    HidPickerButton(endingPattern.ifEmpty { "None" }, enabled) { editingSequence = HidSequence.Ending }
-                }
+                HidSequenceField("Suffix", endingPattern, enabled, allowArrows, state.extendedKeys,
+                    legacyEnding = !state.endingSequence) { endingPattern = it }
                 Text("Preview", style = MaterialTheme.typography.labelMedium)
                 Text(draft?.preview() ?: "Invalid key sequence", fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
@@ -106,7 +123,7 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
                 HidSettingRow("Typing speed") {
                     HidValueMenu(hidTypingSpeeds, reportMs, enabled) { reportMs = it }
                 }
-                HidSettingRow("Pause after Tab / Enter") {
+                if (showPcc) HidSettingRow("Pause after Tab / Enter") {
                     HidValueMenu(hidNavigationPauses, navigationPauseMs, enabled) { navigationPauseMs = it }
                 }
             }
@@ -116,36 +133,19 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
                 }
             }
         }
-        if (state.message.isNotBlank()) Text(state.message, fontSize = 11.sp)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            MaintenanceActionButton("Refresh", { onAction(null) }, MaintenanceActionTone.INFO, Modifier.weight(1f), enabled)
-            MaintenanceActionButton("Save format", { draft?.let(onAction) }, MaintenanceActionTone.SUCCESS,
-                Modifier.weight(1f), enabled && draft != null && state.config != null)
-        }
-        Text("Saving requires PIN / ACCESS.", fontSize = 11.sp)
-    }
-    val sequence = editingSequence
-    if (sequence != null && enabled) HidSequenceDialog(
-        title = sequence.title,
-        initial = when (sequence) {
-            HidSequence.Prefix -> prefixPattern
-            HidSequence.Separator -> pattern
-            HidSequence.Ending -> endingPattern
-        },
-        allowArrows = allowArrows,
-        extended = state.extendedKeys,
-        legacyEnding = sequence == HidSequence.Ending && !state.endingSequence,
-        onDismiss = { editingSequence = null },
-        onApply = {
-            when (sequence) {
-                HidSequence.Prefix -> prefixPattern = it
-                HidSequence.Separator -> pattern = it
-                HidSequence.Ending -> endingPattern = it
+        if (showKeyboardSettings) {
+            if (state.message.isNotBlank()) Text(state.message, fontSize = 11.sp)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                MaintenanceActionButton(if (showCc) "Refresh keyboard settings" else "Refresh",
+                    { onAction(null) }, MaintenanceActionTone.INFO, Modifier.weight(1f), enabled)
+                MaintenanceActionButton(if (showCc) "Save keyboard settings" else "Save format",
+                    { draft?.let(onAction) }, MaintenanceActionTone.SUCCESS, Modifier.weight(1f),
+                    enabled && draft != null && state.config != null)
             }
-            editingSequence = null
-        },
-    )
-    if (editingShortcut && enabled && state.readHotkey) HidShortcutDialog(shortcut, { editingShortcut = false }) {
+            Text("Saving requires PIN / ACCESS.", fontSize = 11.sp)
+        }
+    }
+    if (editingShortcut && enabled && state.readHotkey && showKeyboardSettings) HidShortcutDialog(shortcut, { editingShortcut = false }) {
         shortcut = it
         editingShortcut = false
     }
@@ -242,12 +242,45 @@ private fun <T> HidValueMenu(options: Map<T, String>, value: T, enabled: Boolean
 }
 
 @Composable
-private fun HidSequenceDialog(title: String, initial: String, allowArrows: Boolean, extended: Boolean, legacyEnding: Boolean, onDismiss: () -> Unit, onApply: (String) -> Unit) {
+internal fun HidSequenceField(
+    label: String,
+    pattern: String,
+    enabled: Boolean,
+    allowArrows: Boolean = true,
+    extended: Boolean = true,
+    legacyEnding: Boolean = false,
+    maxLength: Int = HID_SEPARATOR_LIMIT,
+    onChange: (String) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    HidSettingRow(label) {
+        HidPickerButton(pattern.ifEmpty { "None" }, enabled) { open = true }
+    }
+    if (open && enabled) {
+        HidSequenceDialog(label, pattern, allowArrows, extended, legacyEnding, maxLength, { open = false }) {
+            onChange(it)
+            open = false
+        }
+    }
+}
+
+@Composable
+private fun HidSequenceDialog(
+    title: String,
+    initial: String,
+    allowArrows: Boolean,
+    extended: Boolean,
+    legacyEnding: Boolean,
+    maxLength: Int,
+    onDismiss: () -> Unit,
+    onApply: (String) -> Unit,
+) {
     var draft by remember { mutableStateOf(initial) }
     var open by remember { mutableStateOf(false) }
     val decoded = decodeHidSeparator(draft, allowArrows, extended)
-    val valid = decoded != null && (!legacyEnding || legacyHidEnding(decoded, extended) != null)
-    val limit = if (legacyEnding) 1 else HID_SEPARATOR_LIMIT
+    val limit = if (legacyEnding) 1 else maxLength
+    val valid = decoded != null && decoded.length <= limit &&
+        (!legacyEnding || legacyHidEnding(decoded, extended) != null)
     val keys = hidSeparatorOptions(allowArrows, extended).filter {
         !legacyEnding || legacyHidEnding(decodeHidSeparator(it, allowArrows, extended).orEmpty(), extended) != null
     }
@@ -262,9 +295,9 @@ private fun HidSequenceDialog(title: String, initial: String, allowArrows: Boole
                     label = { Text("Sequence") },
                     supportingText = {
                         Text(when {
-                            legacyEnding -> "This firmware supports one final key."
-                            decoded == null -> "Use valid keys or ASCII text, up to $limit items."
-                            else -> "${decoded.length} / $limit keys or characters"
+                            legacyEnding -> "This firmware supports one suffix key."
+                            !valid -> "Use valid keys or ASCII text, up to $limit items."
+                            else -> "${decoded?.length} / $limit keys or characters"
                         })
                     },
                 )
