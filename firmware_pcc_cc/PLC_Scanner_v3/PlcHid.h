@@ -67,6 +67,8 @@ static PendingReading pending[pendingCapacity];
 static size_t pendingHead, pendingCount;
 static cc::Config ccFormat;
 static cc::Batch ccBatch;
+static std::string ccSubmittedCodes;
+static uint32_t ccReplySession;
 static probe::Token ccReceiver;
 static probe::Token ccTestOwner;
 static size_t ccIndex;
@@ -1057,7 +1059,8 @@ static bool shortcutEnabled(uint32_t session) {
   return session && shortcutReceiver().generation == session && outputFormat.hotkey != "NONE";
 }
 
-static const char *startCc(const char *line, uint32_t requestedSession, probe::Token testOwner);
+static const char *startCc(const char *line, uint32_t requestedSession, probe::Token testOwner,
+                           uint32_t replySession);
 
 static bool handle(const String &text, uint8_t source) {
   if (text == "MAINTBYE") {
@@ -1206,7 +1209,7 @@ static bool handle(const String &text, uint8_t source) {
       }
     }
   } else if (gWorkCc) {
-    if (!gScanActive && !gScanCount && !startCc("CC01;CC02;CC03", 0, owner))
+    if (!gScanActive && !gScanCount && !startCc("CC01;CC02;CC03", 0, owner, 0))
       replyLine(true, "HIDTEST=QUEUED");
     else replyLine(false, "ERR=HID_NOT_READY_OR_BUSY");
   } else {
@@ -1254,19 +1257,36 @@ static void setCcAlert(bool interrupted) {
 }
 
 static void finishCc(bool done) {
-  ccBatch = {};
   ccTyping = false;
   if (ccTestOwner.generation) {
     peerReply(ccTestOwner, done, done ? "HIDTEST=SUBMITTED" : "ERR=HID_TEST_CANCELLED");
   } else {
     setCcAlert(!done);
-    if (done) Serial.println("HID CC SUBMITTED");
+    if (done) {
+      Serial.printf("HID CC SUBMITTED count=%u codes=%s\n",
+                    unsigned(ccBatch.count), ccSubmittedCodes.c_str());
+      const auto state = snapshot();
+      const auto owner = state.role(probe::Role::Maintenance);
+      if (ccReplySession && owner.generation == ccReplySession && state.uartReady(owner)) {
+        String message;
+        message.reserve(40 + ccSubmittedCodes.size());
+        message += "HIDCCREAD=SUBMITTED;COUNT=";
+        message += unsigned(ccBatch.count);
+        message += ";CODES=";
+        message += ccSubmittedCodes.c_str();
+        peerReply(owner, true, message);
+      }
+    }
   }
+  ccBatch = {};
+  ccSubmittedCodes.clear();
+  ccReplySession = 0;
   ccTestOwner = {};
 }
 
 // Returns a diagnostic reason when the batch could not be queued.
-static const char *startCc(const char *line, uint32_t requestedSession, probe::Token testOwner = {}) {
+static const char *startCc(const char *line, uint32_t requestedSession, probe::Token testOwner,
+                           uint32_t replySession) {
   if (ccBusy() || keyboard.busy() || pendingCount || blocked() || pairWindow || receiverToRemove.valid)
     return "HID_BUSY";
   cc::Batch batch;
@@ -1284,6 +1304,8 @@ static const char *startCc(const char *line, uint32_t requestedSession, probe::T
     if (!testOwner.generation) setCcAlert(true);
     return "HID_NOT_READY";
   }
+  if (!testOwner.generation) ccSubmittedCodes = line;
+  ccReplySession = replySession;
   ccBatch = std::move(batch);
   ccReceiver = receiver;
   ccTestOwner = testOwner;

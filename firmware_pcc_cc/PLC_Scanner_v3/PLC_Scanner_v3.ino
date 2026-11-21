@@ -4460,7 +4460,8 @@ static void scanTick() {
         const char *error = !gReaderBytes ? "READER_NO_BYTES" :
                             gReaderOverflow ? "READER_INVALID_OR_TOO_LONG" :
                             !complete ? "READER_NO_LF" :
-                            plcHid::startCc(gReaderBuffer.c_str(), gCurrentScan.hidSession);
+                            plcHid::startCc(gReaderBuffer.c_str(), gCurrentScan.hidSession,
+                                            {}, gCurrentScan.ccReplySession);
         Serial.printf("HID CC READ result=%s rx_bytes=%lu lf=%u\n",
                       error ? error : "QUEUED", (unsigned long)gReaderBytes, unsigned(complete));
         if (error) {
