@@ -34,7 +34,7 @@ private data class CommandEntry(
 
 private val commandGroups = linkedMapOf(
     "Binary commands" to listOf(
-        CommandEntry("L (4C)", READ_CHANNELS, "Trigger a full reading and return the PLC data frame."),
+        CommandEntry("L (4C)", READ_CHANNELS, "Trigger a full reading. PCC returns the data frame; in CC, Maintenance receives the reader outcome and valid codes are sent to the assigned HID receiver."),
         CommandEntry("B (42)", READ_CHANNELS, "Read the battery levels."),
         CommandEntry("A (41)", READ_CHANNELS, "Measure height when the height sensor is enabled."),
         CommandEntry("P (50)", READ_CHANNELS, "Read the current photocell state."),
