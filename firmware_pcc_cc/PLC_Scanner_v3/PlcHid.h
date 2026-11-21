@@ -7,7 +7,7 @@
 #include <esp_mac.h>
 #include <mbedtls/aes.h>
 #include "ProbeKeyboard.h"
-#include "src/cc/HidBatch.h"
+#include "HidBatch.h"
 #include "HidEarlyAuth.h"
 #include "FactoryDefaults.h"
 

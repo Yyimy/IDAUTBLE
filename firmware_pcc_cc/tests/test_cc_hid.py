@@ -4,7 +4,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1] / "PLC_Scanner_v3"
 source = r'''
-#include "src/cc/HidBatch.h"
+#include "HidBatch.h"
 #include <cassert>
 
 int main() {
