@@ -65,7 +65,7 @@ String formatAltura(float m){char b[20];snprintf(b,sizeof(b),"%05.2f",m);return 
 struct UARTMock {std::string rx;int triggers=0;int available(){return rx.size();}int read(){char c=rx[0];rx.erase(0,1);return (unsigned char)c;}void print(const char*){++triggers;}void write(uint8_t*,size_t){} } PLCSerial,RS485;
 void clearRxBuffer_RS485(){RS485.rx.clear();}
 bool gCutRequested=false,gScanActive=false,gAlturaEnabled=false;uint8_t gScanPhase=0,gScanHead=0,gScanCount=0,gHeightCount=0;ScanJob gCurrentScan{},gScanJobs[16]{};
-uint32_t gScanStarted=0,gScanOverflow=0,gReaderBytes=0;String gReaderBuffer;bool gReaderOverflow=false,gHeightInvalidBytes=false;const uint32_t HEIGHT_TIMEOUT_MS=250;uint8_t gHeightReply[3]{},tramaRS[5]{};
+uint32_t gScanStarted=0,gScanOverflow=0,gReaderBytes=0,gReaderInvalidPosition=0;uint8_t gReaderInvalidByte=0;String gReaderBuffer;bool gReaderOverflow=false,gHeightInvalidBytes=false;const uint32_t HEIGHT_TIMEOUT_MS=250;uint8_t gHeightReply[3]{},tramaRS[5]{};
 int failCount=0,ponCount=0;void countersIncPon(){++ponCount;}void countersIncLecturaFallida(){++failCount;}void actualizarCampoBateriaBLE(){}
 std::vector<String> emitted;void outboxPush(const String&s){emitted.push_back(s);}void sendFrame(const uint8_t*,size_t);String authReply;bool authReplyOk=false;void replyLine(bool ok,const String&text){authReplyOk=ok;authReply=text;}
 #define HIGH 1
@@ -276,7 +276,16 @@ int main(){
  PLCSerial.rx="CC01\n";scanTick();
  CHECK(failCount==1&&txQueue.size()==1);
  CHECK(std::string((const char*)txQueue.back().data,txQueue.back().len).find("HID_NOT_READY;BYTES=5")!=std::string::npos);
- plcHid::ccStartError=nullptr;txQueue.clear();plcHid::ccReadings.clear();
+ plcHid::ccStartError=nullptr;
+ resetScanner();txQueue.clear();enqueueCommandScan(ccManual);scanTick();
+ PLCSerial.rx="AB\x1D" "CD\x03\n";scanTick();
+ CHECK(failCount==1&&txQueue.size()==1);
+ CHECK(std::string((const char*)txQueue.back().data,txQueue.back().len).find("READER_INVALID_OR_TOO_LONG;BYTES=7;INVALID=0x1D;POS=3")!=std::string::npos);
+ resetScanner();txQueue.clear();enqueueCommandScan(ccManual);scanTick();
+ PLCSerial.rx="CC01\n";scanTick();
+ CHECK(failCount==0&&txQueue.size()==1);
+ CHECK(std::string((const char*)txQueue.back().data,txQueue.back().len).find("INVALID=")==std::string::npos);
+ txQueue.clear();plcHid::ccReadings.clear();
  gDiagnosticHistory=DiagnosticHistory{};
  gWorkCc=false;
  resetScanner();nowMs=4000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx=std::string(330,'A')+"\n";scanTick();CHECK(failCount==1);CHECK(gCodPalet=="-");
