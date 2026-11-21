@@ -592,6 +592,7 @@ static uint8_t gScanPhase = 0;
 static uint32_t gScanStarted = 0;
 static String gReaderBuffer;
 static bool gReaderOverflow = false;
+static uint32_t gReaderBytes = 0;
 static uint8_t gHeightReply[3];
 static uint8_t gHeightCount = 0;
 static bool gHeightInvalidBytes = false;
@@ -4320,6 +4321,7 @@ static void enqueueCommandScan(const BleCmd &cmd) {
   }
   ScanJob &job = gScanJobs[(gScanHead + gScanCount - 1) % 16];
   if (cmd.source == CMD_SOURCE_HID) job.hidSession = cmd.session;
+  if (gWorkCc && cmd.type == BLECMD_L && cmd.source == 0) job.ccReplySession = cmd.session;
   if (cmd.type == BLECMD_A) {
     job.heightTiming.active = true;
     job.heightTiming.receivedMs = cmd.receivedMs;
@@ -4430,6 +4432,7 @@ static void scanTick() {
     PLCSerial.print("PON");
     gReaderBuffer = "";
     gReaderOverflow = false;
+    gReaderBytes = 0;
     gScanStarted = millis();
     gScanPhase = 1;
   }
@@ -4437,6 +4440,7 @@ static void scanTick() {
     bool complete = false;
     for (unsigned budget = 0; budget < 512 && PLCSerial.available(); ++budget) {
       char c = (char)PLCSerial.read();
+      ++gReaderBytes;
       if (c == '\n') {
         complete = true;
         break;
@@ -4453,11 +4457,23 @@ static void scanTick() {
     }
     if (complete || millis() - gScanStarted >= gReaderTimeoutMs) {
       if (gWorkCc && gCurrentScan.type == BLECMD_L) {
-        if (!complete || gReaderOverflow ||
-            !plcHid::startCc(gReaderBuffer.c_str(), gCurrentScan.hidSession)) {
+        const char *error = !gReaderBytes ? "READER_NO_BYTES" :
+                            gReaderOverflow ? "READER_INVALID_OR_TOO_LONG" :
+                            !complete ? "READER_NO_LF" :
+                            plcHid::startCc(gReaderBuffer.c_str(), gCurrentScan.hidSession);
+        Serial.printf("HID CC READ result=%s rx_bytes=%lu lf=%u\n",
+                      error ? error : "QUEUED", (unsigned long)gReaderBytes, unsigned(complete));
+        if (error) {
           countersIncLecturaFallida();
-          logLine("HID CC READING FAILED");
           recordDiagnostic("HID_CC_READ_FAILED");
+        }
+        if (gCurrentScan.ccReplySession) {
+          char response[96];
+          const int length = snprintf(response, sizeof(response), "%c%s%s;BYTES=%lu\r\n",
+                                      error ? 0x15 : 0x06, error ? "ERR=CCREAD_" : "HIDCCREAD=",
+                                      error ? error : "QUEUED", (unsigned long)gReaderBytes);
+          queueTargetFrame((const uint8_t *)response, size_t(length), nullptr,
+                           TX_BLE_ONLY, gCurrentScan.ccReplySession);
         }
         gScanActive = false;
         gScanPhase = 0;

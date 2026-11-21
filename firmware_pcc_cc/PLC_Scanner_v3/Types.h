@@ -148,6 +148,7 @@ struct ScanJob {
   char photo;
   HeightTiming heightTiming;
   uint32_t hidSession;
+  uint32_t ccReplySession;
 };
 
 struct EventRecord {

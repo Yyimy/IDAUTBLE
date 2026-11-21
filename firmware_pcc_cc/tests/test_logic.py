@@ -65,7 +65,7 @@ String formatAltura(float m){char b[20];snprintf(b,sizeof(b),"%05.2f",m);return 
 struct UARTMock {std::string rx;int triggers=0;int available(){return rx.size();}int read(){char c=rx[0];rx.erase(0,1);return (unsigned char)c;}void print(const char*){++triggers;}void write(uint8_t*,size_t){} } PLCSerial,RS485;
 void clearRxBuffer_RS485(){RS485.rx.clear();}
 bool gCutRequested=false,gScanActive=false,gAlturaEnabled=false;uint8_t gScanPhase=0,gScanHead=0,gScanCount=0,gHeightCount=0;ScanJob gCurrentScan{},gScanJobs[16]{};
-uint32_t gScanStarted=0,gScanOverflow=0;String gReaderBuffer;bool gReaderOverflow=false,gHeightInvalidBytes=false;const uint32_t HEIGHT_TIMEOUT_MS=250;uint8_t gHeightReply[3]{},tramaRS[5]{};
+uint32_t gScanStarted=0,gScanOverflow=0,gReaderBytes=0;String gReaderBuffer;bool gReaderOverflow=false,gHeightInvalidBytes=false;const uint32_t HEIGHT_TIMEOUT_MS=250;uint8_t gHeightReply[3]{},tramaRS[5]{};
 int failCount=0,ponCount=0;void countersIncPon(){++ponCount;}void countersIncLecturaFallida(){++failCount;}void actualizarCampoBateriaBLE(){}
 std::vector<String> emitted;void outboxPush(const String&s){emitted.push_back(s);}void sendFrame(const uint8_t*,size_t);String authReply;bool authReplyOk=false;void replyLine(bool ok,const String&text){authReplyOk=ok;authReply=text;}
 #define HIGH 1
@@ -187,7 +187,8 @@ namespace plcHid {
 cc::Config ccFormat;
 std::vector<std::string> ccReadings;
 bool ccBusy(){return false;}
-bool startCc(const char *line, uint32_t){ccReadings.emplace_back(line);return true;}
+const char *ccStartError=nullptr;
+const char *startCc(const char *line, uint32_t){ccReadings.emplace_back(line);return ccStartError;}
 void batteryLevel(uint8_t) {}
 bool shortcutEnabled(uint32_t session) { return session == 42; }
 uint32_t clientGeneration=0;
@@ -258,6 +259,25 @@ int main(){
  PLCSerial.rx="AA;BB;CC\n";scanTick();
  CHECK(plcHid::ccReadings.size()==1&&plcHid::ccReadings.back()=="AA;BB;CC");
  CHECK(emitted.empty()&&!gScanActive);
+ BleCmd ccManual{};ccManual.type=BLECMD_L;ccManual.session=7;
+ resetScanner();txQueue.clear();enqueueCommandScan(ccManual);scanTick();
+ nowMs+=gReaderTimeoutMs;scanTick();CHECK(failCount==1&&txQueue.size()==1);
+ CHECK(txQueue.back().session==7&&txQueue.back().target==TX_BLE_ONLY);
+ CHECK(std::string((const char*)txQueue.back().data,txQueue.back().len).find("READER_NO_BYTES;BYTES=0")!=std::string::npos);
+ resetScanner();txQueue.clear();enqueueCommandScan(ccManual);scanTick();
+ PLCSerial.rx="CC01\r";scanTick();nowMs+=gReaderTimeoutMs;scanTick();
+ CHECK(failCount==1&&txQueue.size()==1);
+ CHECK(std::string((const char*)txQueue.back().data,txQueue.back().len).find("READER_NO_LF;BYTES=5")!=std::string::npos);
+ resetScanner();txQueue.clear();enqueueCommandScan(ccManual);scanTick();
+ PLCSerial.rx="CC01\r\n";scanTick();
+ CHECK(failCount==0&&txQueue.size()==1&&emitted.empty());
+ CHECK(std::string((const char*)txQueue.back().data,txQueue.back().len).find("HIDCCREAD=QUEUED;BYTES=6")!=std::string::npos);
+ resetScanner();txQueue.clear();plcHid::ccStartError="HID_NOT_READY";enqueueCommandScan(ccManual);scanTick();
+ PLCSerial.rx="CC01\n";scanTick();
+ CHECK(failCount==1&&txQueue.size()==1);
+ CHECK(std::string((const char*)txQueue.back().data,txQueue.back().len).find("HID_NOT_READY;BYTES=5")!=std::string::npos);
+ plcHid::ccStartError=nullptr;txQueue.clear();plcHid::ccReadings.clear();
+ gDiagnosticHistory=DiagnosticHistory{};
  gWorkCc=false;
  resetScanner();nowMs=4000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx=std::string(330,'A')+"\n";scanTick();CHECK(failCount==1);CHECK(gCodPalet=="-");
  CHECK(plcHid::readings.size()==2&&plcHid::readings[1].first=="-"&&plcHid::readings[1].second=="-");

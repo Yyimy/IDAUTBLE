@@ -1057,7 +1057,7 @@ static bool shortcutEnabled(uint32_t session) {
   return session && shortcutReceiver().generation == session && outputFormat.hotkey != "NONE";
 }
 
-static bool startCc(const char *line, uint32_t requestedSession, probe::Token testOwner);
+static const char *startCc(const char *line, uint32_t requestedSession, probe::Token testOwner);
 
 static bool handle(const String &text, uint8_t source) {
   if (text == "MAINTBYE") {
@@ -1206,7 +1206,7 @@ static bool handle(const String &text, uint8_t source) {
       }
     }
   } else if (gWorkCc) {
-    if (!gScanActive && !gScanCount && startCc("CC01;CC02;CC03", 0, owner))
+    if (!gScanActive && !gScanCount && !startCc("CC01;CC02;CC03", 0, owner))
       replyLine(true, "HIDTEST=QUEUED");
     else replyLine(false, "ERR=HID_NOT_READY_OR_BUSY");
   } else {
@@ -1265,23 +1265,24 @@ static void finishCc(bool done) {
   ccTestOwner = {};
 }
 
-static bool startCc(const char *line, uint32_t requestedSession, probe::Token testOwner = {}) {
+// Returns a diagnostic reason when the batch could not be queued.
+static const char *startCc(const char *line, uint32_t requestedSession, probe::Token testOwner = {}) {
   if (ccBusy() || keyboard.busy() || pendingCount || blocked() || pairWindow || receiverToRemove.valid)
-    return false;
+    return "HID_BUSY";
+  cc::Batch batch;
+  if (!cc::buildBatch(line, ccFormat, batch)) return "READER_FORMAT";
+  for (size_t index = 0; index < batch.count; ++index) {
+    for (char key : batch.segments[index]) {
+      uint8_t report[8];
+      if (!probe::asciiReport(key, false, report, outputFormat.layout)) return "HID_KEY";
+    }
+  }
   const auto state = snapshot();
   const auto receiver = state.role(probe::Role::Keyboard);
   if (!receiver.generation || !state.keyboardReady(receiver) || !savedReceiver.valid ||
       (requestedSession && requestedSession != receiver.generation)) {
     if (!testOwner.generation) setCcAlert(true);
-    return false;
-  }
-  cc::Batch batch;
-  if (!cc::buildBatch(line, ccFormat, batch)) return false;
-  for (size_t index = 0; index < batch.count; ++index) {
-    for (char key : batch.segments[index]) {
-      uint8_t report[8];
-      if (!probe::asciiReport(key, false, report, outputFormat.layout)) return false;
-    }
+    return "HID_NOT_READY";
   }
   ccBatch = std::move(batch);
   ccReceiver = receiver;
@@ -1290,7 +1291,7 @@ static bool startCc(const char *line, uint32_t requestedSession, probe::Token te
   ccWaitMs = 0;
   ccWaitStarted = millis();
   Serial.printf("HID CC QUEUED count=%u\n", unsigned(ccBatch.count));
-  return true;
+  return nullptr;
 }
 
 static void ccTick(uint32_t now) {

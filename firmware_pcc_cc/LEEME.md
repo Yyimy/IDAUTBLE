@@ -573,3 +573,11 @@ repetir. La reconexión no reenvía el lote. **Acknowledge** en la app o un nuev
 envío completado apagan el aviso. Los avisos de batería y errores de equipo
 tienen prioridad. Usa `IDAUT_CC_Prueba_Taller.html` con la ventana en primer
 plano para comprobar el retorno del foco tras cada Enter.
+
+Al lanzar `L` desde mantenimiento en CC, la app recibe un resultado con `BYTES`
+sin incluir los códigos. `READER_NO_BYTES` indica que no llegó ningún byte;
+`READER_NO_LF`, que llegaron bytes sin fin de línea LF; `READER_INVALID_OR_TOO_LONG`
+o `READER_FORMAT`, que la respuesta fue rechazada; `HID_NOT_READY`, que el lector
+respondió con un lote válido pero el receptor HID no estaba listo. `HIDCCREAD=QUEUED`
+indica que el lote se puso en cola. El monitor serie muestra `HID CC READ result=`
+y, al terminar el envío, `HID CC SUBMITTED` o `HID CC INTERRUPTED`.
