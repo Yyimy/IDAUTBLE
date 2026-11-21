@@ -593,6 +593,8 @@ static uint32_t gScanStarted = 0;
 static String gReaderBuffer;
 static bool gReaderOverflow = false;
 static uint32_t gReaderBytes = 0;
+static uint32_t gReaderInvalidPosition = 0;
+static uint8_t gReaderInvalidByte = 0;
 static uint8_t gHeightReply[3];
 static uint8_t gHeightCount = 0;
 static bool gHeightInvalidBytes = false;
@@ -4433,6 +4435,7 @@ static void scanTick() {
     gReaderBuffer = "";
     gReaderOverflow = false;
     gReaderBytes = 0;
+    gReaderInvalidPosition = 0;
     gScanStarted = millis();
     gScanPhase = 1;
   }
@@ -4447,6 +4450,10 @@ static void scanTick() {
       }
       if (c == '\r') continue;
       if ((uint8_t)c < 32 || c == 127) {
+        if (!gReaderInvalidPosition) {
+          gReaderInvalidPosition = gReaderBytes;
+          gReaderInvalidByte = static_cast<uint8_t>(c);
+        }
         gReaderOverflow = true;
         continue;
       }
@@ -4461,17 +4468,22 @@ static void scanTick() {
                             gReaderOverflow ? "READER_INVALID_OR_TOO_LONG" :
                             !complete ? "READER_NO_LF" :
                             plcHid::startCc(gReaderBuffer.c_str(), gCurrentScan.hidSession);
-        Serial.printf("HID CC READ result=%s rx_bytes=%lu lf=%u\n",
-                      error ? error : "QUEUED", (unsigned long)gReaderBytes, unsigned(complete));
+        char detail[40] = {};
+        if (gReaderInvalidPosition) {
+          snprintf(detail, sizeof(detail), ";INVALID=0x%02X;POS=%lu",
+                   unsigned(gReaderInvalidByte), (unsigned long)gReaderInvalidPosition);
+        }
+        Serial.printf("HID CC READ result=%s rx_bytes=%lu lf=%u%s\n",
+                      error ? error : "QUEUED", (unsigned long)gReaderBytes, unsigned(complete), detail);
         if (error) {
           countersIncLecturaFallida();
           recordDiagnostic("HID_CC_READ_FAILED");
         }
         if (gCurrentScan.ccReplySession) {
-          char response[96];
-          const int length = snprintf(response, sizeof(response), "%c%s%s;BYTES=%lu\r\n",
+          char response[128];
+          const int length = snprintf(response, sizeof(response), "%c%s%s;BYTES=%lu%s\r\n",
                                       error ? 0x15 : 0x06, error ? "ERR=CCREAD_" : "HIDCCREAD=",
-                                      error ? error : "QUEUED", (unsigned long)gReaderBytes);
+                                      error ? error : "QUEUED", (unsigned long)gReaderBytes, detail);
           queueTargetFrame((const uint8_t *)response, size_t(length), nullptr,
                            TX_BLE_ONLY, gCurrentScan.ccReplySession);
         }
