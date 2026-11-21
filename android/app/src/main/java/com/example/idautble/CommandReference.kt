@@ -64,6 +64,11 @@ private val commandGroups = linkedMapOf(
         CommandEntry("ALT=0 or ALT=1", MAINTENANCE_PIN, "Disable or enable height measurement while the scanner is idle."),
         CommandEntry("AUTOREAD?", "BLE Maintenance / CLIENT / assigned HID receiver", "Read the current automatic reading state."),
         CommandEntry("AUTOREAD=0 / AUTOREAD=1", "BLE Maintenance with PIN / CLIENT / assigned HID receiver", "Pause or resume automatic photocell readings. The PLC confirms the saved state or reports busy."),
+        CommandEntry("HIDWORK?", MAINTENANCE, "Read the active PCC or CC work mode and the interrupted HID batch flag."),
+        CommandEntry("HIDWORK=PCC / HIDWORK=CC", MAINTENANCE_PIN, "Select and save the work mode while idle with an empty event queue. CC business readings go to the assigned HID receiver."),
+        CommandEntry("HIDCCCFG?", MAINTENANCE, "Read the CC HID key sequences and five transition delays."),
+        CommandEntry("HIDCCCFG=<start>|<end>|<keys>,<ms>|…", MAINTENANCE_PIN, "Save initial and final keys plus five key-and-delay pairs. Keys are hexadecimal or - for empty. Delays are 0–60000 ms."),
+        CommandEntry("HIDCCALERT=0", MAINTENANCE_PIN, "Acknowledge an interrupted CC HID batch after checking the client screen."),
         CommandEntry("RESTOREDEFAULTS", MAINTENANCE_PIN, "Apply the IDAUT factory settings while idle with no pending readings. Wi-Fi is switched off. Saved Wi-Fi credentials, equipment identity, clock, Bluetooth pairing and counters are retained."),
         CommandEntry("READERTIMEOUT=<ms>", MAINTENANCE_PIN, "Set the barcode reader timeout to 1000, 2000, 3000 or 5000 ms."),
         CommandEntry("IDLEMIN=<minutes>", MAINTENANCE_PIN, "Set the photocell inactivity shutdown delay from 1 to 1440 minutes. Read the current value with INFO? over BLE."),
@@ -188,3 +193,4 @@ internal fun CommandReferencePage() {
         }
     }
 }
+

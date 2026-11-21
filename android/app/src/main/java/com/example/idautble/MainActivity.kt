@@ -387,6 +387,8 @@ class MainActivity : ComponentActivity() {
     private val uiHidReceiver = mutableStateOf(HidReceiverState())
     private var hidReceiverRequest = 0L
     private val uiHidOutput = mutableStateOf(HidOutputState())
+    private var workMode by mutableStateOf(WorkModeState())
+    private var workModeRequest = 0L
     private var restoreDefaultsSupported by mutableStateOf(false)
     private var restoreDefaultsPending by mutableStateOf(false)
     private var restoreDefaultsMessage by mutableStateOf("")
@@ -1222,6 +1224,56 @@ class MainActivity : ComponentActivity() {
         }, 8000)
     }
 
+    private fun requestWorkMode(command: String) {
+        if (!bleChannelReady || !workMode.supported || workMode.request != null) return
+        val query = command.endsWith("?")
+        if (!query && !maintenanceSession.isAuthorized()) return
+        val request = ++workModeRequest
+        workMode = workMode.copy(request = command.takeWhile { it != '=' && it != '?' }, message = "")
+        sendText(command, true)
+        mainHandler.postDelayed({
+            if (workModeRequest == request && workMode.request != null) {
+                workMode = workMode.copy(request = null, message = "No PLC confirmation. Refresh the settings.")
+            }
+        }, 8000)
+    }
+
+    private fun handleWorkModeMessage(message: PlcMessage) {
+        val text = message.text
+        when {
+            message.acknowledged && text.startsWith("FW=") -> {
+                val supported = "HIDCC=1" in text.split(';')
+                if (supported) {
+                    workMode = workMode.copy(supported = true)
+                    requestWorkMode("HIDWORK?")
+                }
+            }
+            !workMode.supported -> return
+            message.acknowledged && text.startsWith("HIDWORK=") -> {
+                val mode = text.substringAfter('=').substringBefore(';')
+                if (mode != "PCC" && mode != "CC") return
+                workMode = workMode.copy(mode = mode, interrupted = "CCALERT=1" in text.split(';'), request = null)
+                if (mode == "CC") requestWorkMode("HIDCCCFG?")
+            }
+            message.acknowledged && text.startsWith("HIDCCCFG=") -> {
+                val output = parseCcOutput(text) ?: return
+                workMode = workMode.copy(output = output, request = null, revision = workMode.revision + 1)
+            }
+            message.acknowledged && text.startsWith("HIDCCALERT=") -> {
+                val pendingAck = workMode.request == "HIDCCALERT" && text.endsWith("=0")
+                workMode = workMode.copy(interrupted = text.endsWith("=1"), request = if (pendingAck) null else workMode.request)
+            }
+            message.rejected && workMode.request != null && text.startsWith("ERR=HIDCC_") -> {
+                workMode = workMode.copy(request = null, message = when (text) {
+                    "ERR=HIDCC_BUSY" -> "Finish the active reading or clear the pending event queue, then retry."
+                    "ERR=HIDCC_STORAGE" -> "The PLC could not save the settings."
+                    "ERR=HIDCC_AUTH" -> "Unlock PIN / ACCESS before saving."
+                    else -> "The PLC rejected the CC settings."
+                })
+            }
+        }
+    }
+
     private fun handleHidOutputMessage(message: PlcMessage) {
         val text = message.text
         if (message.acknowledged && text.startsWith("FW=")) {
@@ -1332,6 +1384,8 @@ class MainActivity : ComponentActivity() {
         nextMaintenancePing = 0L
         hidOutputRequest++; hidOutputExpected = null
         uiHidOutput.value = HidOutputState()
+        workModeRequest++
+        workMode = WorkModeState()
         readerTimeoutRequest++
         uiReaderTimeout.value = ReaderTimeoutState()
         idleShutdownRequest++
@@ -1839,6 +1893,7 @@ class MainActivity : ComponentActivity() {
         }
         handleHidReceiverMessage(message)
         handleHidOutputMessage(message)
+        handleWorkModeMessage(message)
         handleReaderTimeoutMessage(message)
         handlePowerMessage(message)
         handleFrameTimesMessage(message)
@@ -2700,6 +2755,8 @@ class MainActivity : ComponentActivity() {
                     onAutoRefreshChange = { setAutoRefresh(it) },
                     readings = uiReadings.value,
                     hidOutput = uiHidOutput.value,
+                    workMode = workMode,
+                    onWorkModeAction = ::requestWorkMode,
                     onHidOutputAction = { requestHidOutput(it) },
                     hidReceiver = uiHidReceiver.value,
                     onHidReceiverAction = { requestHidReceiverAction(it) },
@@ -2895,6 +2952,8 @@ private fun PlcBleTesterLandscape(
     onAutoRefreshChange: (Boolean) -> Unit,
     readings: PlcReadingsState,
     hidOutput: HidOutputState,
+    workMode: WorkModeState,
+    onWorkModeAction: (String) -> Unit,
     onHidOutputAction: (HidOutputConfig?) -> Unit,
     hidReceiver: HidReceiverState,
     onHidReceiverAction: (String) -> Unit,
@@ -3344,7 +3403,9 @@ private fun PlcBleTesterLandscape(
                                                 HidReceiverSection(hidReceiver, connected, maintenanceAuthorised, onHidReceiverAction, hidOutput.supported, expanded, onToggle)
                                             }
                                             TerminalSection.HID_OUTPUT -> {
-                                                HidOutputSection(hidOutput, connected, hidReceiver.production, onHidOutputAction, expanded, onToggle)
+                                                HidOutputSection(hidOutput, connected, hidReceiver.production, onHidOutputAction, expanded, onToggle) {
+                                                    WorkModeSection(workMode, connected && maintenanceAuthorised, onWorkModeAction)
+                                                }
                                             }
                                             TerminalSection.DEVICE_ID -> {
                                                 CollapsibleSettingsSection(
@@ -3805,3 +3866,4 @@ private fun CompactOutlinedField(
         )
     }
 }
+

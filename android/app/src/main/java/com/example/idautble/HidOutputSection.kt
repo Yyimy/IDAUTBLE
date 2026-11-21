@@ -30,7 +30,7 @@ private val shortcutKeys = mapOf(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Boolean, onAction: (HidOutputConfig?) -> Unit, expanded: Boolean, onToggle: () -> Unit) {
+fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Boolean, onAction: (HidOutputConfig?) -> Unit, expanded: Boolean, onToggle: () -> Unit, workModeControls: @Composable () -> Unit = {}) {
     if (!state.supported) return
     var fields by remember { mutableStateOf("PU") }
     var locationFirst by remember { mutableStateOf(false) }
@@ -73,6 +73,7 @@ fun HidOutputSection(state: HidOutputState, connected: Boolean, production: Bool
         "Pallet / location · keyboard format", expanded, onToggle,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            workModeControls()
             HidSettingsGroup("Fields") {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.selectableGroup()) {
                     hidFields.forEach { (value, label) ->
@@ -285,3 +286,4 @@ private fun HidSequenceDialog(title: String, initial: String, allowArrows: Boole
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+

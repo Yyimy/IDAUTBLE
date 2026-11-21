@@ -39,6 +39,7 @@ bool gWifiEnabled = false, gTcpConnected = false;
 struct Tcp { bool up = false; bool connected() { return up; } } gTcpClient;
 bool bleReady = false;
 bool gAutomaticReading = true;
+bool gWorkCc = false, gCcInterrupted = false;
 bool bleCanNotify() { return bleReady; }
 namespace plcHid { bool ready = false; bool keyboardReady() { return ready; } }
 bool output = false;
@@ -120,6 +121,8 @@ int main() {
   tick(1999); CHECK(gLedMode == LED_BAT_CRITICAL);
   // Every millisecond across complete cycles: pulse count, width, dark intervals.
   for (uint32_t t = 0; t < 8000; ++t) {
+    const auto cc = t % 2500;
+    CHECK(ledPatternOn(LED_CC_INTERRUPTED,t) == (cc < 100 || (cc >= 200 && cc < 300) || (cc >= 400 && cc < 500)));
     CHECK(ledPatternOn(LED_MANOEUVRE,t) == (t % 3000 < 1000));
     CHECK(ledPatternOn(LED_READY,t) == (t % 3000 < 100));
     CHECK(ledPatternOn(LED_DISCONNECTED,t) == ((t/500)%2 == 0));
@@ -157,3 +160,4 @@ with tempfile.TemporaryDirectory(prefix='plc_led_') as tmp:
     cpp.write_text(body)
     subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror', str(cpp), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
+

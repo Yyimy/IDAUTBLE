@@ -7,6 +7,7 @@
 #include <esp_mac.h>
 #include <mbedtls/aes.h>
 #include "ProbeKeyboard.h"
+#include "src/cc/HidBatch.h"
 #include "HidEarlyAuth.h"
 #include "FactoryDefaults.h"
 
@@ -64,6 +65,17 @@ struct PendingReading {
 static constexpr size_t pendingCapacity = 4;
 static PendingReading pending[pendingCapacity];
 static size_t pendingHead, pendingCount;
+static cc::Config ccFormat;
+static cc::Batch ccBatch;
+static probe::Token ccReceiver;
+static probe::Token ccTestOwner;
+static size_t ccIndex;
+static uint32_t ccWaitStarted;
+static uint16_t ccWaitMs;
+static bool ccTyping;
+
+static bool ccBusy() { return ccBatch.count != 0; }
+
 
 static void clearReadings() {
   while (pendingCount) {
@@ -1032,7 +1044,7 @@ static void sendHotkey(probe::Token receiver) {
 }
 
 static bool outputBusyForRestore() {
-  return keyboard.busy() || pendingCount || pairWindow || receiverToRemove.valid;
+  return keyboard.busy() || ccBusy() || pendingCount || pairWindow || receiverToRemove.valid;
 }
 
 static void applyFactoryOutput() {
@@ -1044,6 +1056,8 @@ static void applyFactoryOutput() {
 static bool shortcutEnabled(uint32_t session) {
   return session && shortcutReceiver().generation == session && outputFormat.hotkey != "NONE";
 }
+
+static bool startCc(const char *line, uint32_t requestedSession, probe::Token testOwner);
 
 static bool handle(const String &text, uint8_t source) {
   if (text == "MAINTBYE") {
@@ -1077,7 +1091,7 @@ static bool handle(const String &text, uint8_t source) {
     bool hotkeyPresent = false;
     bool endingSequencePresent = false;
     bool outputOptionsPresent = false;
-    if (keyboard.busy() || pendingCount) replyLine(false, "ERR=HIDCFG_BUSY");
+    if (keyboard.busy() || ccBusy() || pendingCount) replyLine(false, "ERR=HIDCFG_BUSY");
     else if (!probe::parseOutputFormat(text.c_str(), candidate, &prefixPresent, &hotkeyPresent, &endingSequencePresent, &outputOptionsPresent))
       replyLine(false, "ERR=HIDCFG_INVALID");
     else {
@@ -1191,6 +1205,10 @@ static bool handle(const String &text, uint8_t source) {
         }
       }
     }
+  } else if (gWorkCc) {
+    if (!gScanActive && !gScanCount && startCc("CC01;CC02;CC03", 0, owner))
+      replyLine(true, "HIDTEST=QUEUED");
+    else replyLine(false, "ERR=HID_NOT_READY_OR_BUSY");
   } else {
     std::string formatted;
     if (!pendingCount && probe::formatReading(outputFormat, "PALLET123", "LOC01", formatted) &&
@@ -1221,6 +1239,77 @@ static void reading(const String &pallet, const String &location, uint32_t reque
   job.receiver = receiver;
   job.text.swap(formatted);
   ++pendingCount;
+}
+
+static void setCcAlert(bool interrupted) {
+  if (gCcInterrupted == interrupted) return;
+  gCcInterrupted = interrupted;
+  const auto state = snapshot();
+  const auto owner = state.role(probe::Role::Maintenance);
+  if (state.uartReady(owner)) peerReply(owner, true, interrupted ? "HIDCCALERT=1" : "HIDCCALERT=0");
+  if (interrupted) {
+    Serial.println("HID CC INTERRUPTED: check the client screen before repeating");
+    recordDiagnostic("HID_CC_INTERRUPTED");
+  }
+}
+
+static void finishCc(bool done) {
+  ccBatch = {};
+  ccTyping = false;
+  if (ccTestOwner.generation) {
+    peerReply(ccTestOwner, done, done ? "HIDTEST=SUBMITTED" : "ERR=HID_TEST_CANCELLED");
+  } else {
+    setCcAlert(!done);
+    if (done) Serial.println("HID CC SUBMITTED");
+  }
+  ccTestOwner = {};
+}
+
+static bool startCc(const char *line, uint32_t requestedSession, probe::Token testOwner = {}) {
+  if (ccBusy() || keyboard.busy() || pendingCount || blocked() || pairWindow || receiverToRemove.valid)
+    return false;
+  const auto state = snapshot();
+  const auto receiver = state.role(probe::Role::Keyboard);
+  if (!receiver.generation || !state.keyboardReady(receiver) || !savedReceiver.valid ||
+      (requestedSession && requestedSession != receiver.generation)) {
+    if (!testOwner.generation) setCcAlert(true);
+    return false;
+  }
+  cc::Batch batch;
+  if (!cc::buildBatch(line, ccFormat, batch)) return false;
+  for (size_t index = 0; index < batch.count; ++index) {
+    for (char key : batch.segments[index]) {
+      uint8_t report[8];
+      if (!probe::asciiReport(key, false, report, outputFormat.layout)) return false;
+    }
+  }
+  ccBatch = std::move(batch);
+  ccReceiver = receiver;
+  ccTestOwner = testOwner;
+  ccIndex = 0;
+  ccWaitMs = 0;
+  ccWaitStarted = millis();
+  Serial.printf("HID CC QUEUED count=%u\n", unsigned(ccBatch.count));
+  return true;
+}
+
+static void ccTick(uint32_t now) {
+  if (!ccBusy() || ccTyping) return;
+  const auto state = snapshot();
+  if (blocked() || !state.keyboardReady(ccReceiver)) {
+    finishCc(false);
+    return;
+  }
+  if (uint32_t(now - ccWaitStarted) < ccWaitMs) return;
+
+  probe::TypingTiming timing = outputFormat.timing;
+  timing.navigationPauseMs = 0;  // Each CC transition has its own pause.
+  if (!keyboard.startText(ccReceiver, ccTestOwner, !ccTestOwner.generation, now, state,
+                          ccBatch.segments[ccIndex].c_str(), outputFormat.layout, timing)) {
+    finishCc(false);
+    return;
+  }
+  ccTyping = true;
 }
 
 static void batteryLevel(uint8_t level) {
@@ -1310,7 +1399,7 @@ static void tick() {
   } else {
     receiverRemovalTick();
     // Finish the current HID text and release its keys before changing roles.
-    if (!keyboard.busy()) {
+    if (!keyboard.busy() && !ccBusy()) {
       portENTER_CRITICAL(&peerMux);
       const auto target = pendingClientSwitch;
       pendingClientSwitch = {};
@@ -1345,7 +1434,7 @@ static void tick() {
       clearReadings();
       Serial.println("HID READINGS dropped: receiver session unavailable");
     }
-    if (pendingCount && !keyboard.busy()) {
+    if (pendingCount && !keyboard.busy() && !ccBusy()) {
       auto &job = pending[pendingHead];
       if (!keyboard.startText(job.receiver, {}, true, millis(), state,
                               job.text.c_str(), outputFormat.layout, outputFormat.timing))
@@ -1356,6 +1445,7 @@ static void tick() {
       testActive = false;
     }
   }
+  ccTick(millis());
   keyboard.tick(millis(), snapshot(), [](probe::Token target, const uint8_t (&report)[8]) {
     const auto state = snapshot();
     if (!state.keyboardTarget(target)) return probe::SendResult::Failed;
@@ -1371,7 +1461,15 @@ static void tick() {
   const auto result = keyboard.takeResult();
   if (result == probe::TypingResult::None) return;
   const bool done = result == probe::TypingResult::Done;
-  if (testActive)
+  if (ccTyping) {
+    ccTyping = false;
+    if (!done || ccIndex + 1 == ccBatch.count) {
+      finishCc(done);
+    } else {
+      ccWaitMs = ccBatch.waits[ccIndex++];
+      ccWaitStarted = millis();
+    }
+  } else if (testActive)
     peerReply(keyboard.owner(), done, done ? "HIDTEST=SUBMITTED" : "ERR=HID_TEST_CANCELLED");
   else Serial.println(done ? "HID READING submitted" : "HID READING cancelled or failed");
   testActive = false;
@@ -1416,3 +1514,4 @@ static int notify(uint32_t session, uint8_t *bytes, size_t remaining) {
   return rc == ESP_OK ? int(size) : -1;
 }
 } // namespace plcHid
+

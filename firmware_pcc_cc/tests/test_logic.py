@@ -72,13 +72,14 @@ std::vector<String> emitted;void outboxPush(const String&s){emitted.push_back(s)
 #define LOW 0
 #define PIN_SENSOR_PALET 4
 bool gFotoLista=false,PaletCargado=false,armadoInactividad=false;int rawFoto=LOW,gFotoUltLect=LOW,estadoSensorFiltrado=LOW,lecturaAnteriorRaw=LOW;
-uint32_t gFotoUltCambioMs=0,ultimoRebote=0,lastFotoActivaMs=0;const uint32_t FOTO_STABLE_MS=1500,retardoRebote=250;uint32_t gIdleMinutes=120;bool gAutomaticReading=true;
+uint32_t gFotoUltCambioMs=0,ultimoRebote=0,lastFotoActivaMs=0;const uint32_t FOTO_STABLE_MS=1500,retardoRebote=250;uint32_t gIdleMinutes=120;bool gAutomaticReading=true,gWorkCc=false,gCcInterrupted=false;
 constexpr uint8_t BLE_FRAME_TIME=1,TCP_FRAME_TIME=2,ALL_FRAME_TIMES=3;uint8_t gFrameTimes=ALL_FRAME_TIMES;
 char gFotoEstado='0';bool gOtaAbort=false,gOtaTaskHandle=false;int loaded=0,unloaded=0;
 int digitalRead(int){return rawFoto;}void countersIncPalCargado(){++loaded;}void countersIncPalDescargado(){++unloaded;}
 String cutReason;
 void powerCut(const char* reason){gCutRequested=true;cutReason=reason;}
 '''
+shim = '#include "' + str(sketch / 'src/cc/HidBatch.h') + '"\n' + shim
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
 outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
 tcp_monitor=(sketch/'TcpMonitor.h').read_text().replace('#pragma once','')
@@ -183,6 +184,10 @@ int esp_ble_remove_bond_device(uint8_t*){++bondsRemoved;return ESP_OK;}
 '''
 shim += r'''
 namespace plcHid {
+cc::Config ccFormat;
+std::vector<std::string> ccReadings;
+bool ccBusy(){return false;}
+bool startCc(const char *line, uint32_t){ccReadings.emplace_back(line);return true;}
 void batteryLevel(uint8_t) {}
 bool shortcutEnabled(uint32_t session) { return session == 42; }
 uint32_t clientGeneration=0;
@@ -249,6 +254,11 @@ int main(){
  storedUIntSettings.erase("reader_ms");
  resetScanner();plcHid::readings.clear();nowMs=3000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx="]d1PAL;]Q1LOC\r\n";nowMs=3020;scanTick();CHECK(!gScanActive);CHECK(gCodPalet=="PAL"&&gCodUbic=="LOC");CHECK(failCount==0);
  CHECK(plcHid::readings.size()==1&&plcHid::readings[0].first=="PAL"&&plcHid::readings[0].second=="LOC");
+ gWorkCc=true;resetScanner();nowMs=4000;enqueueScan(BLECMD_L,true);scanTick();
+ PLCSerial.rx="AA;BB;CC\n";scanTick();
+ CHECK(plcHid::ccReadings.size()==1&&plcHid::ccReadings.back()=="AA;BB;CC");
+ CHECK(emitted.empty()&&!gScanActive);
+ gWorkCc=false;
  resetScanner();nowMs=4000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx=std::string(330,'A')+"\n";scanTick();CHECK(failCount==1);CHECK(gCodPalet=="-");
  CHECK(plcHid::readings.size()==2&&plcHid::readings[1].first=="-"&&plcHid::readings[1].second=="-");
  resetScanner();BleCmd shortcut{};shortcut.type=BLECMD_L;shortcut.source=CMD_SOURCE_HID;shortcut.session=41;
@@ -384,3 +394,4 @@ int main(){
 (root/'tests/generated_logic.cpp').write_text(body)
 subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror=return-type','-o',str(root/'tests/logic_tests'),str(root/'tests/generated_logic.cpp')],check=True)
 subprocess.run([str(root/'tests/logic_tests')],check=True)
+

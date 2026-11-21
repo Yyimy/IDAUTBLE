@@ -8,7 +8,8 @@ enum LedMode : uint8_t {
   LED_BAT_CRITICAL,
   LED_ERROR,
   LED_OTA,
-  LED_MANOEUVRE
+  LED_MANOEUVRE,
+  LED_CC_INTERRUPTED
 };
 
 enum BleCmdType : uint8_t {
@@ -161,3 +162,4 @@ struct PersistentOutbox {
   uint8_t count;
   EventRecord items[8];
 };
+

@@ -32,7 +32,7 @@ fun parseDeviceStatus(text: String): DeviceStatus? {
     val id = f["ID"]?.takeIf { validEquipmentId(it) } ?: return null
     val led =
         f["LED"]?.takeIf {
-            it in setOf("READY", "DISCONNECTED", "BAT_LOW", "BAT_CRITICAL", "ERROR", "OTA", "MANOEUVRE")
+            it in setOf("READY", "DISCONNECTED", "BAT_LOW", "BAT_CRITICAL", "ERROR", "OTA", "MANOEUVRE", "CC_INTERRUPTED")
         } ?: return null
     val reason = f["WHY"]?.takeIf { it.isNotBlank() } ?: return null
     val batteries =
@@ -121,6 +121,7 @@ fun ledDescription(mode: String, firmware: String? = null): String =
         "ERROR" -> "Fault / power cut — fast flashing"
         "OTA" -> "OTA — 800 ms on / 200 ms off"
         "MANOEUVRE" -> "Manoeuvre mode — 1 s on / 2 s off"
+        "CC_INTERRUPTED" -> "CC HID batch interrupted — three short flashes"
         else -> mode
     }
 
@@ -130,6 +131,8 @@ fun ledReasonDescription(reason: String): String =
         "LINK_READY" -> "Required communication link is ready"
         "BLE_REQUIRED" -> "Waiting for a secure BLE subscriber"
         "TCP_REQUIRED" -> "WiFi is enabled; waiting for the TCP server"
+        "HID_REQUIRED" -> "CC is waiting for the assigned HID keyboard receiver"
+        "CC_HID_INTERRUPTED" -> "Check the client screen before repeating the HID batch"
         "BATTERY_LOW" -> "Lowest present battery: low band"
         "BATTERY_CRITICAL" -> "Lowest present battery: critical band"
         "POWER_CUT" -> "Power cut requested"

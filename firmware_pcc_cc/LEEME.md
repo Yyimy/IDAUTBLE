@@ -544,3 +544,32 @@ Con el enlace requerido disponible, el LED en pausa hace un destello largo
 de **1 s encendido y 2 s apagado**. Fallo, batería, OTA y falta de enlace
 tienen prioridad. El monitor serie indica `AUTOREAD PAUSED` y
 `AUTOREAD RESUMED` al confirmar cada cambio.
+
+
+## Modos de trabajo PCC y CC
+
+Compila `firmware_pcc_cc/PLC_Scanner_v3/PLC_Scanner_v3.ino` con Arduino-ESP32 3.0.7.
+En la app de mantenimiento, abre **Terminal → HID Output → Work mode** y autoriza
+el cambio desde **PIN / ACCESS**. El PLC confirma y guarda el modo. **PCC** es
+el valor de fábrica y mantiene la lectura de palé y ubicación. Para cambiar de
+modo, el equipo debe estar libre y la cola de eventos PCC debe estar vacía.
+
+En **CC**, el lector debe devolver entre uno y seis códigos ASCII separados por
+`;` en una misma línea terminada en LF (también se acepta CRLF). El PLC conserva
+el orden recibido. Un campo vacío, una línea incompleta o un séptimo código
+invalidan la lectura. La carga útil se envía al receptor HID asignado.
+
+Configura **Before first code**, las cinco parejas de **Separator** y **Wait (ms)**,
+y **After last code**. Cada secuencia admite texto, teclas como `{ENTER}` y
+`{TAB}`, o quedar vacía. La espera (0–60000 ms) empieza al acabar el separador y
+solo se aplica si hay otro código. Los valores iniciales de taller son Enter
+entre códigos y al final, con 2000 ms entre códigos. Ajústalos con la web real.
+Durante un envío, un nuevo evento de fotocélula se registra como ocupado
+y se omite para evitar intercalar códigos de dos lotes.
+
+Si se interrumpe la salida HID, el LED repite tres destellos breves y el PLC
+notifica a mantenimiento. Revisa en qué pantalla quedó la web antes de
+repetir. La reconexión no reenvía el lote. **Acknowledge** en la app o un nuevo
+envío completado apagan el aviso. Los avisos de batería y errores de equipo
+tienen prioridad. Usa `IDAUT_CC_Prueba_Taller.html` con la ventana en primer
+plano para comprobar el retorno del foco tras cada Enter.
