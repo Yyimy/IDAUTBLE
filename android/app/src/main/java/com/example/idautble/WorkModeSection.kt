@@ -19,6 +19,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+private const val CC_SEQUENCE_LIMIT = 20
+
 internal data class CcGap(val keys: String, val waitMs: Int)
 
 internal data class CcOutput(val start: String, val end: String, val gaps: List<CcGap>) {
@@ -99,11 +101,11 @@ private fun CcOutputEditor(config: CcOutput, revision: Long, enabled: Boolean, s
     val endBytes = ccSequence(end)
     val draft = if (startBytes != null && endBytes != null && gapDrafts.none { it == null })
         CcOutput(startBytes, endBytes, gapDrafts.filterNotNull()) else null
-    Text("CC · HID only. Use {ENTER}, {TAB} or leave a key sequence empty. Waits are measured after each separator.")
-    CcKeysField("Before first code", start, enabled) { start = it }
+    Text("Waits start after each separator.")
+    HidSequenceField("Prefix", start, enabled, maxLength = CC_SEQUENCE_LIMIT) { start = it }
     for (index in keys.indices) {
         Text("Code ${index + 1} → ${index + 2}", style = MaterialTheme.typography.labelLarge)
-        CcKeysField("Separator", keys[index], enabled) { keys[index] = it }
+        HidSequenceField("Separator", keys[index], enabled, maxLength = CC_SEQUENCE_LIMIT) { keys[index] = it }
         OutlinedTextField(
             value = waits[index], onValueChange = { if (it.length <= 5 && it.all(Char::isDigit)) waits[index] = it },
             label = { Text("Wait (ms)") }, singleLine = true, enabled = enabled,
@@ -111,19 +113,10 @@ private fun CcOutputEditor(config: CcOutput, revision: Long, enabled: Boolean, s
             modifier = Modifier.fillMaxWidth(),
         )
     }
-    CcKeysField("After last code", end, enabled) { end = it }
+    HidSequenceField("Suffix", end, enabled, maxLength = CC_SEQUENCE_LIMIT) { end = it }
     Button(enabled = enabled && draft != null && draft != config, onClick = { draft?.let { send(it.wire()) } }) {
         Text("Save CC settings")
     }
 }
 
-private fun ccSequence(value: String): String? = decodeHidSeparator(value)?.takeIf { it.length <= 20 }
-
-@Composable
-private fun CcKeysField(label: String, value: String, enabled: Boolean, change: (String) -> Unit) {
-    OutlinedTextField(
-        value = value, onValueChange = change,
-        label = { Text(label) }, singleLine = true, enabled = enabled,
-        isError = ccSequence(value) == null, modifier = Modifier.fillMaxWidth(),
-    )
-}
+private fun ccSequence(value: String): String? = decodeHidSeparator(value)?.takeIf { it.length <= CC_SEQUENCE_LIMIT }

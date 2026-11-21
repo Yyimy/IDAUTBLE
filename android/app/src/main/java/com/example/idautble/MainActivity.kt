@@ -3403,9 +3403,8 @@ private fun PlcBleTesterLandscape(
                                                 HidReceiverSection(hidReceiver, connected, maintenanceAuthorised, onHidReceiverAction, hidOutput.supported, expanded, onToggle)
                                             }
                                             TerminalSection.HID_OUTPUT -> {
-                                                HidOutputSection(hidOutput, connected, hidReceiver.production, onHidOutputAction, expanded, onToggle) {
-                                                    WorkModeSection(workMode, connected && maintenanceAuthorised, onWorkModeAction)
-                                                }
+                                                HidOutputSection(hidOutput, connected, hidReceiver.production, onHidOutputAction,
+                                                    expanded, onToggle, workMode, maintenanceAuthorised, onWorkModeAction)
                                             }
                                             TerminalSection.DEVICE_ID -> {
                                                 CollapsibleSettingsSection(
