@@ -183,12 +183,14 @@ int esp_ble_get_bond_device_list(int*,esp_ble_bond_dev_t*){return ESP_OK;}
 int esp_ble_remove_bond_device(uint8_t*){++bondsRemoved;return ESP_OK;}
 '''
 shim += r'''
+namespace probe { struct Token {}; }
 namespace plcHid {
 cc::Config ccFormat;
 std::vector<std::string> ccReadings;
 bool ccBusy(){return false;}
 const char *ccStartError=nullptr;
-const char *startCc(const char *line, uint32_t){ccReadings.emplace_back(line);return ccStartError;}
+uint32_t ccReplyRequested=0;
+const char *startCc(const char *line, uint32_t, probe::Token, uint32_t replySession){ccReadings.emplace_back(line);ccReplyRequested=replySession;return ccStartError;}
 void batteryLevel(uint8_t) {}
 bool shortcutEnabled(uint32_t session) { return session == 42; }
 uint32_t clientGeneration=0;
@@ -257,7 +259,7 @@ int main(){
  CHECK(plcHid::readings.size()==1&&plcHid::readings[0].first=="PAL"&&plcHid::readings[0].second=="LOC");
  gWorkCc=true;resetScanner();nowMs=4000;enqueueScan(BLECMD_L,true);scanTick();
  PLCSerial.rx="AA;BB;CC\n";scanTick();
- CHECK(plcHid::ccReadings.size()==1&&plcHid::ccReadings.back()=="AA;BB;CC");
+ CHECK(plcHid::ccReadings.size()==1&&plcHid::ccReadings.back()=="AA;BB;CC"&&plcHid::ccReplyRequested==0);
  CHECK(emitted.empty()&&!gScanActive);
  BleCmd ccManual{};ccManual.type=BLECMD_L;ccManual.session=7;
  resetScanner();txQueue.clear();enqueueCommandScan(ccManual);scanTick();
@@ -271,7 +273,7 @@ int main(){
  resetScanner();txQueue.clear();enqueueCommandScan(ccManual);scanTick();
  PLCSerial.rx="CC01\r\n";scanTick();
  CHECK(failCount==0&&txQueue.size()==1&&emitted.empty());
- CHECK(std::string((const char*)txQueue.back().data,txQueue.back().len).find("HIDCCREAD=QUEUED;BYTES=6")!=std::string::npos);
+ CHECK(std::string((const char*)txQueue.back().data,txQueue.back().len).find("HIDCCREAD=QUEUED;BYTES=6")!=std::string::npos&&plcHid::ccReplyRequested==7);
  resetScanner();txQueue.clear();plcHid::ccStartError="HID_NOT_READY";enqueueCommandScan(ccManual);scanTick();
  PLCSerial.rx="CC01\n";scanTick();
  CHECK(failCount==1&&txQueue.size()==1);
