@@ -4470,7 +4470,7 @@ static void scanTick() {
         if (gCurrentScan.ccReplySession) {
           char response[96];
           const int length = snprintf(response, sizeof(response), "%c%s%s;BYTES=%lu\r\n",
-                                      error ? 0x15 : 0x06, error ? "ERR=HIDCC_" : "HIDCCREAD=",
+                                      error ? 0x15 : 0x06, error ? "ERR=CCREAD_" : "HIDCCREAD=",
                                       error ? error : "QUEUED", (unsigned long)gReaderBytes);
           queueTargetFrame((const uint8_t *)response, size_t(length), nullptr,
                            TX_BLE_ONLY, gCurrentScan.ccReplySession);
