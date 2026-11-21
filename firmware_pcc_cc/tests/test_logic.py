@@ -79,7 +79,7 @@ int digitalRead(int){return rawFoto;}void countersIncPalCargado(){++loaded;}void
 String cutReason;
 void powerCut(const char* reason){gCutRequested=true;cutReason=reason;}
 '''
-shim = '#include "' + str(sketch / 'src/cc/HidBatch.h') + '"\n' + shim
+shim = '#include "' + str(sketch / 'HidBatch.h') + '"\n' + shim
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
 outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
 tcp_monitor=(sketch/'TcpMonitor.h').read_text().replace('#pragma once','')

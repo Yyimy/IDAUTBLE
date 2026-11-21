@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../HidOutputFormat.h"
+#include "HidOutputFormat.h"
 #include <array>
 
 namespace cc {
