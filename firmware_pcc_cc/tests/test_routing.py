@@ -66,10 +66,16 @@ bool outputBusyForRestore(){return false;}
 void applyFactoryOutput(){}
 }
 bool gNetworkRestorePending=false;
+struct BuzzerPatternMock { unsigned count; };
+enum class BuzzerOrigin { Preview };
+BuzzerPatternMock buzzerPattern{};
+uint8_t buzzerQueueCount=0;
+BuzzerPatternMock eventSound(sound::Event, uint16_t, BuzzerOrigin) { return {1}; }
+bool buzzerPlay(const BuzzerPatternMock &pattern) { buzzerPattern=pattern; return true; }
 void sendDeviceStatus(){replyLine(true,"STATUS=1;FW=TEST;ID=TRUCK-1");}
 void handleIdentityCommand(const String&,uint8_t){replyLine(true,"ID=TRUCK-1;HWID=AABBCCDDEEFF;NAME=TRUCK-1");}
 '''
-names = ['sendCounters','handleAutoRead','handleRestoreDefaults','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','cfgSendOk','cfgSendErr','cfgSendCurrent','tcpAdvancedValues','setReaderTimeout','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendOff','powerCut','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleCcSettings','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','tcpWatchdog','eventTick']
+names = ['sendCounters','handleAutoRead','handleRestoreDefaults','replyLine','otaReplyStatus','otaReplyErr','buildTcpGreeting','cfgSendOk','cfgSendErr','cfgSendCurrent','tcpAdvancedValues','setReaderTimeout','netSendCurrent','netSendStatus','bleSendConnectedAck','bleSendOff','powerCut','bleSendBusy','otaSendStatusLine','otaSendErr','buildAndSendResponseV2','sendResponse_B','sendResponse_P','handleCcSettings','handleSoundSettings','handleTextCommand','isClientReading','bleProcessPendingOnce','tcpPollRx','tcpConnectTick','tcpWatchdog','eventTick']
 body += extra+'\n'+'\n'.join(base['function'](n).split('{',1)[0]+';' for n in names)+'\n'
 body += '\n'.join(base['function'](n) for n in names)
 body += r'''
@@ -92,6 +98,18 @@ void fresh(){drain();commands.clear();txQueue.clear();characteristic.notificatio
 BleCmd cmd(BleCmdType type,uint8_t origin,const char*text=""){BleCmd c={};c.type=type;c.source=origin;c.session=origin==CMD_SOURCE_CLIENT?plcHid::clientSession():origin?gTcpSession.load():gBleSession.load();c.receivedMs=nowMs;strlcpy(c.payload,text,sizeof(c.payload));return c;}
 void run(BleCmd c){commands.push_back(c);bleProcessPendingOnce();}
 int main(){
+ fresh();
+ run(cmd(BLECMD_TEXT,0,"SOUNDCFG?"));drain();
+ CHECK(bleBytes().find("SOUNDCFG=0,150,150,150,150")!=std::string::npos);
+ fresh();
+ run(cmd(BLECMD_TEXT,0,"SOUNDCFG=1,100,150,200,250"));drain();
+ CHECK(bleBytes().find("ERR=SOUND_AUTH")!=std::string::npos&&soundSettings==sound::defaults);
+ run(cmd(BLECMD_TEXT,0,"AUTH=123456"));drain();
+ run(cmd(BLECMD_TEXT,0,"SOUNDCFG=1,100,150,200,250"));drain();
+ CHECK(bleBytes().find("SOUNDCFG=1,100,150,200,250")!=std::string::npos&&soundSettings[3]==200);
+ run(cmd(BLECMD_TEXT,0,"SOUNDTEST=0,150"));drain();
+ CHECK(bleBytes().find("SOUNDTEST=0")!=std::string::npos&&buzzerPattern.count==1);
+ buzzerPattern={};
  fresh();gAutomaticReading=true;
  run(cmd(BLECMD_AUTOREAD,0,"0"));drain();
  CHECK(gAutomaticReading&&bleBytes().find("ERR=AUTOREAD_AUTH")!=std::string::npos);
@@ -116,6 +134,7 @@ int main(){
  gOutbox.count=0;
  run(cmd(BLECMD_TEXT,0,"RESTOREDEFAULTS"));drain();
  CHECK(factoryRestore::calls==1&&bleBytes().find("RESTOREDEFAULTS=OK")!=std::string::npos);
+ CHECK(soundSettings==sound::defaults);
  CHECK(!gWifiEnabled&&gNetMode==NETMODE_DHCP&&gNetPort==51236&&gNetHost=="192.168.0.118");
  CHECK(gPfxPalet=="P"&&gPfxUbic=="U"&&gIdleMinutes==60&&gFrameTimes==0);
  gPfxPalet="]d1";gPfxUbic="]Q1";
