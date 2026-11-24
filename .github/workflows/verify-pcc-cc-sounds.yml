@@ -28,11 +28,11 @@ jobs:
           arduino-cli core install esp32:esp32@3.0.7 --additional-urls "$index"
           arduino-cli lib install 'Adafruit BusIO@1.16.2'
           arduino-cli lib install --no-deps 'Adafruit ADS1X15@2.5.0'
-          arduino-cli compile --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,PartitionScheme=min_spiffs firmware_pcc_cc/PLC_Scanner_v3 --warnings all --output-dir /tmp/pcc-cc-build
+          arduino-cli compile --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,PartitionScheme=min_spiffs firmware_pcc_cc/PLC_Scanner_v3 --warnings all --output-dir firmware-build
       - uses: actions/upload-artifact@v4
         with:
           name: ESP32-S3-PCC-CC-Sounds
-          path: /tmp/pcc-cc-build/
+          path: firmware-build/
   android:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -43,7 +43,10 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Install Android SDK 36
-        run: sdkmanager "platforms;android-36"
+        run: |
+          if [ ! -f "$ANDROID_HOME/platforms/android-36/android.jar" ]; then
+            sdkmanager "platforms;android-36"
+          fi
       - name: Test and compile the Android app
         working-directory: android
         run: ./gradlew testDebugUnitTest assembleDebug

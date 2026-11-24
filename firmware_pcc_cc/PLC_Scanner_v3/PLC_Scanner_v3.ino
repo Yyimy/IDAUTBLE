@@ -1526,6 +1526,7 @@ static bool buzzerReady = false;
 static BuzzerPattern buzzerPattern{};
 static uint8_t buzzerNote = 0;
 static bool buzzerToneOn = false;
+static bool buzzerInterPatternGap = false;
 static uint32_t buzzerPhaseStartedMs = 0;
 static constexpr uint8_t BUZZER_QUEUE_SIZE = 4;
 static BuzzerPattern buzzerQueue[BUZZER_QUEUE_SIZE];
@@ -1545,6 +1546,7 @@ static bool buzzerStartNote() {
 
 static bool buzzerPlay(const BuzzerPattern &pattern) {
   buzzerPattern = pattern;
+  buzzerInterPatternGap = false;
   buzzerNote = 0;
   return buzzerStartNote();
 }
@@ -1558,7 +1560,7 @@ static BuzzerPattern eventSound(sound::Event event, uint16_t ms, BuzzerOrigin or
 static void buzzerEvent(sound::Event event) {
   if (!buzzerReady || gCutRequested || !sound::enabled(soundSettings, event)) return;
   const auto pattern = eventSound(event, soundSettings[event], BuzzerOrigin::Event);
-  if (!buzzerPattern.count && !buzzerQueueCount) {
+  if (!buzzerPattern.count && !buzzerQueueCount && !buzzerInterPatternGap) {
     if (buzzerPlay(pattern)) Serial.printf("BUZZER EVENT id=%u\n", unsigned(event));
   } else if (buzzerQueueCount < BUZZER_QUEUE_SIZE) {
     buzzerQueue[(buzzerQueueHead + buzzerQueueCount) % BUZZER_QUEUE_SIZE] = pattern;
@@ -1594,10 +1596,14 @@ static void buzzerTick() {
     if (buzzerToneOn) ledcWriteTone(BUZZER_PIN, 0);
     buzzerToneOn = false;
     buzzerPattern.count = 0;
+    buzzerInterPatternGap = false;
     buzzerQueueCount = 0;
     return;
   }
   if (!buzzerPattern.count) {
+    // Keep successive alerts distinct, including a capture followed by a HID error.
+    if (buzzerInterPatternGap && uint32_t(millis() - buzzerPhaseStartedMs) < BUZZER_TEST_GAP_MS) return;
+    buzzerInterPatternGap = false;
     if (buzzerQueueCount) {
       buzzerPlay(buzzerQueue[buzzerQueueHead]);
       buzzerQueueHead = (buzzerQueueHead + 1) % BUZZER_QUEUE_SIZE;
@@ -1616,6 +1622,7 @@ static void buzzerTick() {
   buzzerPhaseStartedMs = millis();
   if (++buzzerNote == buzzerPattern.count) {
     buzzerPattern.count = 0;
+    buzzerInterPatternGap = true;
     if (buzzerPattern.origin == BuzzerOrigin::Usb) logLine("BUZZER TEST END");
   }
 }
