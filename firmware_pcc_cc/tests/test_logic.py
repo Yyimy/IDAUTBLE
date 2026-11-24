@@ -80,6 +80,7 @@ String cutReason;
 void powerCut(const char* reason){gCutRequested=true;cutReason=reason;}
 '''
 shim = '#include "' + str(sketch / 'HidBatch.h') + '"\n' + shim
+shim = '#include "' + str(sketch / 'SoundSettings.h') + '"\n' + shim
 types=(sketch/'Types.h').read_text().replace('#pragma once','').replace('#include <Arduino.h>','')
 outbox_storage=(sketch/'OutboxStorage.h').read_text().replace('#pragma once','')
 tcp_monitor=(sketch/'TcpMonitor.h').read_text().replace('#pragma once','')
@@ -183,6 +184,9 @@ int esp_ble_get_bond_device_list(int*,esp_ble_bond_dev_t*){return ESP_OK;}
 int esp_ble_remove_bond_device(uint8_t*){++bondsRemoved;return ESP_OK;}
 '''
 shim += r'''
+sound::Settings soundSettings = sound::defaults;
+std::vector<sound::Event> soundEvents;
+void buzzerEvent(sound::Event event) { soundEvents.push_back(event); }
 namespace probe { struct Token {}; }
 namespace plcHid {
 cc::Config ccFormat;
@@ -249,6 +253,7 @@ int main(){
  CHECK(!otaParseStart("OTA=URL=http://192.168.4.2:8080/x;SIZE=-1;SHA256="));
  resetScanner();nowMs=0;gRtcIso="2026-10-29T12:00:00";gFotoEstado='1';enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx="]d1PARTIAL";nowMs=2001;scanTick();
  CHECK(!gScanActive);CHECK(failCount==1);CHECK(gCodPalet=="-"&&gCodUbic=="-");CHECK(emitted.size()==1);
+ CHECK(soundEvents.back()==sound::PccError);
  storedUIntSettings["reader_ms"]=5000;runtimeLoad();CHECK(gReaderTimeoutMs==5000);
  resetScanner();nowMs=10000;enqueueScan(BLECMD_L,true);scanTick();
  nowMs=14999;scanTick();CHECK(gScanActive);
@@ -257,6 +262,7 @@ int main(){
  storedUIntSettings.erase("reader_ms");
  resetScanner();plcHid::readings.clear();nowMs=3000;enqueueScan(BLECMD_L,true);scanTick();PLCSerial.rx="]d1PAL;]Q1LOC\r\n";nowMs=3020;scanTick();CHECK(!gScanActive);CHECK(gCodPalet=="PAL"&&gCodUbic=="LOC");CHECK(failCount==0);
  CHECK(plcHid::readings.size()==1&&plcHid::readings[0].first=="PAL"&&plcHid::readings[0].second=="LOC");
+ CHECK(soundEvents.back()==sound::PccRead);
  gWorkCc=true;resetScanner();nowMs=4000;enqueueScan(BLECMD_L,true);scanTick();
  PLCSerial.rx="AA;BB;CC\n";scanTick();
  CHECK(plcHid::ccReadings.size()==1&&plcHid::ccReadings.back()=="AA;BB;CC"&&plcHid::ccReplyRequested==0);
@@ -264,6 +270,7 @@ int main(){
  BleCmd ccManual{};ccManual.type=BLECMD_L;ccManual.session=7;
  resetScanner();txQueue.clear();enqueueCommandScan(ccManual);scanTick();
  nowMs+=gReaderTimeoutMs;scanTick();CHECK(failCount==1&&txQueue.size()==1);
+ CHECK(soundEvents.back()==sound::CcError);
  CHECK(txQueue.back().session==7&&txQueue.back().target==TX_BLE_ONLY);
  CHECK(std::string((const char*)txQueue.back().data,txQueue.back().len).find("READER_NO_BYTES;BYTES=0")!=std::string::npos);
  resetScanner();txQueue.clear();enqueueCommandScan(ccManual);scanTick();
@@ -410,6 +417,9 @@ int main(){
  handleAuthCommand("AUTH=001234",0);CHECK(!maintenanceAuthorized()&&authReply=="ERR=AUTH_LOCKED");
  nowMs+=60001;handleAuthCommand("AUTH=001234",0);CHECK(maintenanceAuthorized());
  handleAuthCommand("AUTH=OFF",1);CHECK(maintenanceAuthorized());
+ gWorkCc=false;gAlturaEnabled=false;resetScanner();soundEvents.clear();
+ enqueueScan(BLECMD_L,false);scanTick();PLCSerial.rx="]d1PAL\r\n";scanTick();
+ CHECK(gCodPalet=="PAL"&&gCodUbic=="-"&&soundEvents.size()==1&&soundEvents.back()==sound::PccRead);
  printf("PASS: %d assertions against extracted production functions\n",checks);return 0;
 }
 '''
