@@ -122,6 +122,7 @@ private val commandGroups = linkedMapOf(
         CommandEntry("counters reset", USB, "Reset the stored operation counters."),
         CommandEntry("counters help", USB, "Show the service console help."),
         CommandEntry("rtc", USB, "Print the PLC clock."),
+        CommandEntry("buzzer test", USB, "Play a 150 ms test tone on the Waveshare PCC/CC firmware. Local USB command; no PIN is required."),
         CommandEntry("i2c", USB, "Scan for devices on the internal I²C bus."),
         CommandEntry("i2c recover", USB, "Attempt to recover the internal I²C bus."),
         CommandEntry("ble forget <MAC>", USB, "Remove a specific Bluetooth bond using its address, for example AA:BB:CC:DD:EE:FF."),

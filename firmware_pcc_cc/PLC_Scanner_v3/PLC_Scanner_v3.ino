@@ -1485,6 +1485,35 @@ static void i2cScan() {
   }
 }
 
+static constexpr uint8_t BUZZER_PIN = 46;
+static constexpr uint32_t BUZZER_TEST_HZ = 2000;
+static constexpr uint32_t BUZZER_TEST_MS = 150;
+static bool buzzerReady = false;
+static bool buzzerTestActive = false;
+static uint32_t buzzerTestStartedMs = 0;
+
+static void buzzerTestStart() {
+  if (buzzerTestActive) {
+    logLine("BUZZER TEST BUSY");
+    return;
+  }
+  if (!buzzerReady || !ledcWriteTone(BUZZER_PIN, BUZZER_TEST_HZ)) {
+    logLine("BUZZER TEST ERROR: GPIO46 PWM unavailable");
+    return;
+  }
+  buzzerTestStartedMs = millis();
+  buzzerTestActive = true;
+  Serial.printf("BUZZER TEST START gpio=%u hz=%lu ms=%lu\n", unsigned(BUZZER_PIN),
+                (unsigned long)BUZZER_TEST_HZ, (unsigned long)BUZZER_TEST_MS);
+}
+
+static void buzzerTestTick() {
+  if (!buzzerTestActive || uint32_t(millis() - buzzerTestStartedMs) < BUZZER_TEST_MS) return;
+  ledcWriteTone(BUZZER_PIN, 0);
+  buzzerTestActive = false;
+  logLine("BUZZER TEST END");
+}
+
 static inline void serialConsolePoll() {
   while (Serial.available()) {
     char c = (char)Serial.read();
@@ -1505,6 +1534,8 @@ static inline void serialConsolePoll() {
         countersPrint();
       else if (cmd == "counters reset")
         countersReset();
+      else if (cmd == "buzzer test")
+        buzzerTestStart();
       else if (cmd == "i2c")
         i2cScan();
       else if (cmd == "i2c recover")
@@ -1521,6 +1552,7 @@ static inline void serialConsolePoll() {
         logLine("  rtc");
         logLine("  i2c");
         logLine("  i2c recover");
+        logLine("  buzzer test");
         logLine("  ble forget AA:BB:CC:DD:EE:FF");
         logLine("  ble maintenance");
         logLine("  ble normal");
@@ -3169,6 +3201,8 @@ fail:
 // ============================================================================
 void setup() {
   Serial.begin(115200);
+  buzzerReady = ledcAttach(BUZZER_PIN, BUZZER_TEST_HZ, 8);
+  if (buzzerReady) ledcWrite(BUZZER_PIN, 0);
   gBootMs = millis();
   gOtaErrorMutex = xSemaphoreCreateMutex();
   gCommandQueue = xQueueCreate(8, sizeof(BleCmd));
@@ -3324,6 +3358,7 @@ static void loopAliveTick() {
 // ============================================================================
 void loop() {
   loopAliveTick();
+  buzzerTestTick();
   serialConsolePoll();
   ensureAdvertising();
   rtcUpdateCacheIfNeeded();
