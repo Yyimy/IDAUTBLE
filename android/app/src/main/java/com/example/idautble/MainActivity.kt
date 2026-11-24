@@ -389,6 +389,8 @@ class MainActivity : ComponentActivity() {
     private val uiHidOutput = mutableStateOf(HidOutputState())
     private var workMode by mutableStateOf(WorkModeState())
     private var workModeRequest = 0L
+    private var plcSound by mutableStateOf(PlcSoundState())
+    private var plcSoundRequest = 0L
     private var restoreDefaultsSupported by mutableStateOf(false)
     private var restoreDefaultsPending by mutableStateOf(false)
     private var restoreDefaultsMessage by mutableStateOf("")
@@ -1224,6 +1226,56 @@ class MainActivity : ComponentActivity() {
         }, 8000)
     }
 
+    private fun requestPlcSound(command: String) {
+        if (!bleChannelReady || !plcSound.supported || plcSound.request != null) return
+        if (command != "SOUNDCFG?" && !maintenanceSession.isAuthorized()) return
+        val request = ++plcSoundRequest
+        plcSound = plcSound.copy(request = command, message = "")
+        sendText(command, addCrlf = true)
+        mainHandler.postDelayed({
+            if (request == plcSoundRequest && plcSound.request != null)
+                plcSound = plcSound.copy(request = null, message = "No PLC confirmation. Refresh and retry.")
+        }, 8000)
+    }
+
+    private fun handlePlcSoundMessage(message: PlcMessage) {
+        val text = message.text
+        if (message.acknowledged && text.startsWith("FW=")) {
+            if ("SOUND=1" in text.split(';') && !plcSound.supported) {
+                plcSound = PlcSoundState(supported = true)
+                requestPlcSound("SOUNDCFG?")
+            }
+            return
+        }
+        if (!plcSound.supported) return
+        if (message.acknowledged && text == "RESTOREDEFAULTS=OK") {
+            plcSoundRequest++
+            plcSound = PlcSoundState(supported = true)
+            requestPlcSound("SOUNDCFG?")
+            return
+        }
+        val request = plcSound.request ?: return
+        if (message.acknowledged && !request.startsWith("SOUNDTEST=")) {
+            val config = parsePlcSoundConfig(text) ?: return
+            plcSound = plcSound.copy(
+                config = config, request = null,
+                message = if (request == "SOUNDCFG?") "" else "Sounds saved.",
+            )
+        } else if (message.acknowledged && request.startsWith("SOUNDTEST=") &&
+            text == request.substringBefore(',')
+        ) {
+            plcSound = plcSound.copy(request = null, message = "Test sent to the PLC.")
+        } else if (message.rejected && text.startsWith("ERR=SOUND_")) {
+            plcSound = plcSound.copy(request = null, message = when (text) {
+                "ERR=SOUND_AUTH" -> "Unlock PIN / ACCESS to save or test sounds."
+                "ERR=SOUND_BUSY" -> "The PLC is busy. Try again when it is idle."
+                "ERR=SOUND_STORAGE" -> "The PLC could not save the sound settings."
+                "ERR=SOUND_PWM" -> "The PLC could not start the buzzer."
+                else -> "The PLC rejected the sound settings."
+            })
+        }
+    }
+
     private fun requestWorkMode(command: String) {
         if (!bleChannelReady || !workMode.supported || workMode.request != null) return
         val query = command.endsWith("?")
@@ -1386,6 +1438,8 @@ class MainActivity : ComponentActivity() {
         uiHidOutput.value = HidOutputState()
         workModeRequest++
         workMode = WorkModeState()
+        plcSoundRequest++
+        plcSound = PlcSoundState()
         readerTimeoutRequest++
         uiReaderTimeout.value = ReaderTimeoutState()
         idleShutdownRequest++
@@ -1894,6 +1948,7 @@ class MainActivity : ComponentActivity() {
         handleHidReceiverMessage(message)
         handleHidOutputMessage(message)
         handleWorkModeMessage(message)
+        handlePlcSoundMessage(message)
         handleReaderTimeoutMessage(message)
         handlePowerMessage(message)
         handleFrameTimesMessage(message)
@@ -2756,6 +2811,8 @@ class MainActivity : ComponentActivity() {
                     readings = uiReadings.value,
                     hidOutput = uiHidOutput.value,
                     workMode = workMode,
+                    plcSound = plcSound,
+                    onPlcSoundAction = ::requestPlcSound,
                     onWorkModeAction = ::requestWorkMode,
                     onHidOutputAction = { requestHidOutput(it) },
                     hidReceiver = uiHidReceiver.value,
@@ -2953,6 +3010,8 @@ private fun PlcBleTesterLandscape(
     readings: PlcReadingsState,
     hidOutput: HidOutputState,
     workMode: WorkModeState,
+    plcSound: PlcSoundState,
+    onPlcSoundAction: (String) -> Unit,
     onWorkModeAction: (String) -> Unit,
     onHidOutputAction: (HidOutputConfig?) -> Unit,
     hidReceiver: HidReceiverState,
@@ -3492,6 +3551,10 @@ private fun PlcBleTesterLandscape(
                                                     expanded, onToggle,
                                                     onSaveIdleShutdown,
                                                 )
+                                            }
+                                            TerminalSection.PLC_SOUNDS -> {
+                                                PlcSoundSection(plcSound, connected && maintenanceAuthorised,
+                                                    expanded, onToggle, onPlcSoundAction)
                                             }
                                             TerminalSection.PLC_HISTORY -> {
                                                 DiagnosticHistorySection(

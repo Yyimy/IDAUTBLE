@@ -45,7 +45,7 @@ int main() {
   assert(run(false) == ESP_OK);
   nvs["cfg"] = {{"pfxp", 1}, {"pfxu", 1}};
   nvs["net"] = {{"host", 1}, {"ssid", 2}, {"pwd", 3}, {"alt_en", 1}};
-  nvs["runtime3"] = {{"tcp_adv", 1}, {"tcp_adv2", 1}, {"outbox", 2}, {"pin", 3}, {"last_cut", 4}};
+  nvs["runtime3"] = {{"tcp_adv", 1}, {"tcp_adv2", 1}, {"sound_cfg", 1}, {"outbox", 2}, {"pin", 3}, {"last_cut", 4}};
   nvs["plc_hid"] = {{"format", 1}, {"receiver", 2}};
   nvs["identity"]["id"] = 42;
   failErase = "host";
@@ -57,6 +57,7 @@ int main() {
   assert(!nvs["net"].count("host") && !nvs["net"].count("alt_en"));
   assert(nvs["net"].at("ssid") == 2 && nvs["net"].at("pwd") == 3);
   assert(!nvs["runtime3"].count("tcp_adv") && !nvs["runtime3"].count("tcp_adv2"));
+  assert(!nvs["runtime3"].count("sound_cfg"));
   assert(!nvs["runtime3"].count("factory_pending") && nvs["runtime3"].at("outbox") == 2);
   assert(nvs["runtime3"].at("pin") == 3 && nvs["runtime3"].at("last_cut") == 4);
   assert(!nvs["plc_hid"].count("format") && nvs["plc_hid"].at("receiver") == 2);

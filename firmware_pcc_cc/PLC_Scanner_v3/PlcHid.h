@@ -1262,6 +1262,7 @@ static void finishCc(bool done) {
     peerReply(ccTestOwner, done, done ? "HIDTEST=SUBMITTED" : "ERR=HID_TEST_CANCELLED");
   } else {
     setCcAlert(!done);
+    if (!done) buzzerEvent(sound::CcError);
     if (done) {
       Serial.printf("HID CC SUBMITTED count=%u codes=%s\n",
                     unsigned(ccBatch.count), ccSubmittedCodes.c_str());
@@ -1287,10 +1288,11 @@ static void finishCc(bool done) {
 // Returns a diagnostic reason when the batch could not be queued.
 static const char *startCc(const char *line, uint32_t requestedSession, probe::Token testOwner,
                            uint32_t replySession) {
-  if (ccBusy() || keyboard.busy() || pendingCount || blocked() || pairWindow || receiverToRemove.valid)
-    return "HID_BUSY";
   cc::Batch batch;
   if (!cc::buildBatch(line, ccFormat, batch)) return "READER_FORMAT";
+  if (!testOwner.generation) buzzerEvent(sound::CcRead);
+  if (ccBusy() || keyboard.busy() || pendingCount || blocked() || pairWindow || receiverToRemove.valid)
+    return "HID_BUSY";
   for (size_t index = 0; index < batch.count; ++index) {
     for (char key : batch.segments[index]) {
       uint8_t report[8];
