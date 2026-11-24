@@ -33,6 +33,7 @@
 #include "OutboxStorage.h"
 #include "FactoryDefaults.h"
 #include "FactoryRestore.h"
+#include "SoundSettings.h"
 #include "TcpMonitor.h"
 #include "DiagnosticHistory.h"
 #include "TcpTrace.h"
@@ -1507,39 +1508,81 @@ static constexpr BuzzerTestPreset BUZZER_TEST_PRESETS[] = {
   {"buzzer test double", BUZZER_TEST_HZ, BUZZER_TEST_MS, 2},
 };
 
-static bool buzzerReady = false;
-static const BuzzerTestPreset *buzzerTestPreset = nullptr;
-static uint8_t buzzerTestPulsesRemaining = 0;
-static bool buzzerTestToneOn = false;
-static uint32_t buzzerTestPhaseStartedMs = 0;
+enum class BuzzerOrigin : uint8_t { Event, Preview, Usb };
 
-static bool buzzerTestStartPulse(uint32_t frequencyHz) {
-  if (!buzzerReady || !ledcWriteTone(BUZZER_PIN, frequencyHz)) {
-    buzzerTestPreset = nullptr;
-    logLine("BUZZER TEST ERROR: GPIO46 PWM unavailable");
+struct BuzzerPattern {
+  uint16_t notes[3];
+  uint16_t durationMs;
+  uint16_t gapMs;
+  uint8_t count;
+  BuzzerOrigin origin;
+};
+
+static bool buzzerPlay(const BuzzerPattern &pattern);
+static BuzzerPattern eventSound(sound::Event event, uint16_t ms, BuzzerOrigin origin);
+
+static sound::Settings soundSettings = sound::defaults;
+static bool buzzerReady = false;
+static BuzzerPattern buzzerPattern{};
+static uint8_t buzzerNote = 0;
+static bool buzzerToneOn = false;
+static bool buzzerInterPatternGap = false;
+static uint32_t buzzerPhaseStartedMs = 0;
+static constexpr uint8_t BUZZER_QUEUE_SIZE = 4;
+static BuzzerPattern buzzerQueue[BUZZER_QUEUE_SIZE];
+static uint8_t buzzerQueueHead = 0;
+static uint8_t buzzerQueueCount = 0;
+
+static bool buzzerStartNote() {
+  if (!buzzerReady || !ledcWriteTone(BUZZER_PIN, buzzerPattern.notes[buzzerNote])) {
+    buzzerPattern.count = 0;
+    logLine("BUZZER ERROR: GPIO46 PWM unavailable");
     return false;
   }
-  buzzerTestToneOn = true;
-  buzzerTestPhaseStartedMs = millis();
+  buzzerToneOn = true;
+  buzzerPhaseStartedMs = millis();
   return true;
 }
 
-static void buzzerTestHelp() {
-  for (const auto &preset : BUZZER_TEST_PRESETS) {
-    Serial.printf("  %s\n", preset.command);
+static bool buzzerPlay(const BuzzerPattern &pattern) {
+  buzzerPattern = pattern;
+  buzzerInterPatternGap = false;
+  buzzerNote = 0;
+  return buzzerStartNote();
+}
+
+static BuzzerPattern eventSound(sound::Event event, uint16_t ms, BuzzerOrigin origin) {
+  if (event == sound::Startup) return {{1500, 2500, 4000}, 75, 40, 3, origin};
+  const bool error = event == sound::PccError || event == sound::CcError;
+  return {{4000, 4000}, ms, BUZZER_TEST_GAP_MS, uint8_t(error ? 2 : 1), origin};
+}
+
+static void buzzerEvent(sound::Event event) {
+  if (!buzzerReady || gCutRequested || !sound::enabled(soundSettings, event)) return;
+  const auto pattern = eventSound(event, soundSettings[event], BuzzerOrigin::Event);
+  if (!buzzerPattern.count && !buzzerQueueCount && !buzzerInterPatternGap) {
+    if (buzzerPlay(pattern)) Serial.printf("BUZZER EVENT id=%u\n", unsigned(event));
+  } else if (buzzerQueueCount < BUZZER_QUEUE_SIZE) {
+    buzzerQueue[(buzzerQueueHead + buzzerQueueCount) % BUZZER_QUEUE_SIZE] = pattern;
+    ++buzzerQueueCount;
+    Serial.printf("BUZZER EVENT id=%u queued\n", unsigned(event));
   }
+}
+
+static void buzzerTestHelp() {
+  for (const auto &preset : BUZZER_TEST_PRESETS) Serial.printf("  %s\n", preset.command);
 }
 
 static void buzzerTestStart(const String &command) {
   for (const auto &preset : BUZZER_TEST_PRESETS) {
     if (command != preset.command) continue;
-    if (buzzerTestPreset) {
+    if (buzzerPattern.count || buzzerQueueCount || gCutRequested) {
       logLine("BUZZER TEST BUSY");
       return;
     }
-    if (!buzzerTestStartPulse(preset.frequencyHz)) return;
-    buzzerTestPreset = &preset;
-    buzzerTestPulsesRemaining = preset.pulses;
+    const uint16_t hz = preset.frequencyHz;
+    if (!buzzerPlay({{hz, hz}, uint16_t(preset.durationMs), BUZZER_TEST_GAP_MS,
+                     preset.pulses, BuzzerOrigin::Usb})) return;
     Serial.printf("BUZZER TEST START gpio=%u hz=%lu ms=%lu pulses=%u\n", unsigned(BUZZER_PIN),
                   (unsigned long)preset.frequencyHz, (unsigned long)preset.durationMs,
                   unsigned(preset.pulses));
@@ -1548,20 +1591,39 @@ static void buzzerTestStart(const String &command) {
   buzzerTestHelp();
 }
 
-static void buzzerTestTick() {
-  if (!buzzerTestPreset) return;
-  const uint32_t elapsedMs = millis() - buzzerTestPhaseStartedMs;
-  if (!buzzerTestToneOn) {
-    if (elapsedMs >= BUZZER_TEST_GAP_MS) buzzerTestStartPulse(buzzerTestPreset->frequencyHz);
+static void buzzerTick() {
+  if (gCutRequested) {
+    if (buzzerToneOn) ledcWriteTone(BUZZER_PIN, 0);
+    buzzerToneOn = false;
+    buzzerPattern.count = 0;
+    buzzerInterPatternGap = false;
+    buzzerQueueCount = 0;
     return;
   }
-  if (elapsedMs < buzzerTestPreset->durationMs) return;
+  if (!buzzerPattern.count) {
+    // Keep successive alerts distinct, including a capture followed by a HID error.
+    if (buzzerInterPatternGap && uint32_t(millis() - buzzerPhaseStartedMs) < BUZZER_TEST_GAP_MS) return;
+    buzzerInterPatternGap = false;
+    if (buzzerQueueCount) {
+      buzzerPlay(buzzerQueue[buzzerQueueHead]);
+      buzzerQueueHead = (buzzerQueueHead + 1) % BUZZER_QUEUE_SIZE;
+      --buzzerQueueCount;
+    }
+    return;
+  }
+  const uint32_t elapsedMs = millis() - buzzerPhaseStartedMs;
+  if (!buzzerToneOn) {
+    if (elapsedMs >= buzzerPattern.gapMs) buzzerStartNote();
+    return;
+  }
+  if (elapsedMs < buzzerPattern.durationMs) return;
   ledcWriteTone(BUZZER_PIN, 0);
-  buzzerTestToneOn = false;
-  buzzerTestPhaseStartedMs = millis();
-  if (--buzzerTestPulsesRemaining == 0) {
-    buzzerTestPreset = nullptr;
-    logLine("BUZZER TEST END");
+  buzzerToneOn = false;
+  buzzerPhaseStartedMs = millis();
+  if (++buzzerNote == buzzerPattern.count) {
+    buzzerPattern.count = 0;
+    buzzerInterPatternGap = true;
+    if (buzzerPattern.origin == BuzzerOrigin::Usb) logLine("BUZZER TEST END");
   }
 }
 
@@ -2421,7 +2483,8 @@ static void receiveBleCommand(const uint8_t *data, size_t length, uint32_t sessi
              rxTrim.startsWith("ACKMODE=") || rxTrim.startsWith("TCPADV=") ||
              rxTrim.startsWith("HEARTBEAT=") || rxTrim == "INFO?" || rxTrim == "HISTORY?" || rxTrim.startsWith("HISTORY?=") || rxTrim.startsWith("HISTORYTIME?=") || rxTrim == "TCPTRACE?" ||
              rxTrim == "DIAG?" || rxTrim == "STATUS?" || rxTrim == "COUNTERS?" || rxTrim == "ID?" ||
-             rxTrim == "RESTOREDEFAULTS" || rxTrim.startsWith("RTCFRAME=") || rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("IDLEMIN=") || rxTrim.startsWith("HID") || rxTrim == "MAINTBYE") {
+             rxTrim == "RESTOREDEFAULTS" || rxTrim.startsWith("RTCFRAME=") || rxTrim.startsWith("ID=") || rxTrim.startsWith("READERTIMEOUT=") || rxTrim.startsWith("IDLEMIN=") || rxTrim.startsWith("HID") || rxTrim.startsWith("SOUNDCFG") ||
+             rxTrim.startsWith("SOUNDTEST=") || rxTrim == "MAINTBYE") {
     cmd.type = BLECMD_TEXT;
     strlcpy(cmd.payload, rxTrim.c_str(), sizeof(cmd.payload));
   } else {
@@ -3386,6 +3449,7 @@ void setup() {
   gLedT0 = millis();
 
   logLine("Esperando conexión BLE...");
+  buzzerEvent(sound::Startup);
 }
 
 static void loopAliveTick() {
@@ -3409,7 +3473,7 @@ static void loopAliveTick() {
 // ============================================================================
 void loop() {
   loopAliveTick();
-  buzzerTestTick();
+  buzzerTick();
   serialConsolePoll();
   ensureAdvertising();
   rtcUpdateCacheIfNeeded();
@@ -3575,6 +3639,10 @@ static void runtimeLoad() {
   OTA_AP_PASS = PLC_OTA_WIFI_PASSWORD;
   gAutomaticReading = p.getUInt("auto_read", 1) != 0;
   gWorkCc = p.getUInt("work_cc", 0) == 1;
+  sound::Settings storedSounds{};
+  if (p.getBytesLength(sound::storageKey) == sizeof(storedSounds) &&
+      p.getBytes(sound::storageKey, storedSounds.data(), sizeof(storedSounds)) == sizeof(storedSounds) &&
+      sound::validSettings(storedSounds)) soundSettings = storedSounds;
   const size_t ccSize = p.getBytesLength("cc_format");
   char ccText[384] = {};
   if (ccSize && ccSize < sizeof(ccText) && p.getBytes("cc_format", ccText, ccSize) == ccSize)
@@ -3857,6 +3925,8 @@ static void handleRestoreDefaults(uint8_t source) {
   gAutomaticReading = true;
   gWorkCc = false;
   gCcInterrupted = false;
+  soundSettings = sound::defaults;
+  buzzerQueueCount = 0;
   plcHid::ccFormat = {};
   gAlturaEnabled = false;
   gAltura = "-";
@@ -3937,8 +4007,48 @@ static bool handleCcSettings(const String &text, uint8_t source) {
   return true;
 }
 
+static bool handleSoundSettings(const String &line, uint8_t source) {
+  const bool query = line == "SOUNDCFG?";
+  const bool preview = line.startsWith("SOUNDTEST=");
+  if (!query && !preview && !line.startsWith(sound::prefix)) return false;
+  if (source != 0 || (!query && !maintenanceAuthorized())) {
+    replyLine(false, "ERR=SOUND_AUTH");
+  } else if (query) {
+    replyLine(true, sound::wire(soundSettings).c_str());
+  } else if (gCutRequested || gOtaTaskHandle || gOtaState != OTA_IDLE) {
+    replyLine(false, "ERR=SOUND_BUSY");
+  } else if (preview) {
+    const int comma = line.indexOf(',');
+    uint32_t event, duration;
+    if (comma < 0 || !parseU32(line.substring(sizeof("SOUNDTEST=") - 1, comma), event) ||
+        event >= sound::eventCount || !parseU32(line.substring(comma + 1), duration) ||
+        !sound::validDuration(duration)) {
+      replyLine(false, "ERR=SOUND_INVALID");
+    } else if (gScanActive || gScanCount || buzzerPattern.count || buzzerQueueCount) {
+      replyLine(false, "ERR=SOUND_BUSY");
+    } else if (!buzzerPlay(eventSound(static_cast<sound::Event>(event), duration, BuzzerOrigin::Preview))) {
+      replyLine(false, "ERR=SOUND_PWM");
+    } else {
+      replyLine(true, "SOUNDTEST=" + String(event));
+    }
+  } else {
+    sound::Settings candidate;
+    if (!sound::parseSettings(line.c_str(), candidate)) {
+      replyLine(false, "ERR=SOUND_INVALID");
+    } else if (candidate != soundSettings &&
+               !saveNvsSetting("runtime3", sound::storageKey, candidate.data(), sizeof(candidate), false, "sound")) {
+      replyLine(false, "ERR=SOUND_STORAGE");
+    } else {
+      soundSettings = candidate;
+      replyLine(true, sound::wire(soundSettings).c_str());
+    }
+  }
+  return true;
+}
+
 static void handleTextCommand(const BleCmd &cmd) {
   String s(cmd.payload);
+  if (handleSoundSettings(s, cmd.source)) return;
   if (handleCcSettings(s, cmd.source)) return;
   if (s == "RESTOREDEFAULTS") {
     handleRestoreDefaults(cmd.source);
@@ -4043,7 +4153,7 @@ static void handleTextCommand(const BleCmd &cmd) {
                         String(gAckMode ? 1 : 0) +
                         ";HEARTBEAT=" + String(gHeartbeatEnabled ? 1 : 0) +
                         (cmd.source == 0 ? String(";HIDFORMAT=1;HIDARROWS=1;HIDKEYS=1;HIDPREFIX=1;HIDHOTKEY=1;HIDENDSEQ=1;HIDOUTPUT5=1;HIDRECEIVER=1;MAINTLEASE=1;MAINTRELEASE=1;RESTOREDEFAULTS=1;READERTIMEOUT=") + String(gReaderTimeoutMs) +
-                         ";RTCFRAME=" + String(gFrameTimes) + ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1;HISTORYPAGE=1;HISTORYTIME=1;TCPTRACE=1;HIDCC=1" : String()));
+                         ";RTCFRAME=" + String(gFrameTimes) + ";IDLEMIN=" + String(gIdleMinutes) + ";LASTOFF=" + gLastCutReason + ";HISTORY=1;HISTORYPAGE=1;HISTORYTIME=1;TCPTRACE=1;HIDCC=1;SOUND=1" : String()));
     return;
   }
   if (s == "STATUS?") {
@@ -4553,6 +4663,7 @@ static void scanTick() {
         if (error) {
           countersIncLecturaFallida();
           recordDiagnostic("HID_CC_READ_FAILED");
+          buzzerEvent(sound::CcError);
         }
         if (gCurrentScan.ccReplySession) {
           char response[96];
@@ -4571,6 +4682,8 @@ static void scanTick() {
         gCodUbic = "-";
         countersIncLecturaFallida();
       }
+      if (gCurrentScan.type == BLECMD_L)
+        buzzerEvent(gCodPalet != "-" ? sound::PccRead : sound::PccError);
       beginHeight();
     }
   } else if (gScanPhase == 2) {
