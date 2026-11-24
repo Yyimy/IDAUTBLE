@@ -1488,30 +1488,81 @@ static void i2cScan() {
 static constexpr uint8_t BUZZER_PIN = 46;
 static constexpr uint32_t BUZZER_TEST_HZ = 2000;
 static constexpr uint32_t BUZZER_TEST_MS = 150;
-static bool buzzerReady = false;
-static bool buzzerTestActive = false;
-static uint32_t buzzerTestStartedMs = 0;
+static constexpr uint32_t BUZZER_TEST_GAP_MS = 150;
 
-static void buzzerTestStart() {
-  if (buzzerTestActive) {
-    logLine("BUZZER TEST BUSY");
-    return;
-  }
-  if (!buzzerReady || !ledcWriteTone(BUZZER_PIN, BUZZER_TEST_HZ)) {
+struct BuzzerTestPreset {
+  const char *command;
+  uint32_t frequencyHz;
+  uint32_t durationMs;
+  uint8_t pulses;
+};
+
+static constexpr BuzzerTestPreset BUZZER_TEST_PRESETS[] = {
+  {"buzzer test", BUZZER_TEST_HZ, BUZZER_TEST_MS, 1},
+  {"buzzer test 1500", 1500, BUZZER_TEST_MS, 1},
+  {"buzzer test 2500", 2500, BUZZER_TEST_MS, 1},
+  {"buzzer test 3000", 3000, BUZZER_TEST_MS, 1},
+  {"buzzer test 4000", 4000, BUZZER_TEST_MS, 1},
+  {"buzzer test long", BUZZER_TEST_HZ, 400, 1},
+  {"buzzer test double", BUZZER_TEST_HZ, BUZZER_TEST_MS, 2},
+};
+
+static bool buzzerReady = false;
+static const BuzzerTestPreset *buzzerTestPreset = nullptr;
+static uint8_t buzzerTestPulsesRemaining = 0;
+static bool buzzerTestToneOn = false;
+static uint32_t buzzerTestPhaseStartedMs = 0;
+
+static bool buzzerTestStartPulse(uint32_t frequencyHz) {
+  if (!buzzerReady || !ledcWriteTone(BUZZER_PIN, frequencyHz)) {
+    buzzerTestPreset = nullptr;
     logLine("BUZZER TEST ERROR: GPIO46 PWM unavailable");
+    return false;
+  }
+  buzzerTestToneOn = true;
+  buzzerTestPhaseStartedMs = millis();
+  return true;
+}
+
+static void buzzerTestHelp() {
+  for (const auto &preset : BUZZER_TEST_PRESETS) {
+    Serial.printf("  %s\n", preset.command);
+  }
+}
+
+static void buzzerTestStart(const String &command) {
+  for (const auto &preset : BUZZER_TEST_PRESETS) {
+    if (command != preset.command) continue;
+    if (buzzerTestPreset) {
+      logLine("BUZZER TEST BUSY");
+      return;
+    }
+    if (!buzzerTestStartPulse(preset.frequencyHz)) return;
+    buzzerTestPreset = &preset;
+    buzzerTestPulsesRemaining = preset.pulses;
+    Serial.printf("BUZZER TEST START gpio=%u hz=%lu ms=%lu pulses=%u\n", unsigned(BUZZER_PIN),
+                  (unsigned long)preset.frequencyHz, (unsigned long)preset.durationMs,
+                  unsigned(preset.pulses));
     return;
   }
-  buzzerTestStartedMs = millis();
-  buzzerTestActive = true;
-  Serial.printf("BUZZER TEST START gpio=%u hz=%lu ms=%lu\n", unsigned(BUZZER_PIN),
-                (unsigned long)BUZZER_TEST_HZ, (unsigned long)BUZZER_TEST_MS);
+  buzzerTestHelp();
 }
 
 static void buzzerTestTick() {
-  if (!buzzerTestActive || uint32_t(millis() - buzzerTestStartedMs) < BUZZER_TEST_MS) return;
+  if (!buzzerTestPreset) return;
+  const uint32_t elapsedMs = millis() - buzzerTestPhaseStartedMs;
+  if (!buzzerTestToneOn) {
+    if (elapsedMs >= BUZZER_TEST_GAP_MS) buzzerTestStartPulse(buzzerTestPreset->frequencyHz);
+    return;
+  }
+  if (elapsedMs < buzzerTestPreset->durationMs) return;
   ledcWriteTone(BUZZER_PIN, 0);
-  buzzerTestActive = false;
-  logLine("BUZZER TEST END");
+  buzzerTestToneOn = false;
+  buzzerTestPhaseStartedMs = millis();
+  if (--buzzerTestPulsesRemaining == 0) {
+    buzzerTestPreset = nullptr;
+    logLine("BUZZER TEST END");
+  }
 }
 
 static inline void serialConsolePoll() {
@@ -1534,8 +1585,8 @@ static inline void serialConsolePoll() {
         countersPrint();
       else if (cmd == "counters reset")
         countersReset();
-      else if (cmd == "buzzer test")
-        buzzerTestStart();
+      else if (cmd == "buzzer test" || cmd.startsWith("buzzer test "))
+        buzzerTestStart(cmd);
       else if (cmd == "i2c")
         i2cScan();
       else if (cmd == "i2c recover")
@@ -1552,7 +1603,7 @@ static inline void serialConsolePoll() {
         logLine("  rtc");
         logLine("  i2c");
         logLine("  i2c recover");
-        logLine("  buzzer test");
+        buzzerTestHelp();
         logLine("  ble forget AA:BB:CC:DD:EE:FF");
         logLine("  ble maintenance");
         logLine("  ble normal");
